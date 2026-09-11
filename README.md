@@ -5,7 +5,6 @@
 ## 준비 사항
 
 - Windows 10/11, 데스크톱 Microsoft Excel 설치 및 최초 실행/인증 완료
-- Python 3.11 이상: https://www.python.org/downloads/windows/ (Python Launcher 포함)
 - Node.js LTS: https://nodejs.org/ (Codex CLI 설치에 사용)
 - 친구 본인의 ChatGPT Plus 계정과 Codex 사용 가능 상태
 - 하이웍스 메일 계정, POP3 사용 설정, 메일 전용 비밀번호
@@ -15,8 +14,7 @@
 
 ## 설치
 
-1. 받은 ZIP을 `문서\메일도우미`처럼 계속 사용할 폴더에 압축 해제합니다. 설치 후 폴더를 옮기면 바로가기를 다시 만들어야 합니다.
-2. PowerShell에서 다음 명령으로 Codex를 설치합니다.
+1. PowerShell에서 다음 명령으로 Codex를 설치합니다.
 
    ```powershell
    npm install -g @openai/codex
@@ -26,16 +24,14 @@
 
    브라우저에서 **친구 본인의 ChatGPT 계정**으로 로그인하세요. 마지막 명령 결과가 ChatGPT 로그인인지 확인합니다. 인증 파일을 친구와 주고받지 마세요.
 
-3. 압축을 푼 폴더에서 PowerShell을 열어 실행합니다.
+2. [Releases](https://github.com/gakmax/mail-assistant/releases/latest)에서 `MailAssistant-Setup-x.y.z.exe`를 내려받아 실행합니다.
 
-   ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
-   ```
+3. **“Windows가 PC를 보호했습니다” 경고가 나오면 `추가 정보` → `실행`을 누르세요.** 코드 서명 인증서를 쓰지 않아서 나오는 경고이며, 파일이 손상되었다는 뜻은 아닙니다. 같이 올라온 `.sha256` 파일과 `Get-FileHash MailAssistant-Setup-x.y.z.exe -Algorithm SHA256` 결과를 비교하면 무결성을 직접 확인할 수 있습니다.
 
-   이 명령의 실행 정책은 해당 프로세스에만 적용합니다. 조직 정책으로 실행이 차단되면 관리자에게 설치 방식을 문의하세요. 설치 도중 Python 라이브러리를 다운로드합니다.
+4. 설치 마법사에서 바탕화면 바로가기와 자동 시작 여부를 고릅니다. **관리자 권한은 필요 없습니다** — UAC 창이 뜬다면 취소하고 다시 받으세요. 로그인한 사용자 계정에만 설치되며, 그래야 Codex CLI를 제대로 찾습니다.
 
-4. 바탕화면의 **메일 도우미** 바로가기를 엽니다.
-5. 메일 계정, 메일 전용 비밀번호, 엑셀 파일 위치를 입력하고 **시작**을 누릅니다.
+5. 바탕화면의 **메일 도우미** 바로가기를 엽니다.
+6. **설정**에서 메일 계정, 메일 전용 비밀번호, 엑셀 파일 위치를 입력하고 **시작**을 누릅니다.
 
 기본 서버는 `pop3s.hiworks.com`, SSL 포트는 `995`, 조회 간격은 `180초`입니다. 일반 웹메일 비밀번호 대신 메일 전용 비밀번호를 사용하세요. 하이웍스의 POP3 설정 및 허용 국가/IP 정책에서 실행 PC의 접근이 가능해야 합니다.
 
@@ -79,7 +75,7 @@ Codex 로그인 상태와 연결 테스트는 별도 스레드에서 실행되�
 
 ## 예시 파일 먼저 보기
 
-`py sample.py`를 실행하면 바탕화면에 `메일 업무관리 예시.xlsx`가 생성됩니다. 메일 수신과 Codex 분석 없이 샘플 메일 5건을 실제 반영 코드로 통과시켜, 도우미가 만드는 것과 같은 시트 구성·서식·달력을 보여줍니다. 지난 마감과 확인 필요 일정, 사용자가 직접 채우는 열의 예시까지 들어 있습니다. `py sample.py 경로.xlsx`로 위치를 지정할 수 있고, Excel 없이도 동작하지만 `openpyxl`이 필요합니다(`py -m pip install openpyxl`). 예시 파일은 도우미가 쓰는 파일과 별개이며 덮어써도 무방합니다.
+시작 메뉴의 **메일 도우미 (진단)**를 열고 `MailAssistantTools.exe sample`을 실행하면 바탕화면에 `메일 업무관리 예시.xlsx`가 생성됩니다. 메일 수신과 Codex 분석 없이 샘플 메일 5건을 실제 반영 코드로 통과시켜, 도우미가 만드는 것과 같은 시트 구성·서식·달력을 보여줍니다. 지난 마감과 확인 필요 일정, 사용자가 직접 채우는 열의 예시까지 들어 있습니다. `MailAssistantTools.exe sample 경로.xlsx`로 위치를 지정할 수 있고 Excel이 없어도 동작합니다. 예시 파일은 도우미가 쓰는 파일과 별개이며 덮어써도 무방합니다.
 
 ## 대시보드
 
@@ -105,17 +101,11 @@ Codex 로그인 상태와 연결 테스트는 별도 스레드에서 실행되�
 
 ## 자동 시작 / 해제
 
-수동 테스트가 끝난 뒤 설치 폴더에서 실행합니다.
+설치 마법사의 **Windows 로그인 시 자동으로 시작** 항목을 체크하면 등록됩니다. 기본값은 해제이며, 수동 테스트를 마친 뒤 켜는 것을 권합니다.
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\startup.ps1
-```
+나중에 켜려면 설치 프로그램을 다시 실행하고 해당 항목을 체크하세요. 끄려면 `Win+R` → `shell:startup`에서 **메일 도우미** 바로가기를 삭제하거나, 작업 관리자의 시작 프로그램 탭에서 사용 안 함으로 바꾸면 됩니다.
 
-Windows 로그인 시 설정을 불러와 자동으로 시작합니다. 해제:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\startup.ps1 -Remove
-```
+자동 시작으로 켜진 경우 설정이 저장되어 있으면 창이 열린 직후 스스로 **시작**을 누릅니다.
 
 ## Windows 인수 테스트
 
@@ -124,7 +114,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\startup.ps1 -Remove
 **메일 계정 없이 엑셀 연결부터 확인하려면** 설치 폴더에서 다음을 실행하세요. 바탕화면에 별도의 `메일 업무관리 샘플.xlsx`를 만듭니다. 이를 엑셀에서 열어둔 채 같은 명령을 다시 실행하면 새 샘플 행이 추가됩니다. 실제 메일을 읽거나 Codex를 호출하지 않습니다.
 
 ```powershell
-.\.venv\Scripts\python.exe .\demo.py
+MailAssistantTools.exe demo
 ```
 
 1. **첫 실행:** ‘첫 연결 완료’를 확인하고 바탕화면의 엑셀 파일과 5개 시트가 생성되는지 확인.
@@ -140,19 +130,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\startup.ps1 -Remove
 
 ## 오류 해결
 
-초기 버전에서 `새 메일 ...건 수집 / 엑셀 반영 대기: 셀 편집·대화상자를 닫고...`만 나오는 경우, 수정 ZIP의 `mail_assistant/excel.py`와 `mail_assistant/worker.py`를 같은 위치에 덮어쓴 뒤 도우미를 재시작하세요. 표 생성 시 잘못 전달하던 선택 인수를 수정했으며, 이후 실패하면 단계·오류 코드·상세 메시지가 표시됩니다. 기존 DB와 엑셀을 삭제하지 마세요. 분석이 끝난 대기 메일은 다음 조회 주기에 다시 반영합니다.
+**먼저 최신 버전인지 확인하세요.** 도우미는 켤 때 새 버전을 확인하고 물어봅니다. 수동으로 올리려면 [Releases](https://github.com/gakmax/mail-assistant/releases/latest)에서 최신 Setup을 받아 그대로 실행하면 됩니다 — 기존 설정·메일 기록·엑셀 파일은 유지됩니다. 창 제목에 현재 버전이 표시됩니다.
 
-수정 후에도 실패하면 도우미에 표시되는 `엑셀 반영 대기:` 이후의 전체 문구를 확인하세요. `%LOCALAPPDATA%\HiworksMailAssistant\status.json`의 `message`에도 같은 내용이 남습니다. 오류에 로컬 파일 경로가 포함될 수 있습니다. 계정 비밀번호나 메일 원문을 공유할 필요는 없습니다.
+`엑셀 반영 대기:`가 반복되면 도우미에 표시되는 `엑셀 반영 대기:` 이후의 전체 문구를 확인하세요. `%LOCALAPPDATA%\HiworksMailAssistant\status.json`의 `message`에도 같은 내용이 남습니다. 오류에 로컬 파일 경로가 포함될 수 있습니다. 계정 비밀번호나 메일 원문을 공유할 필요는 없습니다.
 
-‘설정 확인’에서 `Objects of type bytes can not be converted to Unicode`가 발생하는 초기 버전은 비밀번호 저장 코드 오류입니다. 수정 ZIP의 `mail_assistant/services.py`로 교체한 뒤 도우미를 다시 실행하고 메일 전용 비밀번호를 재입력하세요. 재설치하거나 기존 DB·엑셀을 삭제할 필요가 없습니다.
+`메일 연결 실패`만 반복되고 원인을 알 수 없을 때는 시작 메뉴의 **메일 도우미 (진단)**을 열고 `MailAssistantTools.exe diagnose 메일주소`를 실행하세요. 자격 증명 저장 여부, DNS, TLS, 로그인, UIDL 지원을 순서대로 확인하고 실패한 단계의 서버 응답을 그대로 보여줍니다. 비밀번호는 화면에 출력하지 않습니다. 도우미 자체 메시지도 이제 실패 원인을 뒤에 덧붙여 표시합니다.
 
-`메일 연결 실패`만 반복되고 원인을 알 수 없을 때는 설치 폴더에서 `py diagnose.py 메일주소`를 실행하세요. 자격 증명 저장 여부, DNS, TLS, 로그인, UIDL 지원을 순서대로 확인하고 실패한 단계의 서버 응답을 그대로 보여줍니다. 비밀번호는 화면에 출력하지 않습니다. 도우미 자체 메시지도 이제 실패 원인을 뒤에 덧붙여 표시합니다.
-
-`엑셀 반영 대기: ... 열 구성이 바뀌었습니다`가 나오면 `py diagnose.py --excel`을 실행하세요. 설정에 지정된 파일을 읽기 전용으로 열어 시트별 1행을 기대값과 비교하고, 다른 셀의 현재 글자를 그대로 보여줍니다. 앞뒤 공백이나 셀 서식 차이는 도우미가 알아서 헤더를 다시 써서 넘어가고, 열 이름·순서가 실제로 바뀐 경우에만 반영을 멈춥니다.
+`엑셀 반영 대기: ... 열 구성이 바뀌었습니다`가 나오면 `MailAssistantTools.exe diagnose --excel`을 실행하세요. 설정에 지정된 파일을 읽기 전용으로 열어 시트별 1행을 기대값과 비교하고, 다른 셀의 현재 글자를 그대로 보여줍니다. 앞뒤 공백이나 셀 서식 차이는 도우미가 알아서 헤더를 다시 써서 넘어가고, 열 이름·순서가 실제로 바뀐 경우에만 반영을 멈춥니다.
 
 1행이 `Column1`, `Column2`…로 바뀌어 있으면 표를 만들 때 Excel이 헤더 행을 인식하지 못해 자기 이름을 써넣은 경우입니다. 도우미가 다음 반영에서 1행을 원래 열 이름으로 되돌리고, 아래로 밀린 헤더 사본 행을 지웁니다. 수동으로 고칠 필요는 없으며 데이터 행은 그대로 유지됩니다.
 
-엑셀에 기대한 행이 없을 때는 `py diagnose.py --result`로 저장된 분석 결과를 확인하세요. 종류·우선순위·일정 건수와 `reply_needed` 값을 보여줍니다. `reply_needed = False`면 모델이 답변 불필요로 판단한 것이며 답변 초안 시트에는 행을 만들지 않습니다. 값이 `True`인데 시트에 행이 없으면 엑셀 반영 문제입니다.
+엑셀에 기대한 행이 없을 때는 `MailAssistantTools.exe diagnose --result`로 저장된 분석 결과를 확인하세요. 종류·우선순위·일정 건수와 `reply_needed` 값을 보여줍니다. `reply_needed = False`면 모델이 답변 불필요로 판단한 것이며 답변 초안 시트에는 행을 만들지 않습니다. 값이 `True`인데 시트에 행이 없으면 엑셀 반영 문제입니다.
 
 | 증상 | 확인할 내용 |
 |---|---|
@@ -161,7 +149,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\startup.ps1 -Remove
 | 분석 대기 | Plus 사용량 한도, 인터넷, Codex CLI 업데이트, 과도하게 긴 본문 |
 | 엑셀 반영 대기 | Excel 설치/인증, 입력 중인 셀·대화상자, 읽기 전용, 파일 위치, 시트 열 이름 |
 | 엑셀이 열려 있는데 인식 안 됨 | 다른 창으로 잠시 전환해 Excel이 자동화 대상으로 등록되게 한 뒤 재시도 |
-| 바로가기 실행이 안 됨 | 설치 폴더의 `start.cmd`를 실행해 오류 확인 |
+| 바로가기 실행이 안 됨 | 시작 메뉴 → **메일 도우미 (진단)** → `MailAssistantTools.exe gui`로 오류 메시지 확인 |
+| 창이 잠깐 떴다 사라짐 | `%LOCALAPPDATA%\HiworksMailAssistant\startup-error.log` 확인 |
+| 구성 요소 이상이 의심될 때 | `MailAssistantTools.exe selftest` |
 
 분석 실패는 5분부터 최대 1시간 간격으로 재시도하며 다른 메일의 분석도 잠시 대기합니다. 엑셀 반영 실패는 분석을 다시 호출하지 않고 저장된 결과를 재사용합니다. 메일 수집은 한 주기 최대 25건, 분석은 최대 5건, 엑셀 반영은 최대 50건씩 처리합니다.
 
@@ -179,6 +169,36 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\startup.ps1 -Remove
 
 다른 주소로 보내려면 같은 항목에 새 Webhook URL을 적으면 됩니다. 환경 변수 `MAIL_ASSISTANT_WEBHOOK`을 지정하면 그 값이 우선합니다.
 
+웹훅 주소는 소스에 들어 있지 않습니다. 릴리스 빌드에만 주입되므로, 저장소를 직접 빌드하면 기본값이 비어 있어 아무것도 보내지 않습니다.
+
+## 자동 업데이트
+
+도우미를 켤 때 새 버전이 있는지 확인하고, 있으면 변경 내용과 함께 물어봅니다. **지금 업데이트**를 누르면 설치 파일을 내려받아 SHA-256으로 확인한 뒤 조용히 설치하고 도우미를 다시 엽니다. 설정, 메일 기록(`mail.db`), 엑셀 파일, 저장된 비밀번호는 그대로 유지됩니다. 내려받는 동안 진행률이 보이며 언제든 취소할 수 있습니다.
+
+도우미가 실행 중일 때 업데이트하면 **현재 메일·분석·엑셀 작업을 마친 뒤** 설치합니다. Codex 분석 한 건의 제한 시간이 4분이라 몇 분 걸릴 수 있습니다.
+
+확인은 6시간에 한 번, 공개 GitHub Releases에서만 합니다. 인터넷이 끊겨 있거나 GitHub에 접속할 수 없으면 아무것도 표시하지 않고 평소대로 실행합니다. **이 버전 건너뛰기**를 누르면 다음 버전이 나올 때까지 다시 묻지 않습니다. Windows 로그인 자동 시작으로 켜진 경우에는 60초 뒤 창이 스스로 닫히고, 창 오른쪽 위의 **⬆ 업데이트** 버튼으로 언제든 다시 설치할 수 있습니다.
+
+끄려면 `%LOCALAPPDATA%\HiworksMailAssistant\config.json`에 다음 항목을 추가하고 도우미를 다시 시작하세요.
+
+```json
+"update": false
+```
+
+설치 파일에는 코드 서명이 없습니다. SHA-256 확인은 내려받는 도중 파일이 깨지거나 일부만 받아진 경우를 걸러 내며, GitHub 계정 자체가 탈취된 경우까지 막지는 못합니다. 검증 파일이 없거나 해시가 다르면 설치하지 않고 받은 파일을 지웁니다.
+
+## 제거
+
+**설정 → 앱 → 설치된 앱 → 메일 도우미 → 제거**, 또는 시작 메뉴의 **메일 도우미 제거**를 실행합니다. 관리자 권한은 필요 없습니다.
+
+제거해도 **지워지지 않는 것**은 다음과 같습니다. 실수로 업무 기록을 잃지 않도록 일부러 남깁니다.
+
+- `%LOCALAPPDATA%\HiworksMailAssistant` 폴더 (`config.json`, `mail.db`, `status.json`)
+- Windows 자격 증명 관리자의 `HiworksMailAssistant/<메일주소>` 항목
+- 엑셀 워크북 (기본값은 바탕화면의 `메일 업무관리.xlsx`)
+
+완전히 지우려면 위 세 가지를 직접 삭제하세요. 반대로 재설치하면 기존 설정과 메일 기록을 그대로 이어받습니다.
+
 ## 데이터와 백업
 
 `%LOCALAPPDATA%\HiworksMailAssistant`에 다음 파일이 있습니다.
@@ -188,6 +208,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\startup.ps1 -Remove
 - `status.json`: 최근 실행 상태. 메일 본문이나 비밀번호를 기록하지 않습니다.
 
 백업은 도우미를 중지한 뒤 데이터 폴더와 엑셀을 함께 복사하세요. DB를 삭제하면 기존 메일의 처리 이력이 사라지고 다음 연결에서 새 기준점을 잡습니다. 비밀번호는 Windows 자격 증명 관리자에서 `HiworksMailAssistant/메일주소` 항목으로 관리합니다.
+
+업데이트 중에는 `update/<버전>/` 하위 폴더에 설치 파일이 잠시 생겼다가 다음 실행 때 정리됩니다. **프로그램을 제거해도 이 폴더는 지워지지 않습니다.**
 
 ## 첫 버전 범위
 
@@ -199,15 +221,32 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\startup.ps1 -Remove
 - 한 PC, 한 실행 계정, 한 대상 통합문서 구성. 개인 PC 로그인 세션용이며 Windows 서비스/공유 서버용이 아님.
 - COM 연동은 실제 Windows/Excel에서 위 인수 테스트가 필요합니다. Linux 개발 테스트만으로 화면 갱신을 보증할 수 없습니다.
 
-## 개발 검증 및 배포 ZIP
+## 개발과 릴리스
+
+테스트는 어느 플랫폼에서나 돕니다. Windows API와 Excel COM은 전부 가짜로 주입하므로 Linux에서도 전부 통과합니다.
 
 ```bash
 python -m pip install -r requirements.txt
 python -m unittest discover -s tests -v
-python package.py
 ```
 
-`dist/hiworks-mail-assistant.zip`을 친구에게 전달합니다. 배포 스크립트는 명시한 소스/가이드만 포함하므로 로컬 DB, 비밀번호, Codex 인증, 가상환경은 포함하지 않습니다. 설치 시 인터넷이 필요한 소스 배포이며 단일 EXE는 아닙니다.
+Windows에서 exe와 설치 프로그램을 직접 만들려면 [Inno Setup 6](https://jrsoftware.org/isdl.php)을 설치한 뒤:
+
+```powershell
+.\packaging\build.ps1
+```
+
+`dist\installer\`에 `MailAssistant-Setup-x.y.z.exe`, `.sha256`, `latest.json`이 생성됩니다.
+
+**릴리스 절차**는 세 단계입니다.
+
+1. `mail_assistant/__init__.py`의 `__version__`을 올립니다. **버전이 적힌 곳은 여기 하나뿐이며** 설치 프로그램, exe 버전 리소스, 업데이트 비교값이 전부 여기서 파생됩니다.
+2. 커밋하고 `git tag v0.2.0` → `git push --follow-tags`.
+3. GitHub Actions가 Windows에서 테스트 → PyInstaller → 고정 빌드 점검(`selftest`) → Inno Setup → 릴리스 게시까지 처리합니다. 태그와 `__version__`이 다르면 빌드를 실패시킵니다.
+
+Discord 웹훅은 소스에 없습니다. CI가 저장소 시크릿 `DISCORD_WEBHOOK`으로 `mail_assistant/_secrets.py`를 만들어 넣으며, 직접 빌드하면 기본값이 비어 있어 아무것도 보내지 않습니다. 공개 릴리스 파일에서 문자열을 추출하는 것은 막지 못하므로, 남용되면 Discord에서 웹훅을 재발급하고 시크릿만 교체하면 됩니다.
+
+`latest.json`은 버전이 붙지 않은 고정 이름입니다. 업데이터가 `releases/latest/download/latest.json` 리다이렉트로 읽으므로 **이름을 바꾸면 구버전이 업데이트를 찾지 못합니다.**
 
 ### 참고
 

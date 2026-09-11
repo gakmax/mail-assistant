@@ -1,0 +1,2 @@
+# Pinned: a PyInstaller patch release must not silently change a tagged build.
+pyinstaller==6.22.*

@@ -1,0 +1,108 @@
+name: release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:          # build without publishing, to debug the pipeline
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # Pinned, not windows-latest: Inno Setup 6 is preinstalled on this image and
+    # a runner image roll must not silently change a release build.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0      # make_manifest.py reads git log since the last tag
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Derive the version and check it against the tag
+        id: version
+        shell: pwsh
+        run: |
+          $match = Select-String -Path mail_assistant/__init__.py -Pattern '^__version__\s*=\s*"([^"]+)"'
+          $v = $match.Matches[0].Groups[1].Value
+          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "__version__ 형식 오류: '$v'" }
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and "v$v" -ne $env:GITHUB_REF_NAME) {
+            throw "태그 $env:GITHUB_REF_NAME 와(과) __version__ $v 이(가) 다릅니다."
+          }
+          "value=$v" | Out-File -Append $env:GITHUB_OUTPUT
+
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt -r requirements-build.txt
+
+      - name: Run the tests against real pywin32 and jsonschema
+        run: python -m unittest discover -s tests -v
+
+      - name: Inject the Discord webhook
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        shell: pwsh
+        run: |
+          python -c "import os, pathlib; pathlib.Path('mail_assistant/_secrets.py').write_text('WEBHOOK = %r' % os.environ.get('WEBHOOK', ''), encoding='utf-8')"
+
+      - run: pyinstaller --noconfirm --clean --log-level=INFO packaging/mail_assistant.spec
+
+      - name: Smoke-test the frozen bundle
+        shell: pwsh
+        run: |
+          # selftest exercises every lazily imported module and forces the
+          # jsonschema metaschema load, which freezing loses quietly.
+          & dist\MailAssistant\MailAssistantTools.exe selftest
+          if ($LASTEXITCODE -ne 0) { throw 'selftest 실패' }
+          & dist\MailAssistant\MailAssistantTools.exe sample "$env:RUNNER_TEMP\smoke.xlsx"
+          if (-not (Test-Path "$env:RUNNER_TEMP\smoke.xlsx")) { throw '예시 파일이 생성되지 않았습니다.' }
+          $stamped = (Get-Item dist\MailAssistant\MailAssistant.exe).VersionInfo.FileVersion
+          if (-not $stamped.StartsWith('${{ steps.version.outputs.value }}')) {
+            throw "버전 리소스 불일치: $stamped"
+          }
+
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & $iscc "/DAppVersion=${{ steps.version.outputs.value }}" packaging\installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC 실패: $LASTEXITCODE" }
+
+      - name: Write the manifest and checksums
+        run: python packaging/make_manifest.py --version ${{ steps.version.outputs.value }} --repo ${{ github.repository }}
+
+      - name: Keep the build logs whatever happens
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            build/**/warn-*.txt
+            build/**/xref-*.html
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer
+          path: dist/installer/*
+
+      - name: Publish the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $v = '${{ steps.version.outputs.value }}'
+          gh release create $env:GITHUB_REF_NAME `
+            --title "메일 도우미 $v" `
+            --notes-file dist/installer/RELEASE_NOTES.md `
+            "dist/installer/MailAssistant-Setup-$v.exe" `
+            "dist/installer/MailAssistant-Setup-$v.exe.sha256" `
+            dist/installer/latest.json

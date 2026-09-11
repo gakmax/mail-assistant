@@ -1,6 +1,7 @@
 # Build output
-build/version_info.py
+build/
 dist/
+Output/
 *.spec.bak
 
 # Secrets injected at build time
