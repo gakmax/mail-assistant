@@ -119,12 +119,8 @@ def run_script(module, argv):
 
 
 def main(argv):
-    # Korean print() into a redirected pipe is cp949 and raises without this.
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(encoding='utf-8', errors='replace')
-        except (AttributeError, ValueError):
-            pass
+    from mail_assistant.console import use_utf8
+    use_utf8()
     command = (argv[0] if argv else 'help').lower().lstrip('-')
     rest = argv[1:]
     if command in ('help', 'h', '?'):

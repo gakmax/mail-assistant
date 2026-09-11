@@ -3,8 +3,11 @@ import json
 import sys
 from datetime import datetime
 
+from mail_assistant.console import use_utf8
+
 
 def main():
+    use_utf8()
     if sys.platform != 'win32':
         raise SystemExit('이 샘플은 Excel이 설치된 Windows에서 실행하세요.')
     from pathlib import Path

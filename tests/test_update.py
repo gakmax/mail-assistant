@@ -332,8 +332,11 @@ class LaunchTests(unittest.TestCase):
         self.assertIn('/LOG=/tmp/install.log', command)
         self.assertIn('/relaunch=1', command)
         self.assertFalse([arg for arg in command if 'TASKS' in arg.upper()])
-        # getattr fallback: this module has to stay importable off Windows.
-        self.assertEqual(popen.call_args.kwargs['creationflags'], 0)
+        # DETACHED_PROCESS where it exists, 0 elsewhere -- the lazy lookup that
+        # keeps this module importable off Windows.
+        import subprocess
+        self.assertEqual(popen.call_args.kwargs['creationflags'],
+                         getattr(subprocess, 'DETACHED_PROCESS', 0))
 
     def test_autostart_mode(self):
         with patch('mail_assistant.update.subprocess.Popen'):

@@ -1,9 +1,9 @@
 """연결 실패와 엑셀 반영 실패의 원인을 확인합니다. Windows에서 실행하세요.
 
-    py diagnose.py user@example.com   메일(POP3) 연결 단계별 점검
-    py diagnose.py --excel                   엑셀 시트 열 구성 점검 (설정의 파일)
-    py diagnose.py --excel "C:\\경로\\파일.xlsx"
-    py diagnose.py --result [건수]           저장된 분석 결과 확인 (기본 5건)
+    MailAssistantTools.exe diagnose user@example.com   메일(POP3) 연결 단계별 점검
+    MailAssistantTools.exe diagnose --excel            엑셀 시트 열 구성 점검 (설정의 파일)
+    MailAssistantTools.exe diagnose --excel "C:\\경로\\파일.xlsx"
+    MailAssistantTools.exe diagnose --result [건수]    저장된 분석 결과 확인 (기본 5건)
 
 Windows 자격 증명에 저장된 비밀번호를 사용하고, 없으면 직접 입력받습니다.
 비밀번호 자체는 화면에 출력하지 않습니다. 엑셀 점검은 파일을 수정하지 않습니다.
@@ -12,6 +12,8 @@ import getpass
 import socket
 import ssl
 import sys
+
+from mail_assistant.console import use_utf8
 
 HOST = 'pop3s.hiworks.com'
 PORT = 995
@@ -122,6 +124,7 @@ def show_results(limit):
 
 
 def main():
+    use_utf8()
     if sys.argv[1:2] == ['--result']:
         show_results(int(sys.argv[2]) if len(sys.argv) > 2 else 5)
         return

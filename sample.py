@@ -1,7 +1,7 @@
 """도우미가 만드는 엑셀과 같은 모양의 예시 파일을 만듭니다. Excel 없이 동작합니다.
 
-    py sample.py                 바탕화면(없으면 현재 폴더)에 '메일 업무관리 예시.xlsx'
-    py sample.py 경로.xlsx       위치를 직접 지정
+    MailAssistantTools.exe sample              바탕화면(없으면 현재 폴더)에 '메일 업무관리 예시.xlsx'
+    MailAssistantTools.exe sample 경로.xlsx    위치를 직접 지정
 
 메일 수신과 Codex 분석을 하지 않고, 샘플 분석 결과만 실제 코드 경로로 통과시킵니다.
 """
@@ -19,10 +19,11 @@ try:
     from openpyxl.utils import get_column_letter
     from openpyxl.worksheet.hyperlink import Hyperlink
     from openpyxl.worksheet.table import Table, TableStyleInfo
-except ImportError:  # The assistant itself writes through Excel and does not need this.
-    raise SystemExit('예시 파일 생성에는 openpyxl이 필요합니다: py -m pip install openpyxl')
+except ImportError:  # Bundled in the release; only a source checkout can miss it.
+    raise SystemExit('예시 파일 생성에는 openpyxl이 필요합니다: python -m pip install openpyxl')
 
 from mail_assistant.calendar_sheet import MARKERS, collect, month_grid, next_month, overdue
+from mail_assistant.console import use_utf8
 from mail_assistant.core import HEADERS, workbook_rows
 from mail_assistant.excel import mailto
 from mail_assistant.dashboard import (SIZES, UPCOMING_ROWS, UPCOMING_TOP, WIDTHS, blocks, cards,
@@ -271,6 +272,7 @@ def write_dashboard(book, sheets):
 
 
 def main():
+    use_utf8()
     if len(sys.argv) > 1:
         path = Path(sys.argv[1])
     else:

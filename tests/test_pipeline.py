@@ -822,5 +822,23 @@ class WorkerTests(unittest.TestCase):
             store.db.close()
 
 
+class ConsoleTests(unittest.TestCase):
+    """Korean print() into a redirected pipe is the ANSI codepage on Windows."""
+
+    def test_reconfigures_a_narrow_stream(self):
+        import io
+        from mail_assistant.console import use_utf8
+        narrow = io.TextIOWrapper(io.BytesIO(), encoding='cp1252')
+        with patch.object(sys, 'stdout', narrow), patch.object(sys, 'stderr', narrow):
+            use_utf8()
+            print('예시 파일 생성', file=sys.stdout)
+        self.assertEqual(narrow.encoding, 'utf-8')
+
+    def test_is_safe_when_a_stream_cannot_be_reconfigured(self):
+        from mail_assistant.console import use_utf8
+        with patch.object(sys, 'stdout', object()), patch.object(sys, 'stderr', None):
+            use_utf8()
+
+
 if __name__ == '__main__':
     unittest.main()
