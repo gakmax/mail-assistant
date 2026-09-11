@@ -95,6 +95,9 @@ def selftest():
         ('sqlite3 (uri)', check_sqlite),
         ('mail_assistant.update', lambda: __import__('mail_assistant.update',
                                                      fromlist=['check']).DEFAULT_REPO),
+        # The window and everything it pulls in: __main__ imports it lazily, so a
+        # missed module would only show up when the user double-clicks the icon.
+        ('mail_assistant.app', lambda: __import__('mail_assistant.app', fromlist=['App']).App.__name__),
     ]
     failed = 0
     for name, probe in checks:
