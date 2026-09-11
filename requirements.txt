@@ -1,0 +1,2 @@
+pywin32>=306,<400; sys_platform == 'win32'
+jsonschema>=4.20,<5

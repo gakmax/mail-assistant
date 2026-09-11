@@ -1,0 +1,21 @@
+# Build output
+build/version_info.py
+dist/
+*.spec.bak
+
+# Secrets injected at build time
+mail_assistant/_secrets.py
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Runtime data — never commit
+*.db*
+*.eml
+*.xlsx
+config.json
+
+# Legacy artifacts
+*.zip
