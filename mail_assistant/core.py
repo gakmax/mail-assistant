@@ -3,15 +3,29 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email import policy
 from email.parser import BytesParser
 from html.parser import HTMLParser
 from pathlib import Path
 
 
+KST = timezone(timedelta(hours=9))
+HANDLED = '처리'
+
+
 def now():
     return datetime.now(timezone.utc).isoformat()
+
+
+def local_now():
+    return datetime.now(KST)
+
+
+def day_bounds(day):
+    """The Korean calendar day as the UTC ISO range that `received` is stored in."""
+    start = datetime(day.year, day.month, day.day, tzinfo=KST)
+    return start.astimezone(timezone.utc).isoformat(), (start + timedelta(days=1)).astimezone(timezone.utc).isoformat()
 
 
 class TextHTML(HTMLParser):
@@ -70,6 +84,34 @@ class Store:
                 attempts INTEGER NOT NULL DEFAULT 0, retry_at REAL NOT NULL DEFAULT 0,
                 error TEXT NOT NULL DEFAULT '', UNIQUE(account,uid));
         ''')
+        self.migrate()
+
+    def migrate(self):
+        """Add columns the app needs, leaving the installed database and its rows alone."""
+        present = {row['name'] for row in self.db.execute('PRAGMA table_info(mail)')}
+        additions = (('handled', "TEXT NOT NULL DEFAULT ''"), ('draft_edit', "TEXT NOT NULL DEFAULT ''"),
+                     ('notified', 'INTEGER NOT NULL DEFAULT 0'), ('analyzed_at', "TEXT NOT NULL DEFAULT ''"),
+                     ('exported_at', "TEXT NOT NULL DEFAULT ''"), ('subject', "TEXT NOT NULL DEFAULT ''"),
+                     ('sender', "TEXT NOT NULL DEFAULT ''"))
+        with self.db:
+            for column, declaration in additions:
+                if column not in present:
+                    self.db.execute(f'ALTER TABLE mail ADD COLUMN {column} {declaration}')
+        self.backfill_headers()
+
+    def backfill_headers(self):
+        """Fill subject/sender for mail collected before those columns existed."""
+        rows = self.db.execute("SELECT id, parsed, raw FROM mail WHERE subject=''").fetchall()
+        updates = []
+        for row in rows:
+            try:
+                parsed = json.loads(row['parsed']) if row['parsed'] else parse_mail(row['raw'])
+            except Exception:
+                continue
+            updates.append((parsed.get('subject', ''), parsed.get('sender', ''), row['id']))
+        if updates:
+            with self.db:
+                self.db.executemany('UPDATE mail SET subject=?, sender=? WHERE id=?', updates)
 
     def get_meta(self, key):
         row = self.db.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchone()
@@ -89,9 +131,15 @@ class Store:
 
     def add(self, account, uid, raw):
         ident = hashlib.sha256((account + '\0' + uid).encode()).hexdigest()[:24]
+        try:
+            headers = parse_mail(raw)
+        except Exception:
+            # A malformed mail must still be stored; the subject can be filled in later.
+            headers = {'subject': '', 'sender': ''}
         with self.db:
-            self.db.execute('INSERT OR IGNORE INTO mail(id,account,uid,raw,received) VALUES (?,?,?,?,?)',
-                            (ident, account, uid, raw, now()))
+            self.db.execute('INSERT OR IGNORE INTO mail(id,account,uid,raw,received,subject,sender) '
+                            'VALUES (?,?,?,?,?,?,?)',
+                            (ident, account, uid, raw, now(), headers.get('subject', ''), headers.get('sender', '')))
             self.db.execute('INSERT OR IGNORE INTO seen VALUES (?,?)', (account, uid))
         return ident
 
@@ -101,8 +149,9 @@ class Store:
 
     def analyzed(self, ident, parsed, result):
         with self.db:
-            self.db.execute('UPDATE mail SET parsed=?, result=?, error=\'\' WHERE id=?',
-                            (json.dumps(parsed, ensure_ascii=False), json.dumps(result, ensure_ascii=False), ident))
+            self.db.execute('UPDATE mail SET parsed=?, result=?, error=\'\', analyzed_at=? WHERE id=?',
+                            (json.dumps(parsed, ensure_ascii=False), json.dumps(result, ensure_ascii=False),
+                             now(), ident))
 
     def failed(self, ident, error, timestamp):
         with self.db:
@@ -113,11 +162,96 @@ class Store:
         return self.db.execute('SELECT * FROM mail WHERE account=? AND result IS NOT NULL AND exported=0 ORDER BY received LIMIT 50', (account,)).fetchall()
 
     def exported(self, ids):
+        stamp = now()
         with self.db:
-            self.db.executemany('UPDATE mail SET exported=1 WHERE id=?', ((i,) for i in ids))
+            self.db.executemany('UPDATE mail SET exported=1, exported_at=? WHERE id=?',
+                                ((stamp, i) for i in ids))
 
     def counts(self, account):
         return dict(self.db.execute('SELECT COUNT(*) total, COALESCE(SUM(result IS NULL),0) pending, COALESCE(SUM(result IS NOT NULL AND exported=0),0) waiting FROM mail WHERE account=?', (account,)).fetchone())
+
+    LIST_COLUMNS = ('id, received, subject, sender, parsed, result, handled, draft_edit, '
+                    'attempts, retry_at, error, exported, notified')
+
+    def page(self, account, limit=2000):
+        """Newest first, without the raw blob. Filtering happens in filter_rows()."""
+        return self.db.execute(f'SELECT {self.LIST_COLUMNS} FROM mail WHERE account=? '
+                               'ORDER BY received DESC LIMIT ?', (account, limit)).fetchall()
+
+    def detail(self, ident):
+        return self.db.execute('SELECT * FROM mail WHERE id=?', (ident,)).fetchone()
+
+    def set_handled(self, ident, state):
+        with self.db:
+            self.db.execute('UPDATE mail SET handled=? WHERE id=?', (state, ident))
+
+    def set_draft(self, ident, text):
+        with self.db:
+            self.db.execute('UPDATE mail SET draft_edit=? WHERE id=?', (text, ident))
+
+    def reset(self, ids, reanalyze=False):
+        """Clear the backoff so the next cycle picks these up again."""
+        clause = ", result=NULL, analyzed_at=''" if reanalyze else ''
+        with self.db:
+            self.db.executemany(f"UPDATE mail SET attempts=0, retry_at=0, error=''{clause} WHERE id=?",
+                                ((i,) for i in ids))
+
+    def retryable(self, account):
+        return self.db.execute(f'SELECT {self.LIST_COLUMNS} FROM mail '
+                               'WHERE account=? AND result IS NULL ORDER BY received', (account,)).fetchall()
+
+    def day_counts(self, account, start, end):
+        window = 'AND {0}>=? AND {0}<?'
+        query = ('SELECT (SELECT COUNT(*) FROM mail WHERE account=? ' + window.format('received') + ') collected, '
+                 '(SELECT COUNT(*) FROM mail WHERE account=? ' + window.format('analyzed_at') + ') analyzed, '
+                 '(SELECT COUNT(*) FROM mail WHERE account=? ' + window.format('exported_at') + ') exported')
+        return dict(self.db.execute(query, (account, start, end) * 3).fetchone())
+
+    def open_count(self, account):
+        return self.db.execute('SELECT COUNT(*) FROM mail WHERE account=? AND result IS NOT NULL AND handled<>?',
+                               (account, HANDLED)).fetchone()[0]
+
+    def unnotified(self, account):
+        return self.db.execute(f'SELECT {self.LIST_COLUMNS} FROM mail WHERE account=? '
+                               'AND result IS NOT NULL AND notified=0 ORDER BY received', (account,)).fetchall()
+
+    def mark_notified(self, ids):
+        with self.db:
+            self.db.executemany('UPDATE mail SET notified=1 WHERE id=?', ((i,) for i in ids))
+
+
+def local_text(stamp, pattern='%m-%d %H:%M'):
+    """UTC ISO string -> Korean local time for display."""
+    try:
+        return datetime.fromisoformat(str(stamp)).astimezone(KST).strftime(pattern)
+    except (TypeError, ValueError):
+        return str(stamp or '')
+
+
+def state_of(row):
+    if row['handled'] == HANDLED:
+        return HANDLED
+    if row['result']:
+        return '미처리'
+    if row['attempts']:
+        return f"{row['attempts']}회 실패"
+    return '분석 대기'
+
+
+def row_view(row):
+    """One line of the mail list. Works before analysis, when result is still empty."""
+    result = json.loads(row['result']) if row['result'] else {}
+    return {'id': row['id'], 'received': local_text(row['received']),
+            'sender': row['sender'], 'subject': row['subject'] or '(제목 없음)',
+            'category': result.get('category', ''), 'priority': result.get('priority', ''),
+            'state': state_of(row), 'error': row['error']}
+
+
+def filter_rows(views, query='', state=''):
+    text = query.strip().lower()
+    return [view for view in views
+            if (not text or text in view['subject'].lower() or text in view['sender'].lower())
+            and (not state or view['state'] == state)]
 
 
 def account_key(config):

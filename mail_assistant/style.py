@@ -5,6 +5,21 @@ def bgr(red, green, blue):
     return (blue << 16) | (green << 8) | red
 
 
+def parts(value):
+    """BGR integer back to (red, green, blue)."""
+    return value & 0xFF, (value >> 8) & 0xFF, (value >> 16) & 0xFF
+
+
+def hex_rgb(value):
+    """BGR integer to 'RRGGBB', for openpyxl."""
+    return '{:02X}{:02X}{:02X}'.format(*parts(value))
+
+
+def tk_color(value):
+    """BGR integer to '#RRGGBB', for tkinter."""
+    return '#' + hex_rgb(value)
+
+
 # Dashboard palette: dark. Data sheets and the calendar stay light.
 DASH_BG = bgr(24, 24, 27)
 DASH_CARD = bgr(39, 39, 46)

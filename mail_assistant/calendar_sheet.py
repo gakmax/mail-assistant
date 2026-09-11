@@ -74,9 +74,14 @@ def cell_text(day, entries):
     return '\n'.join(lines), spans
 
 
+def weeks_of(year, month):
+    """Six Monday-first weeks of dates covering the month."""
+    return stdlib_calendar.Calendar(firstweekday=0).monthdatescalendar(year, month)[:6]
+
+
 def month_grid(year, month, events):
     """(6x7 text rows, {(row, column): (day, spans)}); days of other months stay blank."""
-    weeks = stdlib_calendar.Calendar(firstweekday=0).monthdatescalendar(year, month)[:6]
+    weeks = weeks_of(year, month)
     text = [['' for _ in WEEKDAYS] for _ in range(6)]
     cells = {}
     for week_index, week in enumerate(weeks):

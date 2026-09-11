@@ -28,17 +28,16 @@ from mail_assistant.core import HEADERS, workbook_rows
 from mail_assistant.excel import mailto
 from mail_assistant.dashboard import (SIZES, UPCOMING_ROWS, UPCOMING_TOP, WIDTHS, blocks, cards,
                                       describe, upcoming)
-from mail_assistant.style import (CALM, DASH_BG, DASH_CARD, DASH_LINE, DASH_LINK, DASH_MUTED,
-                                  DASH_RED, DASH_TEXT, FONT, HEADER_FILL, LINE, LINK, RULES,
+from mail_assistant.style import (CALM, DASH_BG, DASH_CARD, DASH_LINE, DASH_LINK, DASH_MUTED, hex_rgb,
+                                  DASH_RED, FONT, HEADER_FILL, LINE, LINK, RULES,
                                   SOON, TODAY_FILL, URGENT)
 
 TODAY = date.today()
 TABLE_NAMES = {'메일 목록': 'MailList', '일정': 'Schedule', '우선순위': 'Priority', '답변 초안': 'Reply'}
 
 
-def rgb(bgr):
-    """style.py keeps COM's BGR order; openpyxl wants RGB hex."""
-    return f'{bgr & 0xFF:02X}{(bgr >> 8) & 0xFF:02X}{(bgr >> 16) & 0xFF:02X}'
+def rgb(value):
+    return hex_rgb(value)
 
 
 def day(offset, clock=''):

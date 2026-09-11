@@ -1,8 +1,9 @@
 # CLAUDE.md
 
 Windows-only tkinter app. Polls a Hiworks POP3 mailbox, sends each mail to the
-Codex CLI for analysis, and writes the result into a desktop Excel workbook
-over COM. Shipped as an unsigned Inno Setup installer built by GitHub Actions,
+Codex CLI for analysis, stores everything in sqlite, and writes the result into a
+desktop Excel workbook over COM. The window (`app.py`) reads from the database,
+not from the workbook: 현황·메일·일정·실행·설정 tabs over `mail.db`. Shipped as an unsigned Inno Setup installer built by GitHub Actions,
 with in-app updates from public GitHub Releases.
 
 User-facing behaviour, install steps and troubleshooting live in `README.md` —
@@ -51,11 +52,22 @@ uses to recognise an upgrade; a new GUID installs side by side instead.
 `AppMutex` check collides and, under `/SUPPRESSMSGBOXES`, fails as exit code 2 —
 "user cancelled" — with no visible error.
 
-**Settings saves must merge.** `open_settings().save()` writes
+**Settings saves must merge.** `App.save_settings()` writes
 `{**config, **updated}`. The form holds seven fields; `webhook`, `update`,
 `update_skip` and `update_checked` are not among them and a plain write deletes
 them. `update.remember()` exists for the same reason and is the only thing that
 should touch `config.json` from outside the GUI.
+
+**The window lives in `app.py`, the entry point in `__main__.py`.** `main()` owns
+the crash hooks, the mutex, `update.sweep()` and the installer launch in its
+`finally`; everything visible belongs to `App`. `App` exposes `boot`, `close`,
+`start`, `pending_installer`, `pending_autostart` and `offer` because the entry
+point needs them after `mainloop()` returns.
+
+**Schema changes are `ALTER TABLE ADD COLUMN` only.** `Store.migrate()` adds what
+is missing and nothing else; installed databases hold the only copy of collected
+mail. The window opens its own connection on the UI thread — sqlite connections
+are not shareable across threads, and WAL is what lets the worker keep writing.
 
 **Any new console script needs `use_utf8()`** from `mail_assistant.console` as
 the first line of `main()`. Windows gives a redirected stdout the ANSI codepage,
@@ -99,5 +111,7 @@ Docstrings are one line and say *why*, not what. Stdlib only unless there is no
 alternative — `report.py` and `update.py` both do HTTP with `urllib` rather than
 add a dependency. Background work never disturbs the app: it runs on a daemon
 thread and swallows its own exceptions. New UI work reuses
-`background(name, work, done)` in `__main__.py`, which returns results through
-the existing `events` queue and `poll()` dispatch.
+`App.background(name, work, done)` in `app.py`, which returns results through the
+existing `events` queue and `poll()` dispatch. Screen arithmetic belongs in
+`overview.py` and the other pure modules (`rules`, `calendar_sheet`, `dashboard`)
+so the tests can cover it off Windows — `app.py` itself is not importable there.

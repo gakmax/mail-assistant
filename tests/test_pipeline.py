@@ -1,6 +1,8 @@
 import datetime
 import json
 import poplib
+import sqlite3
+import time
 import subprocess
 import sys
 import tempfile
@@ -10,7 +12,8 @@ from email.message import EmailMessage
 from pathlib import Path
 from unittest.mock import call, patch, MagicMock
 
-from mail_assistant.core import HEADERS, Store, account_key, parse_mail, workbook_rows
+from mail_assistant.core import (HANDLED, HEADERS, Store, account_key, day_bounds, filter_rows,
+                                 local_text, parse_mail, row_view, state_of, workbook_rows)
 from mail_assistant.excel import (Excel, ExcelUpdateError, append_missing, ensure_table,
                                   error_detail, repair_generated_header, row_text)
 from mail_assistant.calendar_sheet import (SHEET, Entry, cell_text, collect, month_grid,
@@ -19,6 +22,7 @@ from mail_assistant.calendar_sheet import (SHEET, Entry, cell_text, collect, mon
 from mail_assistant.dashboard import (SHEET as DASHBOARD, UPCOMING_ROWS, UPCOMING_TOP,
                                       blocks, describe, update_dashboard, upcoming)
 from mail_assistant.excel import address_of, link_to_draft, link_to_mail, mail_rows, mailto
+from mail_assistant.overview import overview
 from mail_assistant.settings import normalize
 from mail_assistant.services import check_connection, login_state
 from mail_assistant.style import STYLE_VERSION, URGENT, apply_style
@@ -144,6 +148,227 @@ class PipelineTests(unittest.TestCase):
         with patch('mail_assistant.services.codex_command', return_value=['codex']), patch('mail_assistant.services.subprocess.run', side_effect=execute):
             with self.assertRaises(ValidationError):
                 analyze(row, CONFIG)
+
+
+OLD_SCHEMA = '''
+    CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE seen (account TEXT, uid TEXT, PRIMARY KEY(account,uid));
+    CREATE TABLE mail (
+        id TEXT PRIMARY KEY, account TEXT NOT NULL, uid TEXT NOT NULL,
+        raw BLOB NOT NULL, received TEXT NOT NULL, parsed TEXT,
+        result TEXT, exported INTEGER NOT NULL DEFAULT 0,
+        attempts INTEGER NOT NULL DEFAULT 0, retry_at REAL NOT NULL DEFAULT 0,
+        error TEXT NOT NULL DEFAULT '', UNIQUE(account,uid));
+'''
+
+
+class MigrationTests(unittest.TestCase):
+    def old_database(self, folder):
+        """A database written by the installed version, with one analysed mail."""
+        path = Path(folder) / 'mail.db'
+        db = sqlite3.connect(path)
+        db.executescript(OLD_SCHEMA)
+        db.execute('INSERT INTO mail(id,account,uid,raw,received,parsed,result,exported) VALUES (?,?,?,?,?,?,?,1)',
+                   ('old-1', 'acct', 'uid-1', mail(), '2026-09-10T01:00:00+00:00',
+                    json.dumps({'sender': 'sender@example.com', 'subject': '견적 요청', 'attachments': []}),
+                    json.dumps(RESULT)))
+        db.execute("INSERT INTO meta VALUES ('baseline:acct', '2026-09-10T00:00:00+00:00')")
+        db.commit()
+        db.close()
+        return path
+
+    def test_rows_survive_and_new_columns_appear(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = self.old_database(folder)
+            store = Store(path)
+            columns = {row['name'] for row in store.db.execute('PRAGMA table_info(mail)')}
+            self.assertLessEqual({'handled', 'draft_edit', 'notified', 'analyzed_at', 'exported_at',
+                                  'subject', 'sender'}, columns)
+            row = store.detail('old-1')
+            self.assertEqual(row['handled'], '')
+            self.assertEqual(store.get_meta('baseline:acct'), '2026-09-10T00:00:00+00:00')
+            # subject/sender are backfilled from the analysis that was already stored
+            self.assertEqual((row['subject'], row['sender']), ('견적 요청', 'sender@example.com'))
+            store.db.close()
+
+    def test_opening_twice_is_safe(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = self.old_database(folder)
+            Store(path).db.close()
+            store = Store(path)
+            self.assertEqual(store.counts('acct')['total'], 1)
+            store.db.close()
+
+
+class StoreViewTests(unittest.TestCase):
+    def store(self, folder):
+        store = Store(Path(folder) / 'mail.db')
+        first = store.add('acct', 'uid-1', mail())
+        second = store.add('acct', 'uid-2', mail())
+        store.analyzed(first, {'sender': 'kim@example.com', 'subject': '견적 요청', 'attachments': []}, RESULT)
+        return store, first, second
+
+    def test_add_stores_the_headers_for_the_list(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store, first, _ = self.store(folder)
+            view = row_view(store.page('acct')[-1])
+            self.assertEqual(view['subject'], '견적 요청')
+            self.assertEqual(view['sender'], 'sender@example.com')
+            store.db.close()
+
+    def test_state_reflects_analysis_and_handling(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store, first, second = self.store(folder)
+            states = {row['id']: state_of(row) for row in store.page('acct')}
+            self.assertEqual(states[first], '미처리')
+            self.assertEqual(states[second], '분석 대기')
+            store.failed(second, '분석 실패', 0)
+            self.assertEqual(state_of(store.detail(second)), '1회 실패')
+            store.set_handled(first, HANDLED)
+            self.assertEqual(state_of(store.detail(first)), HANDLED)
+            self.assertEqual(store.open_count('acct'), 0)
+            store.db.close()
+
+    def test_filter_by_text_and_state(self):
+        views = [{'subject': '견적 요청', 'sender': 'kim@a.com', 'state': '미처리'},
+                 {'subject': 'Weekly report', 'sender': 'admin@b.com', 'state': '처리'}]
+        self.assertEqual(len(filter_rows(views, query='견적')), 1)
+        self.assertEqual(len(filter_rows(views, query='WEEKLY')), 1)      # case insensitive
+        self.assertEqual(len(filter_rows(views, query='@b.com')), 1)      # sender too
+        self.assertEqual(len(filter_rows(views, state='처리')), 1)
+        self.assertEqual(len(filter_rows(views, query='견적', state='처리')), 0)
+        self.assertEqual(len(filter_rows(views)), 2)
+
+    def test_reset_clears_backoff_and_optionally_the_result(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store, first, second = self.store(folder)
+            store.failed(second, '분석 실패', time.time() + 3600)
+            store.reset([second])
+            row = store.detail(second)
+            self.assertEqual((row['attempts'], row['retry_at'], row['error']), (0, 0, ''))
+            self.assertEqual([r['id'] for r in store.pending('acct', time.time())], [second])
+            store.reset([first], reanalyze=True)
+            self.assertIsNone(store.detail(first)['result'])
+            self.assertEqual({r['id'] for r in store.retryable('acct')}, {first, second})
+            store.db.close()
+
+    def test_draft_edit_and_notified_flags(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store, first, _ = self.store(folder)
+            store.set_draft(first, '사람이 고친 초안')
+            self.assertEqual(store.detail(first)['draft_edit'], '사람이 고친 초안')
+            self.assertEqual([r['id'] for r in store.unnotified('acct')], [first])
+            store.mark_notified([first])
+            self.assertEqual(store.unnotified('acct'), [])
+            store.db.close()
+
+
+class DayWindowTests(unittest.TestCase):
+    def test_day_bounds_are_korean_midnight_in_utc(self):
+        start, end = day_bounds(datetime.date(2026, 9, 11))
+        self.assertEqual(start, '2026-09-10T15:00:00+00:00')
+        self.assertEqual(end, '2026-09-11T15:00:00+00:00')
+
+    def test_local_text_shifts_to_korean_time(self):
+        self.assertEqual(local_text('2026-09-10T15:30:00+00:00'), '09-11 00:30')
+        self.assertEqual(local_text(''), '')
+        self.assertEqual(local_text('망가진 값'), '망가진 값')
+
+    def test_day_counts_use_the_korean_day(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            ident = store.add('acct', 'uid-1', mail())
+            # Collected 2026-09-11 00:30 KST, which is the previous UTC day.
+            store.db.execute('UPDATE mail SET received=? WHERE id=?', ('2026-09-10T15:30:00+00:00', ident))
+            store.db.commit()
+            store.analyzed(ident, {'sender': 'a@b.c', 'subject': 's', 'attachments': []}, RESULT)
+            store.db.execute('UPDATE mail SET analyzed_at=? WHERE id=?', ('2026-09-10T16:00:00+00:00', ident))
+            store.db.commit()
+            counts = store.day_counts('acct', *day_bounds(datetime.date(2026, 9, 11)))
+            self.assertEqual((counts['collected'], counts['analyzed'], counts['exported']), (1, 1, 0))
+            empty = store.day_counts('acct', *day_bounds(datetime.date(2026, 9, 10)))
+            self.assertEqual(empty['collected'], 0)
+            store.db.close()
+
+
+class OverviewTests(unittest.TestCase):
+    TODAY = datetime.date(2026, 9, 11)
+
+    def rows(self, folder):
+        store = Store(Path(folder) / 'mail.db')
+        urgent = dict(RESULT, priority='긴급', category='견적·계약',
+                      events=[{'title': '견적 회신', 'start': '', 'deadline': '2026-09-14',
+                               'evidence': 'e', 'needs_review': False}])
+        far = dict(RESULT, priority='낮음', category='공지', reply_needed=False,
+                   reply_subject='', reply_draft='',
+                   events=[{'title': '정기 점검', 'start': '', 'deadline': '2026-10-20',
+                            'evidence': 'e', 'needs_review': False}])
+        ids = {}
+        for uid, result, stamp in (('uid-1', urgent, '2026-09-11T01:00:00+00:00'),
+                                   ('uid-2', far, '2026-09-11T02:00:00+00:00')):
+            ids[uid] = store.add('acct', uid, mail())
+            store.analyzed(ids[uid], {'sender': 'a@b.c', 'subject': 's', 'attachments': []}, result)
+            store.db.execute('UPDATE mail SET received=? WHERE id=?', (stamp, ids[uid]))
+        ids['uid-3'] = store.add('acct', 'uid-3', mail())   # collected, not analysed yet
+        store.db.commit()
+        return store, ids
+
+    def test_cards_count_what_the_screen_shows(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store, _ = self.rows(folder)
+            data = overview(store.page('acct'), self.TODAY)
+            self.assertEqual(data['cards']['미처리 메일'], 2)      # analysed and not handled
+            self.assertEqual(data['cards']['긴급·높음'], 1)
+            self.assertEqual(data['cards']['7일 내 마감'], 1)      # October deadline excluded
+            self.assertEqual(data['cards']['검토 전 초안'], 1)     # the 공지 needs no reply
+            self.assertEqual(data['waiting'], 1)
+            store.db.close()
+
+    def test_handled_mail_leaves_the_cards_and_the_deadlines(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store, ids = self.rows(folder)
+            store.set_handled(ids['uid-1'], HANDLED)   # the one with the 09-14 deadline
+            data = overview(store.page('acct'), self.TODAY)
+            self.assertEqual(data['cards']['미처리 메일'], 1)
+            self.assertEqual(data['cards']['7일 내 마감'], 0)
+            self.assertEqual(data['upcoming'], [])
+            store.db.close()
+
+    def test_edited_draft_is_no_longer_review_pending(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store, ids = self.rows(folder)
+            store.set_draft(ids['uid-1'], '사람이 고친 초안')   # the only one needing a reply
+            self.assertEqual(overview(store.page('acct'), self.TODAY)['cards']['검토 전 초안'], 0)
+            store.db.close()
+
+    def test_distributions_and_recent_week(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store, _ = self.rows(folder)
+            data = overview(store.page('acct'), self.TODAY)
+            self.assertEqual(data['categories']['견적·계약'], 1)
+            self.assertEqual(data['categories']['공지'], 1)
+            self.assertEqual(data['priorities'], {'긴급': 1, '높음': 0, '보통': 0, '낮음': 1})
+            self.assertEqual(len(data['recent']), 7)
+            self.assertEqual(data['recent'][-1], ('2026-09-11', 3))   # includes the unanalysed one
+            store.db.close()
+
+    def test_broken_result_json_does_not_break_the_screen(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store, _ = self.rows(folder)
+            store.db.execute("UPDATE mail SET result='{망가진' WHERE uid='uid-1'")
+            store.db.commit()
+            data = overview(store.page('acct'), self.TODAY)
+            self.assertEqual(data['cards']['긴급·높음'], 0)
+            self.assertEqual(data['categories']['견적·계약'], 0)
+            store.db.close()
+
+    def test_calendar_reuses_the_schedule_shape(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store, _ = self.rows(folder)
+            events = overview(store.page('acct'), self.TODAY)['events']
+            text, _ = month_grid(2026, 9, events)
+            self.assertIn('견적 회신', ''.join(''.join(line) for line in text))
+            store.db.close()
 
 
 class CredentialTests(unittest.TestCase):
