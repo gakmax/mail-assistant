@@ -603,7 +603,8 @@ window.mailCalendar = function (events, tries) {
 """
 
 
-def build(directory, config, token, hub=None, services=None, config_path=None):
+def build(directory, config, token, hub=None, services=None, config_path=None,
+          can_start=True):
     """Register the pages. The token gates the data, not the static assets."""
     import subprocess
 
@@ -1308,6 +1309,10 @@ def build(directory, config, token, hub=None, services=None, config_path=None):
                                                  'border-radius:8px;padding:10px 12px'):
                         ui.label(label).style(f'color:{MUTED};font-size:12px')
                         ui.label(value).style(f'color:{INK};font-size:14px;font-weight:600')
+            if not can_start:
+                ui.label('창이 이미 실행 중입니다. 이 화면에서는 수집을 시작할 수 없습니다 — '
+                         '수집기는 하나만 돕니다.') \
+                    .style(f"color:{css_color(SOON)};font-size:12px")
             for blocker in view['blockers']:
                 ui.label('설정 확인: ' + blocker) \
                     .style(f"color:{css_color(URGENT)};font-size:12px")
@@ -1326,6 +1331,10 @@ def build(directory, config, token, hub=None, services=None, config_path=None):
                                              'overflow-wrap:anywhere')
 
         def begin():
+            if not can_start:
+                ui.notify('메일 도우미 창이 이미 실행 중입니다. 수집기는 하나만 돌 수 있습니다. '
+                          '창에서 시작하거나, 창을 닫고 이 화면을 다시 여세요.')
+                return
             errors = field_errors(config)
             if errors:
                 ui.notify('설정을 먼저 확인하세요: ' + ' '.join(errors.values()))
@@ -1536,12 +1545,12 @@ def build(directory, config, token, hub=None, services=None, config_path=None):
 
 
 def serve(directory, config, token=None, host='127.0.0.1', port=None, native=False, show=False,
-          hub=None, services=None, config_path=None):
+          hub=None, services=None, config_path=None, can_start=True):
     """Loopback only: the page serves mail content and must not be reachable off the PC."""
     from nicegui import app, ui
     token = token or new_token()
     port = port or open_port(host)
-    build(directory, config, token, hub, services, config_path)
+    build(directory, config, token, hub, services, config_path, can_start)
     app.on_shutdown(release_store)
     # flush: a redirected stdout is block-buffered, and spike.ps1 reads this line
     # out of the log to know the server is up.

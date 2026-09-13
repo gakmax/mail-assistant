@@ -2,7 +2,9 @@
 import datetime
 import socket
 import tempfile
+import types
 import unittest
+from unittest.mock import patch
 from contextlib import contextmanager
 from email.message import EmailMessage
 from pathlib import Path
@@ -661,6 +663,41 @@ class LabelStepTests(unittest.TestCase):
 
     def test_nothing_still_returns_a_usable_step(self):
         self.assertEqual(label_step(0), 1)
+
+
+class WorkerClaimTests(unittest.TestCase):
+    """Only one process may collect. Hub.start() guards inside a process; the mutex
+    is what stops the web screens starting a second one beside the window."""
+
+    def test_off_windows_there_is_nothing_to_collide_with(self):
+        from mail_assistant import webmain
+        with patch.dict('sys.modules', {'win32api': None, 'win32event': None}):
+            self.assertEqual(webmain.claim_worker(), (True, None))
+
+    def test_a_free_mutex_is_claimed_and_handed_back_for_closing(self):
+        from mail_assistant import webmain
+        win32event = types.SimpleNamespace(CreateMutex=lambda *a: 'handle')
+        win32api = types.SimpleNamespace(GetLastError=lambda: 0, CloseHandle=lambda h: None)
+        with patch.dict('sys.modules', {'win32api': win32api, 'win32event': win32event}):
+            self.assertEqual(webmain.claim_worker(), (True, 'handle'))
+
+    def test_a_taken_mutex_refuses_and_closes_its_own_handle(self):
+        from mail_assistant import webmain
+        closed = []
+        win32event = types.SimpleNamespace(CreateMutex=lambda *a: 'handle')
+        win32api = types.SimpleNamespace(GetLastError=lambda: webmain.ALREADY_RUNNING,
+                                         CloseHandle=closed.append)
+        with patch.dict('sys.modules', {'win32api': win32api, 'win32event': win32event}):
+            self.assertEqual(webmain.claim_worker(), (False, None))
+        self.assertEqual(closed, ['handle'])
+
+    def test_it_is_the_same_name_the_window_uses(self):
+        """Two different names would mean two collectors, which is the whole point."""
+        from mail_assistant import webmain
+        source = (Path(webmain.__file__).parent / '__main__.py').read_text(encoding='utf-8')
+        literal = webmain.MUTEX.replace(chr(92), chr(92) * 2)      # as it appears in source
+        self.assertIn(literal, source)
+        self.assertEqual(webmain.MUTEX, 'Local' + chr(92) + 'HiworksMailAssistant')
 
 
 class PaletteTests(unittest.TestCase):
