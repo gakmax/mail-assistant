@@ -38,10 +38,14 @@ def run(config, directory, stop, notify, wake=None):
             if pending and time.time() >= next_analysis and not stop.is_set():
                 try:
                     check_login()
-                    for row in pending:
+                    for index, row in enumerate(pending, 1):
                         if stop.is_set():
                             break
-                        notify('메일 분석 중… 중지하면 현재 분석이 끝난 뒤 멈춥니다.')
+                        # Which mail, and how far in: '분석 중' alone left the user
+                        # unable to tell a slow analysis from a stuck one.
+                        subject = (row['subject'] or '(제목 없음)')[:40]
+                        notify(f'메일 분석 중 {index}/{len(pending)}: {subject}'
+                               ' — 중지하면 현재 분석이 끝난 뒤 멈춥니다.')
                         try:
                             parsed, result = analyze(row, config)
                             store.analyzed(row['id'], parsed, result)

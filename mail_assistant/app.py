@@ -9,40 +9,39 @@ import queue
 import subprocess
 import threading
 import tkinter as tk
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from . import __version__, update
 from .calendar_sheet import COLORS, WEEKDAYS, next_month, weeks_of
-from .core import HANDLED, Store, account_key, filter_rows, local_text, parse_mail, row_view
-from .dashboard import CATEGORIES, PRIORITIES
+from .core import (FAILED, HANDLED, STATES, Store, account_key, filter_rows, local_text,
+                   parse_mail, row_view)
+from .dashboard import CATEGORIES, PRIORITIES, describe
 from .excel import mailto
+from .hub import line_text
 from .overview import overview
-from .report import report
+from .report import remember_secret, report
 from .settings import FIELDS, normalize
-from .style import ACCENT, CALM, DASH_BLUE, DASH_GREEN, DASH_RED, TODAY_FILL, tk_color
+from .style import ACCENT, CALM, DASH_BLUE, DASH_GREEN, DASH_RED, SOON, TODAY_FILL, tk_color
 
 ICONS = {'start': '▶', 'stop': '■', 'now': '⟳', 'excel': '▤', 'test': '⇄', 'settings': '⚙',
          'login': '⌨', 'folder': '📁', 'mail': '✉', 'retry': '↻', 'save': '💾', 'update': '⬆'}
 LAMP = {'실행 중': '#1a7f37', '중지됨': '#6b7280', '연결됨': '#1a7f37', '로그인 필요': '#b91c1c',
         '확인 실패': '#b45309', '확인 중': '#6b7280', '저장됨': '#1a7f37', '없음': '#b91c1c'}
 CARD_COLORS = (ACCENT, DASH_RED, DASH_BLUE, DASH_GREEN)
-STATES = ('', '분석 대기', '미처리', HANDLED)
 LIST_COLUMNS = (('received', '수신', 110), ('sender', '발신자', 180), ('subject', '제목', 300),
                 ('category', '종류', 90), ('priority', '우선순위', 80), ('state', '상태', 90))
 CELL, CELL_HEIGHT = 118, 84
 
 
 class App:
-    def __init__(self, root, directory, config_path, config, services, autostart=False):
+    def __init__(self, root, directory, config_path, config, services, hub, autostart=False):
         self.root, self.directory, self.config_path, self.config = root, directory, config_path, config
         self.services = services          # lazily imported win32-dependent helpers
+        self.hub = hub                    # owns the worker thread and the run log
         self.autostart = autostart
-        self.events = queue.Queue()
-        self.stop = threading.Event()
-        self.wake = threading.Event()
-        self.thread = None
+        self.events = hub.subscribe()
         self.busy = set()
         self.rows, self.views, self.data = [], [], None
         self.selected = None
@@ -55,10 +54,14 @@ class App:
         self.month = date.today().replace(day=1)
         self.db = None
         self.closing = False
+        self.password_error = None
+        self.draft_source = None
+        self.draft_baseline = ''
         self.build()
         self.refresh()
         self.check_password()
         self.check_codex()
+        self.replay()
         self.log('설정을 확인하고 시작을 누르세요. 첫 연결에서는 기존 메일을 제외합니다.')
         self.root.after(300, self.poll)
 
@@ -86,6 +89,7 @@ class App:
             self.rows = []
         self.views = [row_view(row) for row in self.rows]
         self.data = overview(self.rows, date.today())
+        self.refresh_stamps()
         self.paint_overview()
         self.paint_list()
         self.paint_month()
@@ -153,11 +157,12 @@ class App:
         self.recent_bars.pack(fill='x', pady=(4, 0))
         right = ttk.Frame(panels)
         right.grid(row=0, column=1, sticky='nsew')
-        ttk.Label(right, text='마감 임박', style='Section.TLabel').pack(anchor='w')
+        ttk.Label(right, text='마감 임박 · 지난 마감', style='Section.TLabel').pack(anchor='w')
         self.due = ttk.Treeview(right, columns=('date', 'title', 'left'), show='headings', height=10)
-        for column, title, width in (('date', '마감', 90), ('title', '일정', 240), ('left', '남음', 70)):
+        for column, title, width in (('date', '마감', 90), ('title', '일정', 240), ('left', '남음', 80)):
             self.due.heading(column, text=title)
             self.due.column(column, width=width, anchor='w')
+        self.due.tag_configure('지남', foreground=tk_color(DASH_RED))
         self.due.pack(fill='both', expand=True, pady=(4, 0))
         self.due.bind('<Double-1>', lambda event: self.open_due())
         self.summary = ttk.Label(right, text='', style='Card.TLabel', wraplength=380)
@@ -186,18 +191,21 @@ class App:
         self.bars(self.recent_bars, [(day[5:], count) for day, count in self.data['recent']], DASH_BLUE)
         self.due.delete(*self.due.get_children())
         today = date.today()
-        for day, entry in self.data['upcoming']:
-            left = (day - today).days
-            self.due.insert('', 'end', iid=f'{entry.mail_id}:{day}',
-                            values=(day.isoformat(), entry.label,
-                                    '오늘' if left == 0 else f'{left}일'))
+        missed = self.data['past_due']
+        # past_due() picks the nearest misses; reversed so the column still reads by date.
+        # The index keeps the iid unique: one mail can hold two deadlines on one day.
+        for index, (day, entry) in enumerate(missed[::-1] + self.data['upcoming']):
+            self.due.insert('', 'end', iid=f'{index}:{entry.mail_id}',
+                            tags=('지남',) if day < today else (),
+                            values=(day.isoformat(), entry.label, describe(day, today)))
         self.summary.configure(text=f"수집 {self.data['total']}건 · 분석 대기 {self.data['waiting']}건"
-                                    f" · 처리 완료 {len(self.data['handled'])}건")
+                                    f" · 처리 완료 {len(self.data['handled'])}건"
+                                    + (f" · 지난 마감 {len(missed)}건" if missed else ''))
 
     def open_due(self):
         selection = self.due.selection()
         if selection:
-            self.show_mail(selection[0].split(':')[0])
+            self.show_mail(selection[0].split(':', 1)[1])
 
     # 메일 -------------------------------------------------------------
 
@@ -229,6 +237,7 @@ class App:
         scroll.pack(side='right', fill='y')
         self.list.bind('<<TreeviewSelect>>', lambda event: self.select())
         self.list.tag_configure(HANDLED, foreground=tk_color(CALM))
+        self.list.tag_configure(FAILED, foreground=tk_color(SOON))
         self.list.tag_configure('긴급', foreground=tk_color(DASH_RED))
         split.add(top, weight=3)
         detail = ttk.Frame(split, padding=(0, 10, 0, 0))
@@ -239,7 +248,8 @@ class App:
         self.detail_body = tk.Text(detail, height=6, wrap='word', font=('맑은 고딕', 9),
                                    state='disabled', background='#fbfbfd', relief='solid', borderwidth=1)
         self.detail_body.pack(fill='both', expand=True)
-        ttk.Label(detail, text='답변 초안 (수정하면 저장됩니다)', style='Card.TLabel').pack(anchor='w', pady=(8, 2))
+        ttk.Label(detail, text='답변 초안 (다른 메일로 이동하거나 창을 닫으면 자동 저장됩니다)',
+                  style='Card.TLabel').pack(anchor='w', pady=(8, 2))
         self.draft = tk.Text(detail, height=5, wrap='word', font=('맑은 고딕', 9),
                              relief='solid', borderwidth=1)
         self.draft.pack(fill='both', expand=True)
@@ -269,26 +279,35 @@ class App:
         self.list.delete(*self.list.get_children())
         for view in shown:
             tags = [view['state']] if view['state'] == HANDLED else []
+            if view['state'].endswith(FAILED):
+                tags.append(FAILED)
             if view['priority'] == '긴급':
                 tags.append('긴급')
             self.list.insert('', 'end', iid=view['id'], tags=tags,
                              values=tuple(view[name] for name, _, _ in LIST_COLUMNS))
-        if self.selected and self.list.exists(self.selected):
+        if (self.selected and self.list.exists(self.selected)
+                and self.list.selection() != (self.selected,)):
             self.list.selection_set(self.selected)
 
     def select(self):
+        # ttk queues <<TreeviewSelect>> for every `selection set`, changed or not.
+        # Without this guard show_mail's selection_set feeds the event straight
+        # back and the window spins on its own events forever.
         selection = self.list.selection()
-        if selection:
+        if selection and selection[0] != self.selected:
             self.show_mail(selection[0])
 
     def show_mail(self, ident, focus=True):
+        if self.draft_source not in (None, ident) and self.flush_draft():
+            self.log('편집 중이던 답변 초안을 저장했습니다.')
+            self.refresh()
         row = self.row_of(ident)
         if row is None:
             return
         self.selected = ident
         if focus:
             self.tabs.select(1)
-        if self.list.exists(ident):
+        if self.list.exists(ident) and self.list.selection() != (ident,):
             self.list.selection_set(ident)
             self.list.see(ident)
         result = json.loads(row['result']) if row['result'] else {}
@@ -313,8 +332,9 @@ class App:
         else:
             lines.append('아직 분석되지 않았습니다.' + (f" 오류: {row['error']}" if row['error'] else ''))
         self.fill(self.detail_body, '\n'.join(lines))
-        self.draft.delete('1.0', 'end')
-        self.draft.insert('1.0', row['draft_edit'] or result.get('reply_draft', ''))
+        if not (self.draft_source == ident and self.draft_dirty()):
+            # poll() reopens the selected mail on every worker report; an edit must survive that.
+            self.load_draft(ident, row['draft_edit'] or result.get('reply_draft', ''))
         self.handle_button.configure(text='미처리로 되돌리기' if row['handled'] == HANDLED else '처리 완료로 표시')
 
     def fill(self, widget, text):
@@ -331,12 +351,37 @@ class App:
         self.refresh()
         self.show_mail(row['id'])
 
+    def load_draft(self, ident, text):
+        self.draft.delete('1.0', 'end')
+        self.draft.insert('1.0', text)
+        self.draft_source = ident
+        self.draft_baseline = self.draft.get('1.0', 'end-1c')
+
+    def draft_dirty(self):
+        return (self.draft_source is not None
+                and self.draft.get('1.0', 'end-1c') != self.draft_baseline)
+
+    def flush_draft(self):
+        """Save an edit before anything can replace it. Returns the mail id, or None."""
+        if not self.draft_dirty():
+            return None
+        ident, text = self.draft_source, self.draft.get('1.0', 'end-1c')
+        try:
+            self.store().set_draft(ident, text)
+        except Exception as exc:
+            report('답변 초안 저장 실패', exc)
+            self.log(f'답변 초안을 저장하지 못했습니다: {type(exc).__name__}: {exc}')
+            return None
+        self.draft_baseline = text
+        return ident
+
     def save_draft(self):
-        if not self.selected:
+        if not self.draft_dirty():
+            self.log('답변 초안에 변경된 내용이 없습니다.')
             return
-        self.store().set_draft(self.selected, self.draft.get('1.0', 'end-1c'))
-        self.log('답변 초안을 저장했습니다.')
-        self.refresh()
+        if self.flush_draft():
+            self.log('답변 초안을 저장했습니다.')
+            self.refresh()
 
     def open_reply(self):
         row = self.row_of(self.selected)
@@ -377,7 +422,7 @@ class App:
         if again and not messagebox.askyesno('다시 분석', '기존 분석 결과를 지우고 다시 분석합니다. 계속할까요?'):
             return
         self.store().reset([row['id']], reanalyze=again)
-        self.wake.set()
+        self.hub.wake()
         self.log('다시 분석하도록 요청했습니다.' + ('' if self.running() else ' 시작을 누르면 처리됩니다.'))
         self.refresh()
 
@@ -447,7 +492,8 @@ class App:
         card.columnconfigure(2, weight=1)
         self.lamps = {}
         for row, (title, initial) in enumerate((('실행', '중지됨'), ('Codex 로그인', '확인 중'),
-                                                ('메일 비밀번호', '확인 중'), ('마지막 확인', '—'))):
+                                                ('메일 비밀번호', '확인 중'), ('마지막 확인', '—'),
+                                                ('마지막 반영', '—'))):
             ttk.Label(card, text=title, width=14).grid(row=row, column=0, sticky='w', pady=3)
             dot = ttk.Label(card, text='●', style='Dot.TLabel', foreground=LAMP.get(initial, '#6b7280'))
             dot.grid(row=row, column=1, sticky='w')
@@ -487,14 +533,17 @@ class App:
 
     def build_settings(self, parent):
         self.fields = {}
+        self.field_rows = {}
         for index, (key, label) in enumerate(FIELDS):
             ttk.Label(parent, text=label).grid(row=index, column=0, sticky='w', pady=5, padx=(0, 12))
             variable = tk.StringVar(value='' if key == 'password' else str(self.config.get(key, '')))
             entry = ttk.Entry(parent, textvariable=variable, width=56, show='*' if key == 'password' else '')
             entry.grid(row=index, column=1, sticky='ew', pady=5)
             self.fields[key] = variable
+            self.field_rows[key] = index
         parent.columnconfigure(1, weight=1)
-        ttk.Button(parent, text='찾기', command=self.pick_workbook).grid(row=5, column=2, padx=(6, 0))
+        ttk.Button(parent, text='찾기', command=self.pick_workbook).grid(
+            row=self.field_rows['workbook'], column=2, padx=(6, 0))
         ttk.Label(parent, text='비밀번호는 Windows 자격 증명에 저장됩니다. 저장 후에는 빈칸으로 두어도 됩니다.\n'
                                '메일 본문은 분석을 위해 로그인한 Codex 계정으로 전송됩니다.',
                   wraplength=620).grid(row=len(FIELDS), column=0, columnspan=3, sticky='w', pady=(12, 0))
@@ -522,11 +571,18 @@ class App:
             return
         password = self.fields['password'].get()
         if password:
+            remember_secret(password)      # keep it out of crash reports from here on
             try:
                 self.services['save_password'](updated['email'], password)
+                # Read it straight back: a credential store that drops the write
+                # must not look like a successful save and fail hours later.
+                stored = self.services['read_password'](updated['email'])
             except Exception as exc:
-                messagebox.showerror('설정 확인', f'비밀번호 저장 실패: {exc}')
+                messagebox.showerror('설정 확인', '비밀번호를 Windows 자격 증명에 저장하지 못했습니다.\n'
+                                                 f'{type(exc).__name__}: {exc}')
                 return
+            if stored != password:
+                self.log('경고: 자격 증명에 저장된 비밀번호가 입력과 다릅니다. 다시 입력해 보세요.')
             self.fields['password'].set('')
         temp = self.config_path.with_suffix('.tmp')
         # Merge: webhook and the update keys are not on this form and must survive.
@@ -541,12 +597,35 @@ class App:
     # ------------------------------------------------------------------ worker and checks
 
     def log(self, message):
+        """Through the hub: persisted, and every screen watching it sees the line."""
+        self.hub.log(message)
+
+    def show_line(self, text):
         self.view.configure(state='normal')
-        self.view.insert('end', f"{datetime.now().strftime('%H:%M:%S')}  {message}\n")
+        self.view.insert('end', text + '\n')
         if int(self.view.index('end-1c').split('.')[0]) > 500:
             self.view.delete('1.0', '100.0')
         self.view.see('end')
         self.view.configure(state='disabled')
+
+    def replay(self):
+        """The log outlives the process now, so show what happened before this run."""
+        lines = self.hub.recent()
+        if not lines:
+            return
+        for at, text in lines:
+            self.show_line(line_text(at, text))
+        self.show_line(f'── 이전 기록 {len(lines)}줄 ──')
+
+    def refresh_stamps(self):
+        """From the database, not the local clock: a reopened screen must still be right."""
+        if not hasattr(self, 'lamps'):
+            return
+        account = self.account()
+        for title, key in (('마지막 확인', 'last_fetch:'), ('마지막 반영', 'last_export:')):
+            stamp = self.store().get_meta(key + account) if account else None
+            self.set_lamp(title, local_text(stamp, '%m-%d %H:%M:%S') if stamp else '—',
+                          '실행 중' if stamp else None)
 
     def set_lamp(self, title, value, color=None):
         dot, text = self.lamps[title]
@@ -580,18 +659,35 @@ class App:
             self.log(detail)
 
     def stored_password(self):
+        """None when nothing is stored; self.password_error holds any other failure."""
+        self.password_error = None
         try:
             return self.services['read_password'](self.config['email'])
-        except Exception:
+        except LookupError:
+            return None
+        except Exception as exc:
+            self.password_error = f'{type(exc).__name__}: {exc}'
             return None
 
+    def password_message(self, absent):
+        """'없음' and '읽지 못함' are different problems and need different messages."""
+        if self.password_error:
+            return f'메일 전용 비밀번호를 읽지 못했습니다.\n{self.password_error}'
+        return absent
+
     def check_password(self):
-        self.set_lamp('메일 비밀번호', '저장됨' if self.stored_password() else '없음')
+        stored = self.stored_password()
+        if self.password_error:
+            self.set_lamp('메일 비밀번호', '확인 실패')
+            self.log(f'Windows 자격 증명을 읽지 못했습니다: {self.password_error}')
+            return
+        self.set_lamp('메일 비밀번호', '저장됨' if stored else '없음')
 
     def test_connection(self, password=None, source=None):
         password = password or self.stored_password()
         if not password:
-            messagebox.showwarning('연결 테스트', '메일 전용 비밀번호가 없습니다. 설정에서 입력하세요.')
+            messagebox.showwarning('연결 테스트',
+                                   self.password_message('메일 전용 비밀번호가 없습니다. 설정에서 입력하세요.'))
             return
         self.log('연결 테스트 중…')
         self.background('test', lambda: self.services['check_connection'](source or self.config, password),
@@ -614,7 +710,7 @@ class App:
         messagebox.showinfo('연결 테스트', result)
 
     def running(self):
-        return bool(self.thread and self.thread.is_alive())
+        return self.hub.running()
 
     def update_buttons(self):
         active = self.running()
@@ -631,38 +727,24 @@ class App:
             self.tabs.select(4)
             return
         if not self.stored_password():
-            messagebox.showerror('설정 확인', '메일 전용 비밀번호가 저장되어 있지 않습니다. 설정 탭에서 입력하세요.')
+            messagebox.showerror('설정 확인', self.password_message(
+                '메일 전용 비밀번호가 저장되어 있지 않습니다. 설정 탭에서 입력하세요.'))
             self.tabs.select(4)
             return
-        self.stop.clear()
-        self.wake.clear()
-        config = dict(self.config)
-
-        def task():
-            try:
-                self.services['run'](config, self.directory, self.stop, self.events.put, self.wake)
-            except Exception as exc:
-                report('작업 스레드 중단', exc)
-                self.events.put('실행 오류: 데이터 폴더 접근 권한과 설치 상태를 확인하세요.')
-            finally:
-                self.events.put(None)
-        self.thread = threading.Thread(target=task, daemon=False)
-        self.thread.start()
+        if not self.hub.start(dict(self.config)):
+            return
         self.log('시작했습니다. 창을 최소화해 두어도 계속 실행됩니다.')
         self.set_lamp('실행', '실행 중')
         self.update_buttons()
 
     def halt(self):
-        if not self.running():
+        if not self.hub.halt():
             return
-        self.stop.set()
-        self.wake.set()
         self.log('중지 요청됨. 현재 메일·분석·엑셀 작업이 끝나면 멈춥니다.')
         self.update_buttons()
 
     def check_now(self):
-        if self.running():
-            self.wake.set()
+        if self.hub.wake():
             self.log('지금 확인을 요청했습니다.')
 
     def codex_login(self):
@@ -862,13 +944,10 @@ class App:
                     handler(result)
                 elif value is None:
                     self.set_lamp('실행', '중지됨')
-                    self.log('중지됨.')
+                    self.show_line(line_text('', '중지됨.'))
                     self.update_buttons()
-                elif isinstance(value, dict):
-                    self.log(value.get('body') or value.get('title', ''))
                 else:
-                    self.log(value)
-                    self.set_lamp('마지막 확인', datetime.now().strftime('%H:%M:%S'), '실행 중')
+                    self.show_line(line_text('', value))
                     changed = True
         except queue.Empty:
             pass
@@ -877,15 +956,19 @@ class App:
             if self.selected:
                 self.show_mail(self.selected, focus=False)   # never steal the current tab
         if self.closing and not self.running():
+            self.flush_draft()
+            self.hub.close()
             self.root.destroy()
             return
         self.root.after(300, self.poll)
 
     def close(self):
         self.closing = True
+        self.flush_draft()
         self.cancel.set()
         self.halt()
         if not self.running():
             if self.db is not None:
                 self.db.db.close()
+            self.hub.close()
             self.root.destroy()

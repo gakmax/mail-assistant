@@ -12,6 +12,49 @@ from pathlib import Path
 
 KST = timezone(timedelta(hours=9))
 HANDLED = '처리'
+PROGRESS = '진행'      # the kanban's middle column; '' -> 진행 -> 처리
+FAILED = '실패'
+LOG_SCHEMA = 'CREATE TABLE IF NOT EXISTS log (at TEXT NOT NULL, text TEXT NOT NULL)'
+LOG_TRIM_EVERY = 50
+LIST_LIMIT = 50
+# Kept here rather than imported from dashboard, which imports this module. A test
+# asserts the two agree.
+PRIORITY_ORDER = ('긴급', '높음', '보통', '낮음')
+
+
+def sql_text(value):
+    """A literal for our own constants only. User input always goes through a parameter."""
+    if "'" in value:
+        raise ValueError(f'SQL 리터럴에 쓸 수 없는 값입니다: {value!r}')
+    return "'" + value + "'"
+
+
+def state_case():
+    """state_of() as SQL, so '상태' can be sorted without reading every row."""
+    return (f'CASE WHEN handled = {sql_text(HANDLED)} THEN 4 '
+            f'WHEN handled = {sql_text(PROGRESS)} THEN 3 '
+            'WHEN result IS NOT NULL THEN 2 WHEN attempts > 0 THEN 1 ELSE 0 END')
+
+
+def priority_case():
+    """긴급 first. Alphabetical order means nothing for these four words."""
+    whens = ' '.join(f'WHEN {sql_text(name)} THEN {rank}'
+                     for rank, name in enumerate(PRIORITY_ORDER))
+    return f'CASE priority {whens} ELSE {len(PRIORITY_ORDER)} END'
+
+
+# One fragment per filter value, so the list never loads a row it will not show.
+STATE_SQL = {
+    HANDLED: ('handled = ?', (HANDLED,)),
+    PROGRESS: ('handled = ?', (PROGRESS,)),
+    '미처리': ("handled = '' AND result IS NOT NULL", ()),
+    '분석 대기': ('result IS NULL AND attempts = 0', ()),
+    FAILED: ('result IS NULL AND attempts > 0', ()),
+}
+SORTS = {'received': 'received', 'subject': 'subject', 'sender': 'sender',
+         'category': 'category', 'priority': priority_case(), 'state': state_case()}
+# The filter values a screen offers, in the order it offers them. '' is 전체.
+STATES = ('', '분석 대기', FAILED, '미처리', PROGRESS, HANDLED)
 
 
 def now():
@@ -76,6 +119,15 @@ class Store:
         self.db.execute('PRAGMA journal_mode=WAL')
         self.db.executescript('''
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS log (at TEXT NOT NULL, text TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS chat (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, account TEXT NOT NULL,
+                mail_id TEXT NOT NULL DEFAULT '', role TEXT NOT NULL,
+                text TEXT NOT NULL, at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS todo (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, account TEXT NOT NULL,
+                text TEXT NOT NULL, state TEXT NOT NULL DEFAULT '',
+                due TEXT NOT NULL DEFAULT '', created TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS seen (account TEXT, uid TEXT, PRIMARY KEY(account,uid));
             CREATE TABLE IF NOT EXISTS mail (
                 id TEXT PRIMARY KEY, account TEXT NOT NULL, uid TEXT NOT NULL,
@@ -92,12 +144,17 @@ class Store:
         additions = (('handled', "TEXT NOT NULL DEFAULT ''"), ('draft_edit', "TEXT NOT NULL DEFAULT ''"),
                      ('notified', 'INTEGER NOT NULL DEFAULT 0'), ('analyzed_at', "TEXT NOT NULL DEFAULT ''"),
                      ('exported_at', "TEXT NOT NULL DEFAULT ''"), ('subject', "TEXT NOT NULL DEFAULT ''"),
-                     ('sender', "TEXT NOT NULL DEFAULT ''"))
+                     ('sender', "TEXT NOT NULL DEFAULT ''"),
+                     # Denormalised for the list, exactly as subject/sender are: the
+                     # filter and the sort must not have to parse every result JSON.
+                     ('category', "TEXT NOT NULL DEFAULT ''"),
+                     ('priority', "TEXT NOT NULL DEFAULT ''"))
         with self.db:
             for column, declaration in additions:
                 if column not in present:
                     self.db.execute(f'ALTER TABLE mail ADD COLUMN {column} {declaration}')
         self.backfill_headers()
+        self.backfill_verdicts()
 
     def backfill_headers(self):
         """Fill subject/sender for mail collected before those columns existed."""
@@ -112,6 +169,21 @@ class Store:
         if updates:
             with self.db:
                 self.db.executemany('UPDATE mail SET subject=?, sender=? WHERE id=?', updates)
+
+    def backfill_verdicts(self):
+        """Fill category/priority for mail analysed before those columns existed."""
+        rows = self.db.execute("SELECT id, result FROM mail "
+                               "WHERE result IS NOT NULL AND category='' AND priority=''").fetchall()
+        updates = []
+        for row in rows:
+            try:
+                result = json.loads(row['result'])
+            except ValueError:
+                continue
+            updates.append((result.get('category', ''), result.get('priority', ''), row['id']))
+        if updates:
+            with self.db:
+                self.db.executemany('UPDATE mail SET category=?, priority=? WHERE id=?', updates)
 
     def get_meta(self, key):
         row = self.db.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchone()
@@ -149,9 +221,10 @@ class Store:
 
     def analyzed(self, ident, parsed, result):
         with self.db:
-            self.db.execute('UPDATE mail SET parsed=?, result=?, error=\'\', analyzed_at=? WHERE id=?',
+            self.db.execute('UPDATE mail SET parsed=?, result=?, error=\'\', analyzed_at=?, '
+                            'category=?, priority=? WHERE id=?',
                             (json.dumps(parsed, ensure_ascii=False), json.dumps(result, ensure_ascii=False),
-                             now(), ident))
+                             now(), result.get('category', ''), result.get('priority', ''), ident))
 
     def failed(self, ident, error, timestamp):
         with self.db:
@@ -178,6 +251,77 @@ class Store:
         return self.db.execute(f'SELECT {self.LIST_COLUMNS} FROM mail WHERE account=? '
                                'ORDER BY received DESC LIMIT ?', (account, limit)).fetchall()
 
+    def search(self, account, query='', state='', sort='received', desc=True,
+               limit=LIST_LIMIT, offset=0):
+        """(page of rows, total). The list used to read 2000 rows and sort them in Python."""
+        where, params = ['account = ?'], [account]
+        text = query.strip()
+        if text:
+            like = f'%{text}%'
+            # parsed carries the body and result the summary and requests, so the box
+            # finds what the user remembers reading, not just what the list shows.
+            where.append('(subject LIKE ? OR sender LIKE ? OR parsed LIKE ? OR result LIKE ?)')
+            params += [like] * 4
+        clause, extra = STATE_SQL.get(state, ('', ()))
+        if clause:
+            where.append(f'({clause})')
+            params += list(extra)
+        condition = ' AND '.join(where)
+        total = self.db.execute(f'SELECT COUNT(*) FROM mail WHERE {condition}',
+                                params).fetchone()[0]
+        order = SORTS.get(sort) or SORTS['received']
+        rows = self.db.execute(
+            f'SELECT {self.LIST_COLUMNS} FROM mail WHERE {condition} '
+            f"ORDER BY {order} {'DESC' if desc else 'ASC'}, received DESC LIMIT ? OFFSET ?",
+            params + [limit, offset]).fetchall()
+        return rows, total
+
+    def add_todo(self, account, text, due=''):
+        with self.db:
+            cursor = self.db.execute('INSERT INTO todo(account,text,due,created) VALUES (?,?,?,?)',
+                                     (account, text, due, now()))
+        return cursor.lastrowid
+
+    def todos(self, account):
+        return self.db.execute('SELECT id, text, state, due, created FROM todo '
+                               'WHERE account=? ORDER BY id', (account,)).fetchall()
+
+    def set_todo_state(self, ident, state):
+        with self.db:
+            self.db.execute('UPDATE todo SET state=? WHERE id=?', (state, ident))
+
+    def delete_todo(self, ident):
+        with self.db:
+            self.db.execute('DELETE FROM todo WHERE id=?', (ident,))
+
+    def unedited_drafts(self, account):
+        """Analysed, unhandled, not edited by a person. overview.review_queue() then
+        decides which of these actually asked for a reply — matching on the JSON text
+        would depend on how json.dumps happened to space its separators."""
+        return self.db.execute(f'SELECT {self.LIST_COLUMNS} FROM mail WHERE account=? '
+                               "AND result IS NOT NULL AND draft_edit='' AND handled<>? "
+                               'ORDER BY received DESC', (account, HANDLED)).fetchall()
+
+    def add_chat(self, account, role, text, mail_id=''):
+        with self.db:
+            self.db.execute('INSERT INTO chat(account,mail_id,role,text,at) VALUES (?,?,?,?,?)',
+                            (account, mail_id, role, text, now()))
+
+    def chat(self, account, mail_id='', limit=40):
+        """Oldest first. One thread per mail, plus a general one when mail_id is ''."""
+        rows = self.db.execute('SELECT role, text, at FROM chat WHERE account=? AND mail_id=? '
+                               'ORDER BY id DESC LIMIT ?', (account, mail_id, limit)).fetchall()
+        return list(reversed(rows))
+
+    def clear_chat(self, account, mail_id=''):
+        with self.db:
+            self.db.execute('DELETE FROM chat WHERE account=? AND mail_id=?', (account, mail_id))
+
+    def set_handled_many(self, ids, state):
+        with self.db:
+            self.db.executemany('UPDATE mail SET handled=? WHERE id=?',
+                                ((state, ident) for ident in ids))
+
     def detail(self, ident):
         return self.db.execute('SELECT * FROM mail WHERE id=?', (ident,)).fetchone()
 
@@ -191,7 +335,7 @@ class Store:
 
     def reset(self, ids, reanalyze=False):
         """Clear the backoff so the next cycle picks these up again."""
-        clause = ", result=NULL, analyzed_at=''" if reanalyze else ''
+        clause = ", result=NULL, analyzed_at='', category='', priority=''" if reanalyze else ''
         with self.db:
             self.db.executemany(f"UPDATE mail SET attempts=0, retry_at=0, error=''{clause} WHERE id=?",
                                 ((i,) for i in ids))
@@ -220,6 +364,43 @@ class Store:
             self.db.executemany('UPDATE mail SET notified=1 WHERE id=?', ((i,) for i in ids))
 
 
+class LogStore:
+    """The log table on a connection of its own, so any thread can hold one.
+
+    Store owns the mail tables and runs migrate() on every open; the run log needs
+    neither, and a sqlite connection cannot be shared across threads.
+    """
+
+    def __init__(self, path: Path):
+        self.db = sqlite3.connect(path, timeout=10)
+        self.db.execute('PRAGMA journal_mode=WAL')
+        self.db.execute(LOG_SCHEMA)
+        self.db.commit()
+        self.writes = 0
+
+    def add(self, text, keep=0):
+        with self.db:
+            self.db.execute('INSERT INTO log(at,text) VALUES (?,?)', (now(), text))
+        self.writes += 1
+        if keep and self.writes % LOG_TRIM_EVERY == 0:
+            self.trim(keep)
+
+    def trim(self, keep):
+        """Bounded on purpose: this file is also the only copy of the collected mail."""
+        with self.db:
+            self.db.execute('DELETE FROM log WHERE rowid <= (SELECT MAX(rowid) - ? FROM log)',
+                            (keep,))
+
+    def recent(self, limit):
+        """Newest last, so a screen that just opened can print it top to bottom."""
+        rows = self.db.execute('SELECT at, text FROM log ORDER BY rowid DESC LIMIT ?',
+                               (limit,)).fetchall()
+        return [(row[0], row[1]) for row in reversed(rows)]
+
+    def close(self):
+        self.db.close()
+
+
 def local_text(stamp, pattern='%m-%d %H:%M'):
     """UTC ISO string -> Korean local time for display."""
     try:
@@ -231,6 +412,8 @@ def local_text(stamp, pattern='%m-%d %H:%M'):
 def state_of(row):
     if row['handled'] == HANDLED:
         return HANDLED
+    if row['handled'] == PROGRESS:
+        return PROGRESS
     if row['result']:
         return '미처리'
     if row['attempts']:
@@ -247,11 +430,20 @@ def row_view(row):
             'state': state_of(row), 'error': row['error']}
 
 
+def matches_state(state, wanted):
+    """'실패' has to match every retry count, or failed mail is unreachable from the filter."""
+    if not wanted:
+        return True
+    if wanted == FAILED:
+        return state.endswith(FAILED)
+    return state == wanted
+
+
 def filter_rows(views, query='', state=''):
     text = query.strip().lower()
     return [view for view in views
             if (not text or text in view['subject'].lower() or text in view['sender'].lower())
-            and (not state or view['state'] == state)]
+            and matches_state(view['state'], state)]
 
 
 def account_key(config):

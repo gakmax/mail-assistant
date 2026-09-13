@@ -13,6 +13,7 @@ tcl/tk and pywin32.
 import re
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_submodules
 from PyInstaller.utils.win32.versioninfo import (FixedFileInfo, StringFileInfo, StringStruct,
                                                  StringTable, VarFileInfo, VarStruct,
                                                  VSVersionInfo)
@@ -60,13 +61,48 @@ HIDDEN = [
 # ImportErrors, and the savings are noise next to tcl/tk. email in particular is
 # load-bearing (core.py parses mail with it) and must never be listed.
 EXCLUDES = ['numpy', 'pandas', 'matplotlib', 'scipy', 'PIL', 'pytest',
-            'pip', 'wheel', 'IPython', 'sqlalchemy', 'setuptools', 'pkg_resources']
+            'pip', 'wheel', 'IPython', 'sqlalchemy', 'setuptools', 'pkg_resources',
+            # nicegui.testing pulls selenium in; the shipped build never tests.
+            'selenium',
+            # pywebview (nicegui's native mode) is not in requirements.txt, so a CI
+            # build would not have it anyway. Excluding it says so out loud instead
+            # of shipping a `--native` that works only on a dev box, and saves 4.3MB.
+            'webview', 'pythonnet', 'clr_loader']
+
+# The browser fetches these from /vendor. They are data, not importable modules, so
+# nothing fails until someone opens the 일정 page — selftest's check_webui catches it.
+VENDOR = [(str(ROOT / 'mail_assistant' / 'vendor'), 'mail_assistant/vendor')]
+
+# nicegui vendors the JavaScript for every element it offers and this app creates
+# none of the big ones. Dropping their asset folders saves about 21MB; their Python
+# modules stay, so nicegui still imports. The filtering has to happen on
+# Analysis.datas, *after* the hook runs: pyinstaller-hooks-contrib ships
+# hook-nicegui.py with a bare collect_data_files('nicegui'), which adds back anything
+# a spec-level collect_all dropped.
+DROP_ASSETS = ('nicegui/elements/plotly', 'nicegui/elements/mermaid',
+               'nicegui/elements/codemirror', 'nicegui/elements/echart',
+               'nicegui/elements/json_editor', 'nicegui/elements/scene',
+               'nicegui/elements/aggrid', 'nicegui/elements/leaflet',
+               'nicegui/elements/xterm', 'nicegui/static/sass.dart.js')
+
+
+def wanted(entry):
+    """Analysis.datas holds (destination, source, typecode), so match on the destination."""
+    return not any(piece in str(entry[0]).replace('\\', '/') for piece in DROP_ASSETS)
 
 gui = Analysis([str(ROOT / 'packaging' / 'entry_gui.py')], pathex=[str(ROOT)],
-               hiddenimports=HIDDEN, excludes=EXCLUDES + ['openpyxl'], noarchive=False)
+               hiddenimports=HIDDEN, excludes=EXCLUDES + ['openpyxl', 'nicegui'],
+               noarchive=False)
+# `MailAssistantTools.exe web` is what pulls nicegui in; uvicorn picks its protocol
+# and loop implementations by name at runtime, so they have to be named here.
 tools = Analysis([str(ROOT / 'packaging' / 'entry_tools.py')], pathex=[str(ROOT)],
-                 hiddenimports=HIDDEN + ['openpyxl', 'diagnose', 'sample', 'demo'],
+                 datas=VENDOR,
+                 hiddenimports=HIDDEN + ['openpyxl', 'diagnose', 'sample', 'demo']
+                 + collect_submodules('uvicorn'),
                  excludes=EXCLUDES, noarchive=False)
+
+for analysis in (gui, tools):
+    analysis.datas = [entry for entry in analysis.datas if wanted(entry)]
 
 gui_pyz, tools_pyz = PYZ(gui.pure), PYZ(tools.pure)
 

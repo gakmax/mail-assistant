@@ -10,6 +10,7 @@ import sys
 USAGE = """메일 도우미 진단 도구
 
   MailAssistantTools.exe gui                 콘솔을 띄운 채 도우미 실행 (오류 확인용)
+  MailAssistantTools.exe web                 웹 화면으로 실행 (--browser 로 브라우저 열기)
   MailAssistantTools.exe selftest            프로그램 구성 요소 점검
   MailAssistantTools.exe version             버전과 폴더 위치
   MailAssistantTools.exe paths               Codex·Node 탐색 결과
@@ -81,6 +82,15 @@ def check_sqlite():
         return db.execute('select sqlite_version()').fetchone()[0]
 
 
+def check_webui():
+    """Forces the web module and proves the vendored calendar survived freezing."""
+    from mail_assistant.webui import vendor_path
+    script = vendor_path() / 'fullcalendar' / 'index.global.min.js'
+    if not script.is_file():
+        raise RuntimeError(f'FullCalendar 자산이 없습니다: {script}')
+    return f'{script.stat().st_size:,} bytes'
+
+
 def selftest():
     """Every import the app makes lazily, so a broken bundle fails here and not later."""
     checks = [
@@ -98,6 +108,11 @@ def selftest():
         # The window and everything it pulls in: __main__ imports it lazily, so a
         # missed module would only show up when the user double-clicks the icon.
         ('mail_assistant.app', lambda: __import__('mail_assistant.app', fromlist=['App']).App.__name__),
+        # The web screens and the assets the browser fetches from them. nicegui is a
+        # lazy import and the vendored FullCalendar is a data file, so a bundle can
+        # lose either one without anything failing until someone opens the page.
+        ('nicegui', lambda: __import__('nicegui').__version__),
+        ('mail_assistant.webui', check_webui),
     ]
     failed = 0
     for name, probe in checks:
@@ -139,6 +154,9 @@ def main(argv):
         from mail_assistant.__main__ import main as gui
         gui()  # no guard: a traceback on the console is the point
         return 0
+    if command == 'web':
+        from mail_assistant.webmain import main as web
+        return web(rest)
     if command in ('diagnose', 'sample', 'demo'):
         return run_script(command, rest)
     print(f'알 수 없는 명령입니다: {argv[0]}\n')

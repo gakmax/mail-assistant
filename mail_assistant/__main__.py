@@ -19,6 +19,7 @@ def main():
     from tkinter import messagebox
     from win32com.shell import shell, shellcon
     from .app import App
+    from .hub import Hub
     from .services import (check_connection, codex_command, codex_environment, login_state,
                            read_password, save_password)
     from .worker import run
@@ -42,11 +43,13 @@ def main():
             messagebox.showwarning('설정 확인', '설정 파일을 읽지 못했습니다. 다시 설정하세요.')
 
     root = tk.Tk()
+    # The hub owns the worker, so the window is only a view of it.
+    hub = Hub(directory, config, run)
     app = App(root, directory, config_path, config, {
-        'run': run, 'login_state': login_state, 'check_connection': check_connection,
+        'login_state': login_state, 'check_connection': check_connection,
         'read_password': read_password, 'save_password': save_password,
         'codex_command': codex_command, 'codex_environment': codex_environment,
-    }, autostart='--autostart' in sys.argv)
+    }, hub, autostart='--autostart' in sys.argv)
 
     def on_widget_error(kind, value, trace):
         # A windowed build has no console: without this the error leaves no trace.

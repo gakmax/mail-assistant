@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
     Local reproduction of the CI build. Same steps, same order, so a broken
     release can be debugged without pushing a tag.

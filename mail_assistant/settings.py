@@ -9,6 +9,32 @@ FIELDS = (('email', '메일 계정'), ('password', '메일 전용 비밀번호')
           ('model', 'Codex 모델(비우면 기본값)'))
 
 
+def field_errors(values):
+    """{field: message} so a form can mark the field instead of raising one dialog.
+
+    normalize() stays the gate for saving; a test holds the two to the same verdict.
+    """
+    errors = {}
+    if '@' not in str(values.get('email', '')).strip():
+        errors['email'] = '메일 계정을 user@example.com 형태로 입력하세요.'
+    if not str(values.get('host', '')).strip():
+        errors['host'] = '수신 서버를 입력하세요.'
+    for key, label, low, high in (('port', 'SSL 포트', 1, 65535),
+                                  ('interval', '확인 간격', 60, 86400)):
+        raw = str(values.get(key, '')).strip()
+        try:
+            number = int(raw)
+        except ValueError:
+            errors[key] = f'{label}은 숫자로 입력하세요.'
+            continue
+        if not low <= number <= high:
+            errors[key] = f'{label}은 {low}~{high} 사이로 입력하세요.'
+    path = PureWindowsPath(str(values.get('workbook', '')).strip())
+    if not path.is_absolute() or path.suffix.lower() != '.xlsx':
+        errors['workbook'] = '엑셀 파일은 절대 경로의 .xlsx 파일로 지정하세요.'
+    return errors
+
+
 def normalize(values):
     """Trimmed, typed settings. Raises ValueError with a message meant for the user."""
     updated = {key: str(value).strip() for key, value in values.items() if key != 'password'}

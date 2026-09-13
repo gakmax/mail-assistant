@@ -20,6 +20,11 @@ def tk_color(value):
     return '#' + hex_rgb(value)
 
 
+def css_color(value):
+    """The same '#RRGGBB', named so a call in the web page reads right."""
+    return tk_color(value)
+
+
 # Dashboard palette: dark. Data sheets and the calendar stay light.
 DASH_BG = bgr(24, 24, 27)
 DASH_CARD = bgr(39, 39, 46)
@@ -32,6 +37,8 @@ DASH_BLUE = bgr(96, 165, 250)
 DASH_GREEN = bgr(74, 222, 128)
 DASH_LINK = bgr(125, 185, 255)   # on the dark card
 LINK = bgr(37, 99, 235)          # on the white data sheets
+
+NEUTRAL = bgr(75, 85, 99)   # BGR: slate for '보통', between the status colours and CALM
 
 HEADER_FILL = 0xEADFD4      # BGR: pale slate, the existing header colour
 TODAY_FILL = 0xF7EBDE       # BGR: pale blue for today's calendar cell

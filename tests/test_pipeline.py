@@ -12,21 +12,24 @@ from email.message import EmailMessage
 from pathlib import Path
 from unittest.mock import call, patch, MagicMock
 
-from mail_assistant.core import (HANDLED, HEADERS, Store, account_key, day_bounds, filter_rows,
-                                 local_text, parse_mail, row_view, state_of, workbook_rows)
+from mail_assistant.core import (FAILED, HANDLED, HEADERS, PRIORITY_ORDER, Store, account_key,
+                                 STATES, STATE_SQL, day_bounds, filter_rows, local_text,
+                                 parse_mail, row_view, sql_text, state_of, workbook_rows)
 from mail_assistant.excel import (Excel, ExcelUpdateError, append_missing, ensure_table,
-                                  error_detail, repair_generated_header, row_text)
+                                  error_detail, first_column, repair_generated_header,
+                                  row_text)
 from mail_assistant.calendar_sheet import (SHEET, Entry, cell_text, collect, month_grid,
                                            next_month, overdue, parse_day, sheet_events,
                                            signature, update_calendar)
-from mail_assistant.dashboard import (SHEET as DASHBOARD, UPCOMING_ROWS, UPCOMING_TOP,
-                                      blocks, describe, update_dashboard, upcoming)
+from mail_assistant.dashboard import (PRIORITIES, SHEET as DASHBOARD, UPCOMING_ROWS,
+                                      UPCOMING_TOP, blocks, describe, update_dashboard, upcoming)
 from mail_assistant.excel import address_of, link_to_draft, link_to_mail, mail_rows, mailto
-from mail_assistant.overview import overview
-from mail_assistant.settings import normalize
-from mail_assistant.services import check_connection, login_state
+from mail_assistant.overview import overview, past_due
+from mail_assistant.settings import field_errors, normalize
+from mail_assistant.services import check_connection, connection_steps, login_state
 from mail_assistant.style import STYLE_VERSION, URGENT, apply_style
-from mail_assistant.services import analyze, fetch_mail, read_password, save_password
+from mail_assistant.services import (analyze, chat_reply, chat_schema, fetch_mail,
+                                      read_password, save_password)
 
 
 CONFIG = {'host': 'pop3s.hiworks.com', 'port': 995, 'email': 'test@example.com', 'model': ''}
@@ -239,6 +242,14 @@ class StoreViewTests(unittest.TestCase):
         self.assertEqual(len(filter_rows(views, query='견적', state='처리')), 0)
         self.assertEqual(len(filter_rows(views)), 2)
 
+    def test_filter_reaches_failed_mail_whatever_the_retry_count(self):
+        views = [{'subject': 'a', 'sender': 'a@a', 'state': '1회 실패'},
+                 {'subject': 'b', 'sender': 'b@b', 'state': '4회 실패'},
+                 {'subject': 'c', 'sender': 'c@c', 'state': '분석 대기'}]
+        self.assertEqual([view['subject'] for view in filter_rows(views, state=FAILED)], ['a', 'b'])
+        self.assertEqual([view['subject'] for view in filter_rows(views, state='분석 대기')], ['c'])
+        self.assertEqual(len(filter_rows(views, state='없는 상태')), 0)
+
     def test_reset_clears_backoff_and_optionally_the_result(self):
         with tempfile.TemporaryDirectory() as folder:
             store, first, second = self.store(folder)
@@ -261,6 +272,183 @@ class StoreViewTests(unittest.TestCase):
             store.mark_notified([first])
             self.assertEqual(store.unnotified('acct'), [])
             store.db.close()
+
+
+class SearchTests(unittest.TestCase):
+    """The list query. Filtering, sorting and paging all happen in SQL now."""
+
+    ACCOUNT = 'acct'
+
+    def store(self, folder):
+        store = Store(Path(folder) / 'mail.db')
+        plan = [
+            # uid, subject, sender, body, category, priority, analysed, handled, attempts
+            ('uid-1', '견적 검토 요청', 'kim@buyer.example', '9월 견적서를 검토해 주세요',
+             '견적·계약', '긴급', True, '', 0),
+            ('uid-2', 'Weekly report', 'admin@corp.example', '주간 보고 첨부합니다',
+             '공지', '낮음', True, HANDLED, 0),
+            ('uid-3', '회의 일정 조정', 'lee@corp.example', '수요일로 옮길까요',
+             '회의·일정', '보통', True, '', 0),
+            ('uid-4', '아직 분석 안 됨', 'new@corp.example', '본문', '', '', False, '', 0),
+            ('uid-5', '분석 실패한 메일', 'bad@corp.example', '본문', '', '', False, '', 3),
+        ]
+        self.ids = {}
+        for uid, subject, sender, body, category, priority, analysed, handled, attempts in plan:
+            message = EmailMessage()
+            message['From'] = sender
+            message['Subject'] = subject
+            message['Date'] = 'Fri, 11 Sep 2026 10:00:00 +0900'
+            message.set_content(body)
+            ident = store.add(self.ACCOUNT, uid, message.as_bytes())
+            self.ids[uid] = ident
+            if analysed:
+                store.analyzed(ident, {'sender': sender, 'subject': subject, 'body': body,
+                                       'attachments': []},
+                               {'category': category, 'summary': f'{subject} 요약',
+                                'requests': '회신 필요', 'events': [],
+                                'priority': priority, 'priority_reason': '근거',
+                                'next_action': '담당자 확인', 'reply_needed': False,
+                                'reply_subject': '', 'reply_draft': ''})
+            if handled:
+                store.set_handled(ident, handled)
+            if attempts:
+                store.failed(ident, '분석 실패', 0)
+                for _ in range(attempts - 1):
+                    store.failed(ident, '분석 실패', 0)
+        return store
+
+    def subjects(self, store, **kwargs):
+        rows, _ = store.search(self.ACCOUNT, **kwargs)
+        return [row['subject'] for row in rows]
+
+    def test_text_matches_subject_sender_body_and_summary(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            self.assertEqual(self.subjects(store, query='견적 검토'), ['견적 검토 요청'])
+            self.assertEqual(self.subjects(store, query='WEEKLY'), ['Weekly report'])   # ascii case
+            self.assertEqual(self.subjects(store, query='@buyer.example'), ['견적 검토 요청'])
+            self.assertEqual(self.subjects(store, query='수요일로'), ['회의 일정 조정'])   # body
+            self.assertEqual(self.subjects(store, query='회신 필요'),
+                             ['회의 일정 조정', 'Weekly report', '견적 검토 요청'])         # requests
+            store.db.close()
+
+    def test_each_state_filter_returns_its_own_rows(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            self.assertEqual(self.subjects(store, state=HANDLED), ['Weekly report'])
+            self.assertEqual(self.subjects(store, state='미처리'),
+                             ['회의 일정 조정', '견적 검토 요청'])
+            self.assertEqual(self.subjects(store, state='분석 대기'), ['아직 분석 안 됨'])
+            self.assertEqual(self.subjects(store, state=FAILED), ['분석 실패한 메일'])
+            self.assertEqual(len(self.subjects(store, state='없는 상태')), 5)   # ignored
+            store.db.close()
+
+    def test_failures_are_reachable_which_they_were_not_before(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            rows, total = store.search(self.ACCOUNT, state=FAILED)
+            self.assertEqual(total, 1)
+            self.assertEqual(state_of(rows[0]), '3회 실패')
+            store.db.close()
+
+    def test_priority_sorts_by_urgency_not_by_spelling(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            rows, _ = store.search(self.ACCOUNT, state='미처리', sort='priority', desc=False)
+            self.assertEqual([row['subject'] for row in rows],
+                             ['견적 검토 요청', '회의 일정 조정'])          # 긴급 then 보통
+            store.db.close()
+
+    def test_state_sorts_by_progress(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            rows, _ = store.search(self.ACCOUNT, sort='state', desc=False)
+            self.assertEqual(state_of(rows[0]), '분석 대기')
+            self.assertEqual(state_of(rows[-1]), HANDLED)
+            store.db.close()
+
+    def test_sort_by_subject_and_an_unknown_key_falls_back(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            self.assertEqual(self.subjects(store, sort='subject', desc=False)[0], 'Weekly report')
+            newest = self.subjects(store)
+            self.assertEqual(self.subjects(store, sort='없는 컬럼'), newest)
+            store.db.close()
+
+    def test_paging_reports_the_total_not_the_page(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            first, total = store.search(self.ACCOUNT, limit=2, offset=0)
+            second, again = store.search(self.ACCOUNT, limit=2, offset=2)
+            self.assertEqual((total, again), (5, 5))
+            self.assertEqual(len(first), 2)
+            self.assertEqual(len(second), 2)
+            self.assertFalse({row['id'] for row in first} & {row['id'] for row in second})
+            store.db.close()
+
+    def test_text_and_state_narrow_together(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            self.assertEqual(self.subjects(store, query='견적', state=HANDLED), [])
+            self.assertEqual(self.subjects(store, query='견적', state='미처리'),
+                             ['견적 검토 요청'])
+            store.db.close()
+
+    def test_the_verdict_columns_track_the_result(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            row = store.detail(self.ids['uid-1'])
+            self.assertEqual((row['category'], row['priority']), ('견적·계약', '긴급'))
+            store.reset([self.ids['uid-1']], reanalyze=True)
+            row = store.detail(self.ids['uid-1'])
+            self.assertEqual((row['category'], row['priority']), ('', ''))
+            store.db.close()
+
+    def test_migrate_backfills_the_verdicts_of_older_mail(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            store.db.execute("UPDATE mail SET category='', priority=''")
+            store.db.commit()
+            store.db.close()
+            again = Store(Path(folder) / 'mail.db')          # migrate() runs on open
+            row = again.detail(self.ids['uid-1'])
+            self.assertEqual((row['category'], row['priority']), ('견적·계약', '긴급'))
+            again.db.close()
+
+    def test_a_broken_result_does_not_stop_the_backfill(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            store.db.execute("UPDATE mail SET category='', priority=''")
+            store.db.execute("UPDATE mail SET result='{망가진' WHERE uid='uid-2'")
+            store.db.commit()
+            store.db.close()
+            again = Store(Path(folder) / 'mail.db')
+            self.assertEqual(again.detail(self.ids['uid-1'])['priority'], '긴급')
+            self.assertEqual(again.detail(self.ids['uid-2'])['priority'], '')
+            again.db.close()
+
+    def test_handling_many_at_once(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            store.set_handled_many([self.ids['uid-1'], self.ids['uid-3']], HANDLED)
+            self.assertEqual(store.search(self.ACCOUNT, state=HANDLED)[1], 3)
+            store.set_handled_many([self.ids['uid-1']], '')
+            self.assertEqual(store.search(self.ACCOUNT, state=HANDLED)[1], 2)
+            store.db.close()
+
+    def test_the_priority_order_matches_the_dashboard(self):
+        """Two lists of the same four words; a rename must not silently reorder one."""
+        self.assertEqual(PRIORITY_ORDER, tuple(name for name, _ in PRIORITIES))
+
+    def test_the_offered_filters_are_exactly_the_ones_sql_knows(self):
+        """A value in the dropdown with no SQL behind it would silently show everything."""
+        self.assertEqual(set(STATES) - {''}, set(STATE_SQL))
+        self.assertEqual(STATES[0], '')
+
+    def test_a_constant_with_a_quote_is_refused_rather_than_interpolated(self):
+        self.assertEqual(sql_text('처리'), "'처리'")
+        with self.assertRaises(ValueError):
+            sql_text("' OR 1=1 --")
 
 
 class DayWindowTests(unittest.TestCase):
@@ -310,6 +498,10 @@ class OverviewTests(unittest.TestCase):
             store.analyzed(ids[uid], {'sender': 'a@b.c', 'subject': 's', 'attachments': []}, result)
             store.db.execute('UPDATE mail SET received=? WHERE id=?', (stamp, ids[uid]))
         ids['uid-3'] = store.add('acct', 'uid-3', mail())   # collected, not analysed yet
+        # Stamped like the others: store.add() uses the real clock, so leaving it made
+        # the 최근 7일 assertion below pass only when run on TODAY itself.
+        store.db.execute('UPDATE mail SET received=? WHERE id=?',
+                         ('2026-09-11T03:00:00+00:00', ids['uid-3']))
         store.db.commit()
         return store, ids
 
@@ -333,6 +525,28 @@ class OverviewTests(unittest.TestCase):
             self.assertEqual(data['cards']['7일 내 마감'], 0)
             self.assertEqual(data['upcoming'], [])
             store.db.close()
+
+    def test_missed_deadlines_stay_visible(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store, _ = self.rows(folder)
+            late = dict(RESULT, events=[{'title': '지난 회신', 'start': '', 'deadline': '2026-09-04',
+                                         'evidence': 'e', 'needs_review': False}])
+            ident = store.add('acct', 'uid-4', mail())
+            store.analyzed(ident, {'sender': 'a@b.c', 'subject': 's', 'attachments': []}, late)
+            data = overview(store.page('acct'), self.TODAY)
+            self.assertEqual([entry.label for _, entry in data['past_due']], ['◾ 지난 회신'])
+            self.assertEqual(data['cards']['7일 내 마감'], 1)   # a missed deadline is not 임박
+            store.set_handled(ident, HANDLED)
+            self.assertEqual(overview(store.page('acct'), self.TODAY)['past_due'], [])
+            store.db.close()
+
+    def test_past_due_lists_the_nearest_miss_first(self):
+        events = collect([['1:0', 'mail-old', '오래된 마감', '', '2026-08-01', '', '', ''],
+                          ['2:0', 'mail-new', '어제 마감', '', '2026-09-10', '', '', ''],
+                          ['3:0', 'mail-next', '앞으로', '', '2026-09-14', '', '', '']])
+        self.assertEqual([entry.label for _, entry in past_due(events, self.TODAY)],
+                         ['◾ 어제 마감', '◾ 오래된 마감'])
+        self.assertEqual(past_due(events, self.TODAY, limit=1)[0][0], datetime.date(2026, 9, 10))
 
     def test_edited_draft_is_no_longer_review_pending(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -388,6 +602,27 @@ class CredentialTests(unittest.TestCase):
                 with self.subTest(password_type='unicode'):
                     save_password('Test@Example.com', password)
                     self.assertEqual(read_password('test@example.com'), password)
+
+    def api(self, failure):
+        def read(target, kind):
+            raise failure
+        return types.SimpleNamespace(CRED_TYPE_GENERIC=1, CredRead=read)
+
+    def test_missing_credential_is_a_lookup_error(self):
+        failure = OSError('Element not found.')
+        failure.winerror = 1168
+        with patch.dict('sys.modules', {'win32cred': self.api(failure)}):
+            with self.assertRaises(LookupError):
+                read_password('test@example.com')
+
+    def test_other_windows_failures_propagate(self):
+        # '없음' would send the user to re-enter a password that is already stored.
+        failure = OSError('The Credential Manager service is disabled.')
+        failure.winerror = 1058
+        with patch.dict('sys.modules', {'win32cred': self.api(failure)}):
+            with self.assertRaises(OSError) as caught:
+                read_password('test@example.com')
+        self.assertEqual(caught.exception.winerror, 1058)
 
 
 class Cell:
@@ -630,6 +865,44 @@ class SettingsTests(unittest.TestCase):
                     normalize({**self.VALID, field: value})
 
 
+class FieldErrorTests(unittest.TestCase):
+    """The inline form and the save gate must never disagree about what is valid."""
+
+    VALID = SettingsTests.VALID
+
+    def test_valid_settings_have_no_field_errors(self):
+        self.assertEqual(field_errors(self.VALID), {})
+
+    def test_each_bad_field_is_named(self):
+        for field, value in (('email', 'nope'), ('host', ''), ('interval', '30'),
+                             ('port', '70000'), ('port', 'abc'), ('workbook', '메일.xlsx'),
+                             ('workbook', 'C:\\a\\메일.xls')):
+            with self.subTest(field=field, value=value):
+                errors = field_errors({**self.VALID, field: value})
+                self.assertIn(field, errors)
+
+    def test_the_two_checks_agree_on_every_case(self):
+        cases = [self.VALID,
+                 {**self.VALID, 'email': 'nope'},
+                 {**self.VALID, 'host': ''},
+                 {**self.VALID, 'port': 'abc'},
+                 {**self.VALID, 'port': '0'},
+                 {**self.VALID, 'interval': '59'},
+                 {**self.VALID, 'interval': ''},
+                 {**self.VALID, 'workbook': ''},
+                 {**self.VALID, 'workbook': 'C:\\a\\b.xls'},
+                 {}]
+        for values in cases:
+            with self.subTest(values=values):
+                try:
+                    normalize(values)
+                except ValueError:
+                    refused = True
+                else:
+                    refused = False
+                self.assertEqual(refused, bool(field_errors(values)))
+
+
 class TestClient:
     def __init__(self, count=2, fail_pass=False):
         self.count, self.fail_pass, self.quit_called = count, fail_pass, False
@@ -669,6 +942,105 @@ class ConnectionCheckTests(unittest.TestCase):
             self.assertEqual(login_state()[0], '확인 실패')
 
 
+class ConnectionStepTests(unittest.TestCase):
+    """The 진단 page's step list. It stops at the first failure and never echoes the password."""
+
+    CONFIG = {'host': 'pop3s.hiworks.com', 'port': 995, 'email': 'me@corp.example'}
+
+    def test_every_step_passes_on_a_healthy_mailbox(self):
+        client = TestClient()
+        steps = connection_steps(self.CONFIG, 'secret', factory=lambda *a, **k: client,
+                                 resolve=lambda host: '203.0.113.7')
+        self.assertTrue(all(ok for _, ok, _ in steps))
+        self.assertEqual([label for label, _, _ in steps],
+                         ['주소 조회', 'SSL 연결 995', '계정 전송', '비밀번호 인증', '사서함 조회'])
+        self.assertIn('203.0.113.7', steps[0][2])
+
+    def test_a_dns_failure_stops_before_connecting(self):
+        def refuse(host):
+            raise OSError('이름을 확인할 수 없습니다')
+        steps = connection_steps(self.CONFIG, 'secret', factory=lambda *a, **k: 1 / 0,
+                                 resolve=refuse)
+        self.assertEqual(len(steps), 1)
+        self.assertFalse(steps[0][1])
+
+    def test_a_connect_failure_stops_before_authenticating(self):
+        def refuse(*args, **kwargs):
+            raise OSError('연결이 거부되었습니다')
+        steps = connection_steps(self.CONFIG, 'secret', factory=refuse,
+                                 resolve=lambda host: '203.0.113.7')
+        self.assertEqual([label for label, _, _ in steps], ['주소 조회', 'SSL 연결 995'])
+        self.assertFalse(steps[-1][1])
+
+    def test_a_wrong_password_is_reported_without_printing_it(self):
+        class Refuses(TestClient):
+            def pass_(self, password):
+                raise poplib.error_proto(f'-ERR invalid password {password}')
+        steps = connection_steps(self.CONFIG, 'secret', factory=lambda *a, **k: Refuses(),
+                                 resolve=lambda host: '203.0.113.7')
+        self.assertFalse(steps[-1][1])
+        detail = steps[-1][2]
+        self.assertNotIn('secret', detail)
+        self.assertIn('***', detail)
+
+
+class ChatReplyTests(unittest.TestCase):
+    """A chat turn reuses analyze()'s hardened invocation, schema and all."""
+
+    def run_chat(self, written=None, returncode=0):
+        seen = {}
+
+        def fake_run(command, **kwargs):
+            seen['command'] = command
+            seen['input'] = kwargs.get('input', '')
+            target = command[command.index('-o') + 1]
+            if written is not None:
+                Path(target).write_text(json.dumps(written, ensure_ascii=False), encoding='utf-8')
+            return types.SimpleNamespace(returncode=returncode, stdout='', stderr='')
+
+        with patch('mail_assistant.services.codex_command', return_value=['codex']), \
+             patch('mail_assistant.services.subprocess.run', side_effect=fake_run):
+            try:
+                reply = chat_reply('언제까지 회신해야 하나요?',
+                                   history=[('user', '이전 질문'), ('codex', '이전 답')],
+                                   mail={'subject': '견적 요청', 'body': '9월 14일까지'},
+                                   config={'model': 'gpt-5'})
+            except Exception as exc:
+                return seen, exc
+        return seen, reply
+
+    def test_the_answer_comes_back_from_the_schema_file(self):
+        seen, reply = self.run_chat({'reply': '9월 14일까지입니다.'})
+        self.assertEqual(reply, '9월 14일까지입니다.')
+
+    def test_the_sandbox_flags_are_the_same_as_analysis(self):
+        seen, _ = self.run_chat({'reply': 'ok'})
+        command = seen['command']
+        self.assertIn('--sandbox', command)
+        self.assertEqual(command[command.index('--sandbox') + 1], 'read-only')
+        self.assertIn('features.shell_tool=false', command)
+        self.assertIn('approval_policy="never"', command)
+        self.assertIn('--ephemeral', command)
+        self.assertEqual(command[command.index('--model') + 1], 'gpt-5')
+
+    def test_the_prompt_carries_the_injection_guard_and_the_transcript(self):
+        seen, _ = self.run_chat({'reply': 'ok'})
+        self.assertIn('신뢰하지 않는 입력', seen['input'])
+        self.assertIn('도구를 사용하지 마세요', seen['input'])
+        self.assertIn('이전 질문', seen['input'])
+        self.assertIn('견적 요청', seen['input'])
+
+    def test_a_failed_turn_says_nothing_about_stdout(self):
+        seen, error = self.run_chat(None, returncode=1)
+        self.assertIsInstance(error, RuntimeError)
+        self.assertIn('Codex 응답을 받지 못했습니다', str(error))
+
+    def test_the_schema_allows_only_a_reply_string(self):
+        shape = chat_schema()
+        self.assertEqual(shape['required'], ['reply'])
+        self.assertFalse(shape['additionalProperties'])
+
+
 class MailtoTests(unittest.TestCase):
     def test_address_is_taken_from_the_display_form(self):
         self.assertEqual(address_of('김철수 <kim@a.com>'), 'kim@a.com')
@@ -697,6 +1069,27 @@ class MailtoTests(unittest.TestCase):
 
 
 ROW_VALUES = ['m1', '김철수 <kim@example.com>', 'Re: 견적', '확인 후 회신드리겠습니다.', '', '검토 전']
+
+
+class FirstColumnTests(unittest.TestCase):
+    """COM's Range.Value has three shapes and only one of them is a tuple of rows."""
+
+    def test_a_multi_cell_range_is_a_tuple_of_rows(self):
+        self.assertEqual(first_column((('a',), ('b',), (None,))), ['a', 'b', None])
+
+    def test_a_single_cell_range_is_a_bare_scalar(self):
+        self.assertEqual(first_column('a'), ['a'])
+        self.assertEqual(first_column(7), [7])
+
+    def test_a_single_empty_cell_is_none(self):
+        self.assertEqual(first_column(None), [])
+
+    def test_a_one_cell_string_is_not_read_character_by_character(self):
+        """The bug this replaced compared mail ids against the letters of one id."""
+        self.assertEqual(first_column('abc123'), ['abc123'])
+
+    def test_a_flat_tuple_is_accepted_too(self):
+        self.assertEqual(first_column(('a', 'b')), ['a', 'b'])
 
 
 class LinkTests(unittest.TestCase):

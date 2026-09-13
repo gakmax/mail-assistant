@@ -78,12 +78,27 @@ def ensure_table(sheet, head, width):
             sheet.ListObjects.Add(1, source)
 
 
+def first_column(value):
+    """Range.Value as a flat list.
+
+    COM hands back a tuple of rows for a multi-cell range, a bare scalar for a single
+    cell and None for a single empty cell. Without this, a sheet holding exactly one
+    data row raised 'NoneType is not iterable' — or, worse, iterated the characters of
+    a one-cell string and compared ids against letters.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, tuple):
+        return [value]
+    return [item[0] if isinstance(item, tuple) else item for item in value]
+
+
 def append_missing(sheet, rows, width):
     last = max(1, sheet.Cells(sheet.Rows.Count, 1).End(-4162).Row)
     existing = set()
     if last > 1:
         values = sheet.Range(sheet.Cells(2, 1), sheet.Cells(last, 1)).Value
-        existing = {str(value[0]) for value in values if value[0] is not None}
+        existing = {str(item) for item in first_column(values) if item is not None}
     written = []
     for row in rows:
         if str(row[0]) in existing:
@@ -104,7 +119,8 @@ def mail_rows(sheet):
     if last < 2:
         return {}
     values = sheet.Range(sheet.Cells(2, 1), sheet.Cells(last, 1)).Value
-    return {str(value[0]): index for index, value in enumerate(values, 2) if value[0] is not None}
+    return {str(item): index for index, item in enumerate(first_column(values), 2)
+            if item is not None}
 
 
 ADDRESS = re.compile(r'<([^<>@\s]+@[^<>@\s]+)>')

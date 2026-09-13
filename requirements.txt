@@ -2,3 +2,9 @@ pywin32>=306,<400; sys_platform == 'win32'
 jsonschema>=4.20,<5
 # sample.py only, but it ships inside MailAssistantTools.exe.
 openpyxl>=3.1,<4
+# The web screens (mail_assistant/webui.py). A deliberate exception to the
+# stdlib-only rule in CLAUDE.md: the window it replaces was hand-drawn tkinter, and
+# UI-PLAN.md 6절 records the measured cost (+10.8MB in the bundle).
+# Pinned to a minor: a nicegui release moves its vendored Vue/Quasar and with them
+# the bundle size and the CSS the pages are laid out against.
+nicegui==3.16.*

@@ -1,0 +1,6 @@
+# 1단계 스파이크 전용. requirements.txt는 전환이 확정될 때 건드린다 (UI-PLAN.md 6절).
+# Pinned: a nicegui minor release moves its vendored Vue/Quasar and with them the
+# measured bundle size, so the go/no-go number must not drift under us.
+nicegui==3.16.*
+# native 모드(pywebview 창)를 재볼 때만 필요하다.
+pywebview>=5.3,<6; sys_platform == 'win32'

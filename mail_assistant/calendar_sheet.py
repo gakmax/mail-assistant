@@ -21,7 +21,10 @@ DAY_TIME = re.compile(r'^\d{4}-\d{2}-\d{2}[T ](\d{2}:\d{2})')
 MARKERS = {'마감': '◾', '시작': '▫', '확인 필요': '·'}
 COLORS = {'마감': URGENT, '시작': SOON, '확인 필요': CALM}
 PER_DAY = 3
-Entry = namedtuple('Entry', 'label kind mail_id row')
+# evidence has a default so the four-argument construction in older code and tests
+# keeps working; only the calendar reads it.
+Entry = namedtuple('Entry', 'label kind mail_id row evidence')
+Entry.__new__.__defaults__ = ('',)
 
 
 def parse_day(value):
@@ -48,6 +51,7 @@ def collect(rows, first_row=2):
         title = str(row[2] or '').strip() or '(제목 없음)'
         review = str(row[6] or '').strip()
         mail_id = str(row[1] or '').strip()
+        evidence = str(row[5] or '').strip() if len(row) > 5 else ''
         for index, kind in ((4, '마감'), (3, '시작')):
             day, clock = parse_day(row[index] if len(row) > index else '')
             if not day:
@@ -55,7 +59,8 @@ def collect(rows, first_row=2):
             if review:
                 kind = '확인 필요'
             label = f'{MARKERS[kind]} {clock} {title}'.replace('  ', ' ').strip()
-            events.setdefault(day, []).append((clock, Entry(label, kind, mail_id, first_row + offset)))
+            events.setdefault(day, []).append(
+                (clock, Entry(label, kind, mail_id, first_row + offset, evidence)))
     return {day: [entry for _, entry in sorted(entries, key=lambda pair: (pair[0], pair[1].label))]
             for day, entries in events.items()}
 
