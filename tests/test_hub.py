@@ -4,7 +4,6 @@
 """
 import tempfile
 import threading
-import time
 import unittest
 from pathlib import Path
 
@@ -107,15 +106,18 @@ class HubWorkerTests(unittest.TestCase):
             hub = Hub(Path(folder), dict(CONFIG), explode, report=lambda *a: seen.append(a))
             watcher = hub.subscribe()
             hub.start()
-            for _ in range(50):
-                if not hub.running():
+            # Wait for the sentinel, not for running(): work() clears the thread first,
+            # releases its connection, and only then sends None. Polling running() and
+            # draining what happened to be queued is a race, and CI's Windows runner
+            # lost it.
+            drained = []
+            while True:
+                value = watcher.get(timeout=10)
+                drained.append(value)
+                if value is None:
                     break
-                time.sleep(0.05)
             self.assertFalse(hub.running())
             self.assertEqual(seen[0][0], '작업 스레드 중단')
-            drained = []
-            while not watcher.empty():
-                drained.append(watcher.get_nowait())
             self.assertIn('실행 오류: 데이터 폴더 접근 권한과 설치 상태를 확인하세요.', drained)
             self.assertIsNone(drained[-1])       # the sentinel comes last
             # The worker logged from its own thread; that connection must be gone, or
