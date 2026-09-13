@@ -111,6 +111,8 @@ def selftest():
         # The web screens and the assets the browser fetches from them. nicegui is a
         # lazy import and the vendored FullCalendar is a data file, so a bundle can
         # lose either one without anything failing until someone opens the page.
+        # __version__ goes through importlib.metadata, which needs the .dist-info in
+        # the bundle; a missing one fails here rather than when someone runs `web`.
         ('nicegui', lambda: __import__('nicegui').__version__),
         ('mail_assistant.webui', check_webui),
     ]

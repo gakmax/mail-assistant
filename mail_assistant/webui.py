@@ -1552,8 +1552,15 @@ def serve(directory, config, token=None, host='127.0.0.1', port=None, native=Fal
     port = port or open_port(host)
     build(directory, config, token, hub, services, config_path, can_start)
     app.on_shutdown(release_store)
+    # Whatever opens the page has to carry the token, or it lands on the refusal.
+    # nicegui's `show` takes a path (it appends it to the root URL), and the native
+    # window's URL comes from window_args, which it merges over its own.
+    target = f'/?t={token}' if token else '/'
+    if native:
+        app.native.window_args['url'] = f'http://{host}:{port}{target}'
     # flush: a redirected stdout is block-buffered, and spike.ps1 reads this line
     # out of the log to know the server is up.
-    print(f'메일 도우미 현황: http://{host}:{port}/?t={token}', flush=True)
-    ui.run(host=host, port=port, reload=False, show=show, native=native, dark=False,
-           title=f'메일 도우미 {__version__}', storage_secret=token, favicon='📬')
+    print(f'메일 도우미 현황: http://{host}:{port}{target}', flush=True)
+    ui.run(host=host, port=port, reload=False, show=target if show else False,
+           native=native, dark=False, title=f'메일 도우미 {__version__}',
+           storage_secret=token, favicon='📬')
