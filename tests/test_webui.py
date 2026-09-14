@@ -9,7 +9,8 @@ from contextlib import contextmanager
 from email.message import EmailMessage
 from pathlib import Path
 
-from mail_assistant.core import FAILED, HANDLED, PROGRESS, SORTS, Store, account_key
+from mail_assistant.core import (ANALYZING, FAILED, HANDLED, PROGRESS, SORTS, Store,
+                                 account_key)
 from mail_assistant.dashboard import PRIORITIES
 from mail_assistant.hub import Hub
 from mail_assistant.overview import DUE_DAYS, due_window, failures, oldest_open, overview
@@ -26,7 +27,9 @@ from mail_assistant.webui import (CARD_TONES, DEFAULT_LIST, FONT_FILE, STATE_TON
                                   rich_text,
                                   trend_option, vendor_path,
                                   LIST_FIELDS, clicked_key, collect_text, header_cell, next_sort,
-                                  WINDOW, WINDOW_FLOOR, WINDOW_MIN, window_size)
+                                  WINDOW, WINDOW_FLOOR, WINDOW_MIN, window_size,
+                                  WEEKDAYS, day_title, list_signature, plain_title,
+                                  reanalyze_text, today_rows)
 
 CONFIG = {'host': 'pop3s.hiworks.com', 'port': 995, 'email': 'me@corp.example'}
 TODAY = datetime.date(2026, 9, 11)
@@ -427,9 +430,9 @@ class RunStripTests(unittest.TestCase):
                    report=lambda *a, **k: None)
 
     def test_a_stopped_hub_reads_as_stopped_with_no_stamps(self):
-        with tempfile.TemporaryDirectory() as folder:
+        with workspace() as folder:
             hub = self.hub(folder)
-            summary = run_summary(hub, Path(folder), CONFIG)
+            summary = run_summary(hub, folder, CONFIG)
             self.assertFalse(summary['running'])
             self.assertEqual(summary['label'], '중지됨')
             self.assertEqual(summary['stamps'], {'마지막 확인': '—', '마지막 반영': '—'})
@@ -437,8 +440,8 @@ class RunStripTests(unittest.TestCase):
             hub.close()
 
     def test_the_strip_shows_the_stored_stamps_and_the_log_tail(self):
-        with tempfile.TemporaryDirectory() as folder:
-            directory = Path(folder)
+        with workspace() as folder:
+            directory = folder
             store = Store(directory / 'mail.db')
             account = account_key(CONFIG)
             store.set_meta('last_fetch:' + account, '2026-09-11T01:02:03+00:00')
@@ -456,16 +459,16 @@ class RunStripTests(unittest.TestCase):
             hub.close()
 
     def test_a_halting_worker_says_so_instead_of_running(self):
-        with tempfile.TemporaryDirectory() as folder:
+        with workspace() as folder:
             hub = self.hub(folder)
             hub.stopping.set()
-            self.assertEqual(run_summary(hub, Path(folder), CONFIG)['label'], '중지 중…')
+            self.assertEqual(run_summary(hub, folder, CONFIG)['label'], '중지 중…')
             hub.close()
 
     def test_settings_without_an_account_show_no_stamps_at_all(self):
-        with tempfile.TemporaryDirectory() as folder:
+        with workspace() as folder:
             hub = self.hub(folder)
-            self.assertEqual(run_summary(hub, Path(folder), {})['stamps'], {})
+            self.assertEqual(run_summary(hub, folder, {})['stamps'], {})
             hub.close()
 
 
@@ -689,6 +692,12 @@ class CalendarEventTests(unittest.TestCase):
         self.assertEqual([item['start'] for item in payload],
                          ['2026-09-04', '2026-09-14', '2026-09-20'])
 
+    def test_the_tooltip_title_drops_the_marker_the_spreadsheet_needs(self):
+        payload = calendar_events(self.events(), TODAY)
+        self.assertEqual(payload[0]['extendedProps']['clean'],
+                         plain_title(payload[0]['title']))
+        self.assertNotEqual(payload[0]['extendedProps']['clean'], payload[0]['title'])
+
     def test_the_kind_picks_the_colour_and_the_evidence_rides_along(self):
         by_mail = {item['id']: item for item in calendar_events(self.events(), TODAY)}
         self.assertEqual(by_mail['mail-a']['extendedProps']['kind'], '마감')
@@ -883,6 +892,234 @@ class BoardTests(unittest.TestCase):
             store.delete_todo(ident)
             self.assertEqual([todo['text'] for todo in store.todos(account)], [])
             store.db.close()
+
+
+class SweptCardTests(unittest.TestCase):
+    """A mail card taken off the 할 일 판. The mail is untouched; the tally follows."""
+
+    def board_for(self, folder):
+        store = Store(folder / 'mail.db')
+        account = account_key(CONFIG)
+        ident = store.add(account, 'uid-1', mail('제목'))
+        store.analyzed(ident, {'sender': 'a@b.c', 'subject': '제목', 'attachments': []},
+                       dict(result(), next_action='견적 확인'))
+        return store, account, ident
+
+    def test_a_swept_card_leaves_the_board_and_the_tally_together(self):
+        with workspace() as folder:
+            store, account, ident = self.board_for(folder)
+            self.assertEqual(board_counts(store.page(account), [])['total'], 1)
+            store.set_todo_hidden(ident)
+            lanes = board(store.page(account), [])
+            self.assertEqual([card for lane in lanes.values() for card in lane], [])
+            self.assertEqual(board_counts(store.page(account), [])['total'], 0)
+            store.db.close()
+
+    def test_the_mail_itself_is_left_exactly_as_it_was(self):
+        """Sweeping is not 처리 완료 and it is not 삭제; it only hides one card."""
+        with workspace() as folder:
+            store, account, ident = self.board_for(folder)
+            store.set_todo_hidden(ident)
+            row = store.detail(ident)
+            self.assertEqual(row['handled'], '')
+            self.assertIsNotNone(row['result'])
+            self.assertEqual(overview(store.page(account), TODAY)['cards']['미처리 메일'], 1)
+            store.db.close()
+
+    def test_the_mail_screen_can_put_it_back(self):
+        with workspace() as folder:
+            store, account, ident = self.board_for(folder)
+            store.set_todo_hidden(ident)
+            self.assertTrue(detail_view(store.detail(ident))['todo_hidden'])
+            store.set_todo_hidden(ident, False)
+            self.assertFalse(detail_view(store.detail(ident))['todo_hidden'])
+            self.assertEqual(board_counts(store.page(account), [])['total'], 1)
+            store.db.close()
+
+
+class TodayTests(unittest.TestCase):
+    """오늘 일정 on the 대시보드, out of the same events the 일정 화면 draws."""
+
+    def data(self, folder, deadline='2026-09-11', handled=''):
+        store = Store(folder / 'mail.db')
+        account = account_key(CONFIG)
+        ident = store.add(account, 'uid-1', mail('제목'))
+        store.analyzed(ident, {'sender': 'a@b.c', 'subject': '제목', 'attachments': []},
+                       result('긴급', deadline))
+        if handled:
+            store.set_handled(ident, handled)
+        data = overview(store.page(account), TODAY)
+        store.db.close()
+        return data, ident
+
+    def test_todays_entries_carry_their_kind_and_their_mail(self):
+        with workspace() as folder:
+            data, ident = self.data(folder)
+            rows = today_rows(data['events'], TODAY, data['handled'])
+            self.assertEqual([row['kind'] for row in rows], ['마감'])
+            self.assertEqual(rows[0]['mail'], ident)
+            # The marker the Excel cell needs is stripped: this row has a coloured
+            # dot and the kind spelled out beside it already.
+            self.assertEqual(rows[0]['title'], '회신')
+
+    def test_another_day_is_not_today(self):
+        with workspace() as folder:
+            data, _ = self.data(folder, deadline='2026-09-20')
+            self.assertEqual(today_rows(data['events'], TODAY, data['handled']), [])
+
+    def test_a_finished_mail_leaves_the_panel_the_way_it_leaves_the_calendar(self):
+        with workspace() as folder:
+            data, _ = self.data(folder, handled=HANDLED)
+            self.assertEqual(today_rows(data['events'], TODAY, data['handled']), [])
+
+    def test_an_empty_day_is_an_empty_list_not_a_key_error(self):
+        self.assertEqual(today_rows({}, TODAY), [])
+
+    def test_a_label_with_no_marker_is_left_alone(self):
+        self.assertEqual(plain_title('회신 마감'), '회신 마감')
+        self.assertEqual(plain_title('◾ 14:00 회신 마감'), '14:00 회신 마감')
+        self.assertEqual(plain_title(''), '')
+
+    def test_the_date_is_built_by_hand_and_never_by_strftime(self):
+        """A Korean strftime format raises UnicodeEncodeError off a Korean PC."""
+        self.assertEqual(day_title(datetime.date(2026, 9, 14)), '9월 14일 (월)')
+        self.assertEqual(day_title(datetime.date(2026, 9, 13)), '9월 13일 (일)')
+        self.assertEqual(len(WEEKDAYS), 7)
+
+
+class LiveListTests(unittest.TestCase):
+    """The 메일 목록 repaints itself, and a repaint is what clears the checkboxes."""
+
+    def store(self, folder):
+        store = Store(folder / 'mail.db')
+        account = account_key(CONFIG)
+        ident = store.add(account, 'uid-1', mail('제목'))
+        return store, account, ident
+
+    def signature(self, folder):
+        return list_signature(listing(folder, CONFIG, list_state()))
+
+    def test_a_quiet_second_changes_nothing(self):
+        with workspace() as folder:
+            store, _, _ = self.store(folder)
+            store.db.close()
+            self.assertEqual(self.signature(folder), self.signature(folder))
+
+    def test_a_mail_entering_codex_is_a_change_the_list_has_to_show(self):
+        with workspace() as folder:
+            store, account, ident = self.store(folder)
+            before = self.signature(folder)
+            store.mark_analyzing(account, ident)
+            self.assertNotEqual(self.signature(folder), before)
+            self.assertIn(ANALYZING, [row['state'] for row
+                                      in listing(folder, CONFIG, list_state())['rows']])
+            store.db.close()
+
+    def test_an_analysed_verdict_is_a_change_too(self):
+        with workspace() as folder:
+            store, account, ident = self.store(folder)
+            before = self.signature(folder)
+            store.analyzed(ident, {'sender': 'a@b.c', 'subject': '제목', 'attachments': []},
+                           result('긴급'))
+            self.assertNotEqual(self.signature(folder), before)
+            store.db.close()
+
+    def test_a_deletion_is_a_change(self):
+        with workspace() as folder:
+            store, _, ident = self.store(folder)
+            before = self.signature(folder)
+            store.delete([ident])
+            self.assertNotEqual(self.signature(folder), before)
+            store.db.close()
+
+    def test_a_draft_nobody_can_see_in_the_list_is_not_one(self):
+        """The signature is the table's own columns: a repaint for anything else would
+        cost the user the rows they had ticked."""
+        with workspace() as folder:
+            store, _, ident = self.store(folder)
+            before = self.signature(folder)
+            store.set_draft(ident, '초안을 고쳤습니다')
+            self.assertEqual(self.signature(folder), before)
+            store.db.close()
+
+
+class ReanalyzeTextTests(unittest.TestCase):
+    """다시 분석 reports what reset() actually did, not what the button meant."""
+
+    def test_everything_asked_for_was_requested(self):
+        self.assertEqual(reanalyze_text(3, 3), '3건을 다시 분석하도록 요청했습니다.')
+
+    def test_a_mail_in_codex_right_now_says_so_instead_of_lying(self):
+        said = reanalyze_text(0, 1)
+        self.assertIn('지금 분석 중', said)
+        self.assertNotIn('요청했습니다', said)
+
+    def test_a_mixed_selection_reports_both_halves(self):
+        said = reanalyze_text(2, 3)
+        self.assertIn('2건을 다시 분석', said)
+        self.assertIn('1건은 지금 분석 중', said)
+
+
+class DashboardFollowsTests(unittest.TestCase):
+    """Everything the 메일 화면 does has to land on the 대시보드's numbers."""
+
+    def store(self, folder):
+        store = Store(folder / 'mail.db')
+        account = account_key(CONFIG)
+        ident = store.add(account, 'uid-1', mail('제목'))
+        store.analyzed(ident, {'sender': 'a@b.c', 'subject': '제목', 'attachments': []},
+                       result('긴급', '2026-09-13', reply=True))
+        return store, account, ident
+
+    def cards(self, folder):
+        return snapshot(folder, CONFIG, TODAY)['cards']
+
+    def test_deleting_a_mail_empties_every_card_it_was_counted_in(self):
+        with workspace() as folder:
+            store, _, ident = self.store(folder)
+            self.assertEqual(self.cards(folder),
+                             {'미처리 메일': 1, '긴급·높음': 1, f'{DUE_DAYS}일 내 마감': 1,
+                              '검토 전 초안': 1})
+            store.delete([ident])
+            self.assertEqual(self.cards(folder),
+                             {'미처리 메일': 0, '긴급·높음': 0, f'{DUE_DAYS}일 내 마감': 0,
+                              '검토 전 초안': 0})
+            store.db.close()
+
+    def test_editing_the_draft_takes_it_out_of_the_review_card(self):
+        with workspace() as folder:
+            store, _, ident = self.store(folder)
+            store.set_draft(ident, '사람이 고친 초안')
+            self.assertEqual(self.cards(folder)['검토 전 초안'], 0)
+            store.db.close()
+
+    def test_marking_it_done_moves_the_open_and_the_deadline_cards(self):
+        with workspace() as folder:
+            store, _, ident = self.store(folder)
+            store.set_handled(ident, HANDLED)
+            cards = self.cards(folder)
+            self.assertEqual(cards['미처리 메일'], 0)
+            self.assertEqual(cards[f'{DUE_DAYS}일 내 마감'], 0)
+            store.db.close()
+
+    def test_a_reanalysis_puts_it_back_in_the_waiting_pile(self):
+        with workspace() as folder:
+            store, _, ident = self.store(folder)
+            store.reset([ident], reanalyze=True)
+            data = snapshot(folder, CONFIG, TODAY)
+            self.assertEqual(data['waiting'], 1)
+            self.assertEqual(data['cards']['미처리 메일'], 0)
+            store.db.close()
+
+    def test_the_screens_share_one_connection_and_so_see_each_other(self):
+        """The write and the read are the same thread's Store — the point of store()."""
+        with workspace() as folder:
+            store, _, ident = self.store(folder)
+            store.db.close()
+            from mail_assistant.webui import store as cached
+            self.assertEqual(self.cards(folder)['미처리 메일'], 1)
+            cached(folder).delete([ident])
+            self.assertEqual(self.cards(folder)['미처리 메일'], 0)
 
 
 class DragTests(unittest.TestCase):

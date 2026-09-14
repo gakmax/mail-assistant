@@ -20,6 +20,9 @@ def run(config, directory, stop, notify, wake=None):
     account = account_key(config)
     excel = Excel(config['workbook'])
     next_analysis = 0
+    # A crash mid-analysis leaves the marker behind, and a mail stuck on '분석 중' is
+    # a lie the screens have no way to notice. Every start clears it.
+    store.mark_analyzing(account, '')
     try:
         while not stop.is_set():
             messages = []
@@ -46,6 +49,10 @@ def run(config, directory, stop, notify, wake=None):
                         subject = (row['subject'] or '(제목 없음)')[:40]
                         notify(f'메일 분석 중 {index}/{len(pending)}: {subject}'
                                ' — 중지하면 현재 분석이 끝난 뒤 멈춥니다.')
+                        # The screens read this, not the log line above: a list is not
+                        # watching the log, and '분석 대기' for four minutes reads as a
+                        # mail nobody has started on.
+                        store.mark_analyzing(account, row['id'])
                         try:
                             parsed, result = analyze(row, config)
                             store.analyzed(row['id'], parsed, result)
@@ -57,6 +64,8 @@ def run(config, directory, stop, notify, wake=None):
                             store.failed(row['id'], '분석 실패: 로그인·한도·본문 형식을 확인하세요.', next_analysis)
                             messages.append(f'분석 대기: 약 {delay // 60}분 후 재시도합니다.')
                             break
+                        finally:
+                            store.mark_analyzing(account, '')
                 except Exception as exc:
                     report('Codex 로그인 확인 실패', exc)
                     next_analysis = time.time() + 300
@@ -87,4 +96,8 @@ def run(config, directory, stop, notify, wake=None):
                 wake.wait(config['interval'])
                 wake.clear()
     finally:
+        try:
+            store.mark_analyzing(account, '')
+        except Exception as exc:
+            report('분석 표시 정리 실패', exc)
         store.db.close()

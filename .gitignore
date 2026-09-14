@@ -20,3 +20,6 @@ config.json
 
 # Legacy artifacts
 *.zip
+
+# nicegui writes app.storage.user here when the screens are run from the repo root
+.nicegui/

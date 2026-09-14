@@ -181,6 +181,28 @@ class HubWatcherTests(unittest.TestCase):
             hub.close()
 
 
+class HubRevisionTests(unittest.TestCase):
+    """The one thing a screen can tell another screen: something you show has changed."""
+
+    def test_a_touch_moves_the_number_every_time(self):
+        with tempfile.TemporaryDirectory() as folder:
+            hub = Hub(Path(folder), dict(CONFIG), Recorder(), report=quiet)
+            self.assertEqual(hub.revision, 0)
+            self.assertEqual(hub.touch(), 1)
+            self.assertEqual(hub.touch(), 2)
+            self.assertEqual(hub.revision, 2)
+            hub.close()
+
+    def test_nothing_happening_leaves_it_where_it_was(self):
+        """A screen repaints on this, so a log line must not count as a change."""
+        with tempfile.TemporaryDirectory() as folder:
+            hub = Hub(Path(folder), dict(CONFIG), Recorder(), report=quiet)
+            hub.log('새 메일 0건 수집')
+            hub.publish(None)
+            self.assertEqual(hub.revision, 0)
+            hub.close()
+
+
 class HubLogTests(unittest.TestCase):
     def test_the_log_outlives_the_hub(self):
         with tempfile.TemporaryDirectory() as folder:

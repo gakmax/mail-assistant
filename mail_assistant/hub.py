@@ -43,7 +43,22 @@ class Hub:
         self.watchers = []
         self.lines = deque(maxlen=LIVE_LINES)
         self.last_message = ''
+        self.revision = 0
         self.local = threading.local()
+
+    # --------------------------------------------------------------- revision
+
+    def touch(self):
+        """Something a screen shows has changed. Screens compare this, not sqlite.
+
+        A page cannot be told by another page: each is its own client with its own
+        elements, and the only thing they share is this process. An int they can read
+        on their own timer is what turns '언젠가 5초 안에' into 'now', for the price
+        of one comparison per tick.
+        """
+        with self.lock:
+            self.revision += 1
+            return self.revision
 
     # ------------------------------------------------------------------ log
 

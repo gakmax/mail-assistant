@@ -3,8 +3,9 @@
 Windows-only tkinter app with a second, web-based set of screens. Polls a Hiworks POP3 mailbox, sends each mail to the
 Codex CLI for analysis, stores everything in sqlite, and writes the result into a
 desktop Excel workbook over COM. The window (`app.py`) reads from the database,
-not from the workbook: 현황·메일·일정·실행·설정 tabs over `mail.db`. The same database
-also backs the NiceGUI screens in `webui.py`, opened with
+not from the workbook: 현황·메일·일정·실행·설정 tabs over `mail.db` — those are the
+tkinter fallback's own tab names, and the web screens call the same first page
+대시보드. The same database also backs the NiceGUI screens in `webui.py`, opened with
 `MailAssistantTools.exe web` — nine pages on 127.0.0.1, sharing one `Hub`. Shipped as
 an unsigned Inno Setup installer built by GitHub Actions, with in-app updates from
 public GitHub Releases.
@@ -84,6 +85,18 @@ written), and a stale default fails *every* analysis with nothing on screen to e
 it. So a missing cache offers 기본값 and 직접 입력 only, `model_rows()` keeps a row for
 whatever is saved even after Codex stops listing it, and `field_errors` rejects a model
 with a space in it because the value becomes one `--model` argument.
+
+**'분석 중' is a column on the mail, not a log line.** `Store.mark_analyzing()` writes
+`analyzing` before `services.analyze()` and the worker's `finally` clears it — every
+path, including the one that gives up, or a mail reads 분석 중 for ever and
+`Store.reset()` then refuses to touch it. A crash cannot run that `finally`, so
+`worker.run()` clears the marker at every start. Only one row ever carries it
+(`codex_slot` is a `BoundedSemaphore(1)`), which is why `analyzing()` can return one
+id. `state_of()` puts it *before* 실패: '2회 실패' of a mail Codex is reading right now
+is a week-old fact. `reset()` skips a marked row and returns how many it changed —
+clearing a result whose answer is already on its way would be overwritten, so a
+button that said '요청했습니다' would be describing something that did not happen;
+`reanalyze_text()` is that count turned into a sentence.
 
 **One list of filter values, in `core.STATES`.** The dropdown in `app.py`, the one
 in `webui.py` and the SQL in `core.STATE_SQL` are the same set; a value offered with
@@ -203,12 +216,47 @@ arrives as the client's *list*, which is what `clicked_key()` unwraps. The third
 is `body-selection`: Quasar's own checkbox lets the click reach the row, so without
 `@click.stop` ticking a box also opens the mail.
 
+**The 메일 목록 repaints itself every second, and a repaint clears the checkboxes.**
+That is the whole difficulty: q-table's ticks live in the element the rebuild
+destroys. So `watch()` compares `list_signature()` — the columns the table actually
+draws, and nothing else, because a repaint for an invisible change would cost the
+user a selection they made — and `rows()` carries the previously ticked ids across
+the rebuild by *extending* `table.selected` (the same list object as the `selected`
+prop; rebinding it changes nothing). The poll also stops while a dialog is over the
+list: rebuilding rows nobody can see costs a query and pulls the ground out from
+under the open mail. 실행 runs on the same `LIVE_SECONDS` beat, which is why
+`run_summary()` now uses the thread's cached `store()` instead of opening a `Store` —
+a fresh one runs `migrate()` and both backfills before it can answer.
+
+**The 대시보드 follows the other screens through `Hub.touch()`, not through sqlite.**
+Each page is its own client with its own elements and can tell another page nothing;
+the process is all they share. Every screen that writes calls `bump()`, and `home()`'s
+`beat()` compares one integer each second, repainting at once when it moved and on the
+slow `REFRESH_SECONDS` beat otherwise. Nothing is *lost* without it — every page
+re-reads on its own timer and a navigation is a fresh page load — it only decides
+whether a deletion lands on the cards in a second or in five. The charts still update
+in place; only the text blocks are refreshable.
+
+**The 초안 화면 announces a new draft and never rebuilds itself.** The one thing on
+that page is a textarea somebody is in the middle of, and `queue.refresh()` would
+replace it with whatever the database last saw — the same edit-eating the window's
+`draft_baseline` exists to stop. `watch()` compares the queue's ids and sets a notice
+label outside the refreshable; only an empty queue, which has nothing to lose,
+refreshes itself.
+
 **The 메일 detail is a dialog, and the list is repainted when it closes — if it
 changed anything.** Rebuilding the table is also what clears q-table's checkboxes, so
 a mail opened to be *read* must not cost the user the selection they made; `touched`
 is set by the things that change a list column (처리 상태, 다시 분석, 삭제) and nothing
 else. Refreshing while the dialog is open is the same work done where nobody can see
 it, behind a dialog that covers the rows.
+
+**A mail card swept off the 할 일 판 is `todo_hidden`, not a deletion.** The board
+grows a card for every analysed mail that produced a `next_action`, and before this
+the only way to be finished with one was to mark the mail 완료 — a different sentence.
+`board()` skips the flag, so `board_counts()` and the 대시보드 tally drop the same card
+at the same moment; the mail itself is untouched, and the only way back is the 메일
+detail's 할 일 판에 다시 올리기, which is why that button has to live there.
 
 **Deleting mail keeps its `seen` uid.** `Store.delete()` drops the mail row and the
 chat hung off it, and deliberately leaves `seen` alone: the mail is still on the POP3
@@ -258,13 +306,20 @@ reproduce. `updater.checked_text()` concatenates the label instead. `local_text(
 `core.py` is the same rule: every pattern it is given is ASCII.
 
 **The frame's size is `webui.WINDOW`, and both windows use it.** pywebview opens at
-800x600 unless told otherwise, which puts 현황's two columns and 메일's six-column table
+800x600 unless told otherwise, which puts 대시보드's two columns and 메일's six-column table
 inside a scrollbar from the first launch. `serve()` passes `window_size(screen_size())`
 into `app.native.window_args`, and `app.py` asks tkinter for the same number — importing
 it from `webui`, which costs nothing because that module imports no toolkit at module
 level. Both clamp `min_size` to the opening size: on a small screen a minimum larger
 than the window is what pywebview obeys, and the title bar ends up below the desktop
 where it cannot be dragged back.
+
+**오늘 일정 reads `overview()['events']`, which is what the calendar draws.** Not a
+query of its own: the 대시보드 and the 일정 화면 must not be able to disagree about what
+is on today. It keeps 시작 where the 마감 panel below it drops it — the two answer
+different questions ('오늘 무엇이 있는가' against '언제까지인가') — and drops a handled
+mail exactly as `calendar_events()` does. `day_title()` builds '9월 14일 (월)' by hand
+from `WEEKDAYS`: Korean in a `strftime` format is the Windows crash above.
 
 **`overview()['cards']` holds exactly four, and that is a layout contract.**
 `App.paint_overview()` in `app.py` walks a fixed list of four tkinter labels, so a
@@ -274,7 +329,7 @@ appends — and appends only when it is non-zero, because a card reading 0 every
 how a reader learns to stop looking at that corner. `CARD_TONES` is checked against
 `card_rows()` and not against `['cards']` for the same reason.
 
-**The 현황 할 일 tally goes through `board()`, never through SQL.** `board_counts()`
+**The 대시보드 할 일 tally goes through `board()`, never through SQL.** `board_counts()`
 calls the same function the kanban renders from, so the two cannot disagree about what
 counts as a card — a mail whose analysis produced no `next_action` is not one, and no
 `COUNT(*)` on `handled` knows that. The same rule makes `home()`'s `read()` fetch rows
@@ -282,7 +337,7 @@ and todos itself instead of calling `snapshot()`: the tally needs the rows the o
 already read, and a second `page()` every five seconds reads the whole mailbox twice.
 
 **The 마감 checklist keeps what the card drops.** `overview.deadlines()` and
-`past_due()` filter handled mail out because the 현황 cards count what is *left*;
+`past_due()` filter handled mail out because the 대시보드 cards count what is *left*;
 `due_window()` deliberately keeps it, because a tick that deleted its own row would
 move the progress bar with nothing left to point at. So the panel and the `…일 내
 마감` card beside it show different numbers on purpose — filter the list to match the
@@ -303,11 +358,24 @@ returned to its own lane instead of rewriting the state it already has. The chev
 buttons stay: `shoot.ps1` cannot click, so drag is the one thing on this page no test
 covers, and it must not be the only way to move a card.
 
-**The 현황 charts are updated, not rebuilt.** `home()` creates its four `ui.echart`
+**The 대시보드 charts are updated, not rebuilt.** `home()` creates its four `ui.echart`
 elements once and `paint()` writes new options into them every `REFRESH_SECONDS`; only
 the text blocks are `@ui.refreshable`. Wrapping a chart in a refreshable drops the
 canvas and replays the entry animation on every tick, which on a 5-second timer reads
 as a page that will not sit still.
+
+**The 일정 tooltip is the page's own, and there is exactly one of it.** `info.el.title`
+was the desktop's: it waits a second, wraps where it likes, and cannot show the kind's
+colour. `showTip()` fills one `div.ma-tip` — one for the page, not one per event,
+because a month view mounts and unmounts hundreds — measures it *after* the content is
+in so it can be clamped to the viewport, and `hideTip()` is wired to `scroll`
+(capturing), `resize`, `datesSet` and `eventClick`, because a tooltip anchored to an
+element that has been scrolled away or rebuilt is pointing at nothing. The title comes
+from `extendedProps.clean`: `calendar_sheet` puts ◾/▫/· on the front of a label so an
+Excel cell can say 마감·시작·확인 필요 in one colour, and beside a coloured dot and the
+kind spelled out that marker is the third time and reads as a missing glyph.
+`plain_title()` strips it here and in 오늘 일정; the 마감 checklist keeps it, because
+colour is the only other thing carrying kind there.
 
 **A page must not depend on `ui.run_javascript` to draw itself.** The calendar's
 first attempt passed its events that way and nothing ever rendered: the call needs a

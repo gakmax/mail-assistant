@@ -12,9 +12,10 @@ from email.message import EmailMessage
 from pathlib import Path
 from unittest.mock import call, patch, MagicMock
 
-from mail_assistant.core import (FAILED, HANDLED, HEADERS, PRIORITY_ORDER, Store, account_key,
-                                 STATES, STATE_SQL, day_bounds, filter_rows, local_text,
-                                 parse_mail, row_view, sql_text, state_of, workbook_rows)
+from mail_assistant.core import (ANALYZING, FAILED, HANDLED, HEADERS, PRIORITY_ORDER, Store,
+                                 account_key, STATES, STATE_SQL, day_bounds, filter_rows,
+                                 local_text, parse_mail, row_view, sql_text, state_of,
+                                 workbook_rows)
 from mail_assistant.excel import (Excel, ExcelUpdateError, append_missing, ensure_table,
                                   error_detail, first_column, repair_generated_header,
                                   row_text)
@@ -187,7 +188,7 @@ class MigrationTests(unittest.TestCase):
             store = Store(path)
             columns = {row['name'] for row in store.db.execute('PRAGMA table_info(mail)')}
             self.assertLessEqual({'handled', 'draft_edit', 'notified', 'analyzed_at', 'exported_at',
-                                  'subject', 'sender'}, columns)
+                                  'subject', 'sender', 'analyzing', 'todo_hidden'}, columns)
             row = store.detail('old-1')
             self.assertEqual(row['handled'], '')
             self.assertEqual(store.get_meta('baseline:acct'), '2026-09-10T00:00:00+00:00')
@@ -490,6 +491,123 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(sql_text('처리'), "'처리'")
         with self.assertRaises(ValueError):
             sql_text("' OR 1=1 --")
+
+
+class AnalyzingTests(unittest.TestCase):
+    """'분석 중': what the worker is holding right now, as a state the screens can read."""
+
+    ACCOUNT = 'acct'
+
+    def store(self, folder):
+        store = Store(Path(folder) / 'mail.db')
+        self.ids = {uid: store.add(self.ACCOUNT, uid, mail()) for uid in ('uid-1', 'uid-2')}
+        return store
+
+    def test_a_mail_in_codex_says_so_instead_of_waiting(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            self.assertEqual(state_of(store.detail(self.ids['uid-1'])), '분석 대기')
+            store.mark_analyzing(self.ACCOUNT, self.ids['uid-1'])
+            self.assertEqual(state_of(store.detail(self.ids['uid-1'])), ANALYZING)
+            self.assertEqual(state_of(store.detail(self.ids['uid-2'])), '분석 대기')
+            store.db.close()
+
+    def test_a_retry_in_flight_is_being_analysed_not_failing(self):
+        """'2회 실패' of a mail Codex is reading right now is a week-old fact."""
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            store.failed(self.ids['uid-1'], '분석 실패', 0)
+            store.failed(self.ids['uid-1'], '분석 실패', 0)
+            self.assertEqual(state_of(store.detail(self.ids['uid-1'])), '2회 실패')
+            store.mark_analyzing(self.ACCOUNT, self.ids['uid-1'])
+            self.assertEqual(state_of(store.detail(self.ids['uid-1'])), ANALYZING)
+            store.db.close()
+
+    def test_only_one_mail_carries_the_marker(self):
+        """One Codex process at a time, so a second mark clears the first."""
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            store.mark_analyzing(self.ACCOUNT, self.ids['uid-1'])
+            store.mark_analyzing(self.ACCOUNT, self.ids['uid-2'])
+            self.assertEqual(store.analyzing(self.ACCOUNT), self.ids['uid-2'])
+            self.assertEqual(state_of(store.detail(self.ids['uid-1'])), '분석 대기')
+            store.mark_analyzing(self.ACCOUNT, '')
+            self.assertEqual(store.analyzing(self.ACCOUNT), '')
+            store.db.close()
+
+    def test_the_filter_finds_it_and_the_other_two_do_not_claim_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            store.failed(self.ids['uid-1'], '분석 실패', 0)
+            store.mark_analyzing(self.ACCOUNT, self.ids['uid-1'])
+            for state, expected in ((ANALYZING, [self.ids['uid-1']]),
+                                    (FAILED, []),
+                                    ('분석 대기', [self.ids['uid-2']])):
+                rows, total = store.search(self.ACCOUNT, state=state)
+                self.assertEqual([row['id'] for row in rows], expected, state)
+                self.assertEqual(total, len(expected), state)
+            store.db.close()
+
+    def test_an_analysed_mail_drops_the_marker_from_every_state(self):
+        """analyzed() does not clear it; the worker's finally does. The state still
+        reads from the result, because a mail with an answer is not being analysed."""
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            store.mark_analyzing(self.ACCOUNT, self.ids['uid-1'])
+            store.analyzed(self.ids['uid-1'], {'sender': 'a@b.c', 'subject': 's',
+                                               'attachments': []}, RESULT)
+            self.assertEqual(state_of(store.detail(self.ids['uid-1'])), '미처리')
+            rows, _ = store.search(self.ACCOUNT, state=ANALYZING)
+            self.assertEqual(rows, [])
+            store.db.close()
+
+    def test_a_mail_in_codex_is_not_reset_and_the_count_says_so(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            store.analyzed(self.ids['uid-1'], {'sender': 'a@b.c', 'subject': 's',
+                                               'attachments': []}, RESULT)
+            store.mark_analyzing(self.ACCOUNT, self.ids['uid-1'])
+            self.assertEqual(store.reset([self.ids['uid-1']], reanalyze=True), 0)
+            self.assertIsNotNone(store.detail(self.ids['uid-1'])['result'])
+            store.mark_analyzing(self.ACCOUNT, '')
+            self.assertEqual(store.reset([self.ids['uid-1']], reanalyze=True), 1)
+            self.assertIsNone(store.detail(self.ids['uid-1'])['result'])
+            store.db.close()
+
+    def test_a_mixed_selection_resets_what_it_can(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            store.mark_analyzing(self.ACCOUNT, self.ids['uid-1'])
+            self.assertEqual(store.reset(list(self.ids.values())), 1)
+            store.db.close()
+
+    def test_sorting_by_state_puts_it_between_waiting_and_failed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            store.failed(self.ids['uid-2'], '분석 실패', 0)
+            store.mark_analyzing(self.ACCOUNT, self.ids['uid-1'])
+            rows, _ = store.search(self.ACCOUNT, sort='state', desc=False)
+            self.assertEqual([state_of(row) for row in rows], [ANALYZING, '1회 실패'])
+            store.db.close()
+
+
+class BoardHiddenTests(unittest.TestCase):
+    """A mail card swept off the 할 일 판. The mail itself is untouched."""
+
+    def test_the_flag_is_the_mails_own_and_survives_a_reopen(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'mail.db'
+            store = Store(path)
+            ident = store.add('acct', 'uid-1', mail())
+            self.assertEqual(store.detail(ident)['todo_hidden'], 0)
+            store.set_todo_hidden(ident)
+            store.db.close()
+            store = Store(path)
+            self.assertEqual(store.detail(ident)['todo_hidden'], 1)
+            self.assertEqual([row['todo_hidden'] for row in store.page('acct')], [1])
+            store.set_todo_hidden(ident, False)
+            self.assertEqual(store.detail(ident)['todo_hidden'], 0)
+            store.db.close()
 
 
 class DayWindowTests(unittest.TestCase):
@@ -1539,6 +1657,72 @@ class WorkerTests(unittest.TestCase):
             self.assertIn('invalid argument', snapshot['message'])
             store = Store(directory / 'mail.db')
             self.assertEqual(len(store.unexported(account_key(CONFIG))), 1)
+            store.db.close()
+
+
+class AnalyzingMarkerTests(unittest.TestCase):
+    """The worker's own end of '분석 중': set before the call, gone after every exit."""
+
+    def run_once(self, directory, analyze):
+        from mail_assistant.worker import run
+        stop = MagicMock()
+        # One whole cycle: counting is_set() calls breaks the moment the loop grows a
+        # branch, so the end of the cycle — the interval wait — is what stops it.
+        stop.is_set.return_value = False
+        stop.wait.side_effect = lambda *_: stop.is_set.configure_mock(return_value=True)
+        messages = []
+        with patch('mail_assistant.worker.fetch_mail', return_value='새 메일 0건 수집'), \
+                patch('mail_assistant.worker.read_password', return_value='test'), \
+                patch('mail_assistant.worker.check_login'), \
+                patch('mail_assistant.worker.analyze', side_effect=analyze), \
+                patch('mail_assistant.worker.Excel'):
+            run({**CONFIG, 'workbook': str(directory / 'test.xlsx'), 'interval': 180},
+                directory, stop, messages.append)
+        return messages
+
+    def prepared(self, folder):
+        directory = Path(folder)
+        store = Store(directory / 'mail.db')
+        ident = store.add(account_key(CONFIG), 'new', mail())
+        store.db.close()
+        return directory, ident
+
+    def test_the_mail_being_analysed_carries_the_marker_while_it_is(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory, ident = self.prepared(folder)
+            seen = []
+
+            def analyze(row, config):
+                store = Store(directory / 'mail.db')
+                seen.append(store.analyzing(account_key(CONFIG)))
+                store.db.close()
+                return parse_mail(mail()), RESULT
+
+            self.run_once(directory, analyze)
+            self.assertEqual(seen, [ident])
+            store = Store(directory / 'mail.db')
+            self.assertEqual(store.analyzing(account_key(CONFIG)), '')
+            store.db.close()
+
+    def test_an_analysis_that_fails_still_gives_the_marker_back(self):
+        """Otherwise the mail reads '분석 중' for ever and 다시 분석 refuses to touch it."""
+        with tempfile.TemporaryDirectory() as folder:
+            directory, ident = self.prepared(folder)
+            self.run_once(directory, RuntimeError('한도 초과'))
+            store = Store(directory / 'mail.db')
+            self.assertEqual(store.analyzing(account_key(CONFIG)), '')
+            self.assertEqual(state_of(store.detail(ident)), '1회 실패')
+            store.db.close()
+
+    def test_a_marker_left_by_a_crash_is_cleared_at_the_next_start(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory, ident = self.prepared(folder)
+            store = Store(directory / 'mail.db')
+            store.mark_analyzing(account_key(CONFIG), ident)
+            store.db.close()
+            self.run_once(directory, lambda row, config: (parse_mail(mail()), RESULT))
+            store = Store(directory / 'mail.db')
+            self.assertEqual(store.analyzing(account_key(CONFIG)), '')
             store.db.close()
 
 

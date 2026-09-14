@@ -1,4 +1,4 @@
-"""The 현황 screen as a NiceGUI page: the 1단계 spike of UI-PLAN.md.
+"""The 대시보드 screen as a NiceGUI page: the 1단계 spike of UI-PLAN.md.
 
 nicegui is imported inside the functions that need it, so the shaping helpers below
 and their tests keep working on a machine that has not installed it.
@@ -10,14 +10,15 @@ import re
 import secrets
 import socket
 import threading
+import time
 from datetime import date, datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
 
 from . import __version__
-from .calendar_sheet import COLORS
-from .core import (FAILED, HANDLED, LIST_LIMIT, PROGRESS, SORTS, STATES, Store, account_key,
-                   local_text, now, parse_mail, row_view, state_of)
+from .calendar_sheet import COLORS, MARKERS
+from .core import (ANALYZING, FAILED, HANDLED, LIST_LIMIT, PROGRESS, SORTS, STATES, Store,
+                   account_key, local_text, now, parse_mail, row_view, state_of)
 from .dashboard import CATEGORIES, PRIORITIES, describe
 from .excel import mailto
 from .hub import line_text
@@ -51,8 +52,13 @@ FAILED_CARD = '분석 실패'
 CARD_TONES = {'긴급·높음': css_color(URGENT), f'{DUE_DAYS}일 내 마감': css_color(SOON),
               '검토 전 초안': SERIES, FAILED_CARD: css_color(URGENT)}
 REFRESH_SECONDS = 5.0
+# 실행 and 메일 read their own numbers every second: both are screens somebody opens
+# *because* something is moving, and five seconds of a still picture reads as a hang.
+# 대시보드 keeps the slower beat — its charts and tallies are a day's shape, not a
+# pulse — but repaints at once when another screen says it changed (Hub.touch).
+LIVE_SECONDS = 1.0
 RUN_LINES = 8
-# The frame opens at this size, not at pywebview's 800x600: 현황 is a two-column
+# The frame opens at this size, not at pywebview's 800x600: 대시보드 is a two-column
 # layout and 메일 is a table with six columns, and both start inside a scrollbar at
 # the default. WINDOW_MIN is as small as the layout still reads at.
 WINDOW = (1440, 940)
@@ -60,11 +66,14 @@ WINDOW_MIN = (1080, 720)
 WINDOW_MARGIN = 80          # taskbar, title bar, and room to grab an edge
 WINDOW_FLOOR = (640, 480)   # no desktop is smaller; a floor stops a silly screen value
 # (path, label, Material icon). The icons ship with Quasar, so nothing is fetched.
-PAGES = (('/', '현황', 'dashboard'), ('/mail', '메일', 'mail'), ('/calendar', '일정', 'event'),
+PAGES = (('/', '대시보드', 'dashboard'), ('/mail', '메일', 'mail'), ('/calendar', '일정', 'event'),
          ('/todo', '할 일', 'checklist'), ('/drafts', '초안', 'drafts'),
          ('/chat', '상담', 'forum'), ('/stats', '통계', 'insights'),
          ('/run', '실행', 'play_circle'), ('/settings', '설정', 'settings'))
-# The 현황 cards. '…일 내 마감' carries the window in its name, so it is matched by suffix.
+# Monday first, and never through strftime: Windows encodes a format string with the
+# locale codec, so a Korean pattern raises UnicodeEncodeError off a Korean PC.
+WEEKDAYS = ('월', '화', '수', '목', '금', '토', '일')
+# The 대시보드 cards. '…일 내 마감' carries the window in its name, so it is matched by suffix.
 CARD_ICONS = {'미처리 메일': 'inbox', '긴급·높음': 'priority_high', '검토 전 초안': 'edit_note',
               FAILED_CARD: 'error_outline'}
 # The 메일 list's columns, in the order the table draws them. Every key is also a key
@@ -76,15 +85,18 @@ LIST_FIELDS = (('received', '수신'), ('sender', '발신자'), ('subject', '제
 TEXT_SORTS = ('subject', 'sender', 'category')
 DEFAULT_LIST = {'query': '', 'state': '', 'sort': 'received', 'desc': True,
                 'page': 0, 'per': LIST_LIMIT, 'selected': None}
-WINDOWS = (7, 14, 30)           # the 마감 windows the 현황 card offers
+WINDOWS = (7, 14, 30)           # the 마감 windows the 대시보드 card offers
 TREND_LABELS = (('collected', '수집'), ('analyzed', '분석'), ('exported', '반영'))
 TREND_TONES = {'collected': css_color(LINK), 'analyzed': css_color(NEUTRAL),
                'exported': css_color(DASH_GREEN)}
 # The kanban's three columns. '' and 처리 already existed; 진행 is the new middle one.
 COLUMNS = (('', '대기'), (PROGRESS, '진행'), (HANDLED, '완료'))
-# Tag colours for the 상태 column. 'N회 실패' carries its count and is matched separately.
+# Tag colours for the 상태 column. 'N회 실패' carries its count and is matched separately,
+# in red — the 분석 실패 card is already red, and amber now belongs to 분석 중, which is
+# the one state in this column that is happening right now.
 STATE_TONES = {HANDLED: css_color(DASH_GREEN), PROGRESS: css_color(LINK),
-               '미처리': '#52525b', '분석 대기': css_color(CALM)}
+               '미처리': '#52525b', '분석 대기': css_color(CALM),
+               ANALYZING: css_color(SOON)}
 # The kanban lane dots. Same three states, same three colours as the 상태 tags above.
 LANE_TONES = {'': css_color(CALM), PROGRESS: css_color(LINK), HANDLED: css_color(DASH_GREEN)}
 LOCAL = threading.local()
@@ -274,7 +286,7 @@ a.ma-kpi:hover {{
 }}
 .ma-row:last-child {{ border-bottom:none; }}
 
-/* 현황 마감: a checklist, so a deadline that is done can still be seen being done. */
+/* 대시보드 마감: a checklist, so a deadline that is done can still be seen being done. */
 .ma-due__head {{ display:flex; gap:10px; align-items:baseline; padding:0 18px 5px; }}
 .ma-progress {{
   color:var(--brand); border-radius:999px; margin:0 18px 4px !important;
@@ -395,6 +407,41 @@ a.ma-kpi:hover {{
 }}
 .ma-chat pre code {{ background:none; padding:0; font-size:inherit; }}
 .ma-compose {{ display:flex; gap:8px; align-items:flex-end; margin-top:12px; }}
+
+/* 대시보드 오늘 일정: the same row shape as 마감, one line each, kind by colour. */
+.ma-today {{ display:block; padding:2px 0 6px; }}
+.ma-today__row {{
+  display:flex; gap:9px; align-items:center; flex-wrap:nowrap;
+  padding:5px 18px; border-bottom:1px solid var(--hair);
+}}
+.ma-today__row:last-child {{ border-bottom:none; }}
+.ma-today__row:hover {{ background:var(--sunken); }}
+.ma-today__title {{
+  font-size:12.5px; color:var(--ink); font-weight:500; text-decoration:none;
+  min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}}
+.ma-today__title:hover {{ color:var(--brand); text-decoration:underline; }}
+.ma-today__kind {{ font-size:11.5px; color:var(--muted); flex:none; }}
+
+/* The 일정 tooltip. Native title= waits a second, wraps where it likes and wears the
+   desktop's own chrome; this is the same slate the chart tooltips use, so a hover on
+   the calendar and a hover on a bar are recognisably the same gesture. */
+.ma-tip {{
+  position:fixed; z-index:9999; left:0; top:0; max-width:320px; pointer-events:none;
+  background:#27272a; color:#fafafa; border-radius:9px; padding:9px 11px;
+  font-size:12px; line-height:1.6; letter-spacing:-.005em;
+  box-shadow:0 8px 24px rgba(24,24,27,.24);
+  opacity:0; transform:translateY(3px); transition:opacity .12s ease, transform .12s ease;
+  font-family:{FONT_STACK};
+}}
+.ma-tip.is-on {{ opacity:1; transform:translateY(0); }}
+.ma-tip__head {{ display:flex; align-items:center; gap:6px; margin-bottom:3px; }}
+.ma-tip__dot {{ width:7px; height:7px; border-radius:50%; flex:none; }}
+.ma-tip__title {{ font-weight:700; font-size:12.5px; overflow-wrap:anywhere; }}
+.ma-tip__row {{ color:#d4d4d8; overflow-wrap:anywhere; }}
+.ma-tip__row b {{ color:#fafafa; font-weight:600; }}
+.ma-tip__miss {{ color:#fca5a5; font-weight:600; }}
+.ma-tip__hint {{ color:#a1a1aa; font-size:11px; margin-top:4px; }}
 
 /* FullCalendar ships its own chrome; these lines make it this app's chrome. */
 .fc {{
@@ -528,6 +575,36 @@ def trend_option(rows):
     return option
 
 
+def day_title(day):
+    """'9월 14일 (월)'. Built by hand: Korean in a strftime format is a Windows crash."""
+    return f'{day.month}월 {day.day}일 ({WEEKDAYS[day.weekday()]})'
+
+
+def plain_title(label):
+    """An entry label without the marker calendar_sheet puts on the front of it.
+
+    ◾/▫/· are how an Excel cell says 마감·시작·확인 필요 in one colour of text. This
+    row has a coloured dot *and* the kind spelled out beside it, so the marker is the
+    third time and reads as a missing glyph. The 마감 checklist keeps it: colour is
+    the only other thing carrying kind there.
+    """
+    text = str(label or '')
+    if text[:1] in MARKERS.values():
+        text = text[1:].lstrip()
+    return text
+
+
+def today_rows(events, today, handled=()):
+    """오늘 날짜에 걸린 일정 — 시작도 마감도, 처리 완료된 메일만 빼고.
+
+    The 마감 panel beside it answers '언제까지인가'; this one answers '오늘 무엇이
+    있는가', which is why 시작 is kept here and dropped there.
+    """
+    return [{'kind': entry.kind, 'title': plain_title(entry.label), 'mail': entry.mail_id,
+             'evidence': entry.evidence}
+            for entry in events.get(today, []) if entry.mail_id not in handled]
+
+
 def deadline_rows(data, today):
     """The 마감 checklist: missed first, then upcoming, in date order.
 
@@ -565,13 +642,12 @@ def run_summary(hub, directory, config, limit=RUN_LINES):
         account = ''
     stamps = {}
     if account:
-        store = Store(directory / 'mail.db')
-        try:
-            for label, key in (('마지막 확인', 'last_fetch:'), ('마지막 반영', 'last_export:')):
-                stamp = store.get_meta(key + account)
-                stamps[label] = local_text(stamp, '%m-%d %H:%M:%S') if stamp else '—'
-        finally:
-            store.db.close()
+        # The thread's own connection, not a new one: 실행 reads this every second now,
+        # and a fresh Store runs migrate() and both backfills before it answers.
+        opened = store(directory)
+        for label, key in (('마지막 확인', 'last_fetch:'), ('마지막 반영', 'last_export:')):
+            stamp = opened.get_meta(key + account)
+            stamps[label] = local_text(stamp, '%m-%d %H:%M:%S') if stamp else '—'
     return {'running': state['running'], 'stopping': state['stopping'],
             'label': '중지 중…' if state['stopping'] else ('실행 중' if state['running'] else '중지됨'),
             'message': state['message'], 'stamps': stamps,
@@ -675,6 +751,19 @@ def listing(directory, config, state):
             'last': min(total, page * per + len(rows))}
 
 
+def list_signature(data):
+    """What a repaint of the 메일 목록 would actually change.
+
+    The list polls every second and a rebuild is also what clears q-table's
+    checkboxes, so it has to be able to tell 'the worker analysed something' from
+    'nothing happened'. Every column the table draws is in here; `received` is not,
+    because it is fixed once the mail is stored.
+    """
+    return (data['total'], data['page'],
+            tuple((row['id'], row['state'], row['category'], row['priority'],
+                   row['subject'], row['sender']) for row in data['rows']))
+
+
 def tidy_body(text):
     """HTML mail arrives as text carrying the source's indentation and runs of blank
     lines. Collapse both, or the panel opens on empty space instead of the first line.
@@ -698,7 +787,10 @@ def board(rows, todos):
     lanes = {state: [] for state, _ in COLUMNS}
     for row, result in results(rows):
         action = (result.get('next_action') or result.get('requests') or '').strip()
-        if not action:
+        # A mail card the user swept off the board: the mail itself is untouched, and
+        # the 메일 화면 is where it can be put back. board_counts() reads this function,
+        # so the 대시보드 tally drops the same card at the same moment.
+        if not action or row['todo_hidden']:
             continue
         lanes.setdefault(row['handled'] if row['handled'] in lanes else '', []).append({
             'kind': 'mail', 'key': row['id'], 'text': action,
@@ -717,7 +809,7 @@ def board(rows, todos):
 def board_counts(rows, todos):
     """The kanban in three numbers, counted by board() itself.
 
-    Going through board() rather than counting states in SQL is the point: the 현황
+    Going through board() rather than counting states in SQL is the point: the 대시보드
     block and the 할 일 판 then cannot disagree about what is a card — a mail with no
     next_action is not one, and no query knows that.
     """
@@ -884,6 +976,23 @@ def collect_text(message, running):
     return message + ' · 분석은 수집을 시작하면 진행됩니다.'
 
 
+def reanalyze_text(asked, wanted):
+    """What 다시 분석 reports when Codex was already holding some of the selection.
+
+    Store.reset() skips a mail that is in Codex right now, because clearing its result
+    would be overwritten by the answer already on its way. A button that then said
+    '요청했습니다' would be describing something that did not happen.
+    """
+    skipped = max(0, wanted - asked)
+    if not skipped:
+        return f'{asked}건을 다시 분석하도록 요청했습니다.'
+    if not asked:
+        return ('지금 분석 중이라 다시 분석할 수 없습니다. '
+                '분석이 끝나면 다시 눌러 주세요.')
+    return (f'{asked}건을 다시 분석하도록 요청했습니다. '
+            f'{skipped}건은 지금 분석 중이라 건너뛰었습니다.')
+
+
 def run_view(hub, directory, config, services=None, limit=RUN_LINES * 3):
     """Everything the 실행 page shows. Read-only: the hub owns the worker."""
     summary = run_summary(hub, directory, config, limit=limit)
@@ -925,6 +1034,7 @@ def detail_view(row):
         'draft': row['draft_edit'] or result.get('reply_draft', ''),
         'reply_subject': result.get('reply_subject', '') or f"Re: {row['subject']}",
         'analysed': bool(result),
+        'todo_hidden': bool(row['todo_hidden']),
     }
 
 
@@ -950,7 +1060,10 @@ def calendar_events(events, today, handled=()):
                 'start': day.isoformat(),
                 'allDay': True,
                 'color': css_color(COLORS[entry.kind]),
+                # `clean` is the title without the ◾/▫/· the Excel cell needs: the
+                # tooltip already has a coloured dot and the kind spelled out.
                 'extendedProps': {'kind': entry.kind, 'evidence': entry.evidence,
+                                  'clean': plain_title(entry.label),
                                   'missed': entry.kind == '마감' and day < today},
             })
     return payload
@@ -1186,8 +1299,37 @@ def deadlines(data, today, token, on_tick):
                     'ma-due__left' + (' is-missed' if row['missed'] else ''))
 
 
+def today_panel(rows, today, token):
+    """오늘 일정, on the 대시보드, from the same events the 일정 화면 draws.
+
+    The calendar is a page you go to; this is the one line of it you need without
+    going anywhere — which is the whole reason 현황 became 대시보드.
+    """
+    from nicegui import ui
+    with card(flush=True):
+        with ui.element('div').classes('ma-lane__head'):
+            ui.icon('today').style(f'color:{MUTED};font-size:17px')
+            ui.label('오늘 일정').classes('ma-head__title')
+            ui.label(day_title(today)).classes('ma-meta__item')
+            ui.space()
+            ui.link('달력 열기', href('/calendar', token)) \
+                .style(f'color:{BRAND};font-size:12px;text-decoration:none')
+        if not rows:
+            empty('오늘 예정된 일정이 없습니다.')
+            return
+        with ui.element('div').classes('ma-today'):
+            for row in rows:
+                with ui.element('div').classes('ma-today__row'):
+                    ui.element('div').classes('ma-dot') \
+                        .style(f'background:{css_color(COLORS[row["kind"]])}')
+                    ui.link(row['title'], href('/mail', token, id=row['mail'])) \
+                        .classes('ma-today__title')
+                    ui.space()
+                    ui.label(row['kind']).classes('ma-today__kind')
+
+
 def todo_tally(counts, token):
-    """할 일 in three numbers on 현황, because the board is a page nobody passes by."""
+    """할 일 in three numbers on 대시보드, because the board is a page nobody passes by."""
     from nicegui import ui
     with card(flush=True):
         with ui.element('div').classes('ma-lane__head'):
@@ -1322,6 +1464,47 @@ CALENDAR_SETUP = """
 <script>
 // Korean strings are set here rather than by loading a locale bundle: FullCalendar 6
 // ships locales as a separate package and this is the whole of what we need.
+// One tooltip element for the whole page, not one per event: a month view mounts
+// and unmounts hundreds of them as you page through it.
+window.mailTip = function () {
+  let tip = document.getElementById('ma-tip');
+  if (!tip) {
+    tip = document.createElement('div');
+    tip.id = 'ma-tip';
+    tip.className = 'ma-tip';
+    document.body.appendChild(tip);
+  }
+  return tip;
+};
+function escapeHtml(text) {
+  const box = document.createElement('div');
+  box.textContent = String(text == null ? '' : text);
+  return box.innerHTML;
+}
+function hideTip() {
+  window.mailTip().classList.remove('is-on');
+}
+function showTip(anchor, html) {
+  const tip = window.mailTip();
+  tip.innerHTML = html;
+  tip.classList.add('is-on');
+  // Measured after the content is in, and clamped to the viewport: an event in the
+  // last column would otherwise put half the tooltip off the right edge.
+  const box = anchor.getBoundingClientRect();
+  const size = tip.getBoundingClientRect();
+  const margin = 8;
+  let left = box.left + box.width / 2 - size.width / 2;
+  left = Math.max(margin, Math.min(left, window.innerWidth - size.width - margin));
+  let top = box.top - size.height - 8;
+  if (top < margin) top = box.bottom + 8;      // no room above; sit under it instead
+  tip.style.left = `${Math.round(left)}px`;
+  tip.style.top = `${Math.round(top)}px`;
+}
+// A tooltip is anchored to where the element was when the pointer arrived, so any
+// scroll or view change has to take it away rather than leave it pointing at nothing.
+window.addEventListener('scroll', hideTip, true);
+window.addEventListener('resize', hideTip);
+
 window.mailCalendar = function (events, tries) {
   const host = document.getElementById('calendar');
   // Vue may not have mounted the div yet, so wait rather than silently doing nothing.
@@ -1357,6 +1540,9 @@ window.mailCalendar = function (events, tries) {
     moreLinkText: (n) => `외 ${n}건`,
     dayHeaderContent: (arg) => weekdays[arg.date.getDay()],
     datesSet: (info) => {
+      // Paging months rebuilds every event element, and the one the pointer was over
+      // goes with them — without this the tooltip outlives its own anchor.
+      hideTip();
       const label = document.getElementById('calendar-title');
       if (!label) return;
       const start = info.view.currentStart;
@@ -1366,11 +1552,31 @@ window.mailCalendar = function (events, tries) {
         : `${stamp(start)} ~ ${stamp(last)}`;
     },
     eventDidMount: (info) => {
-      const note = info.event.extendedProps.evidence;
-      info.el.title = note ? `${info.event.title}\n근거: ${note}` : info.event.title;
-      if (info.event.extendedProps.missed) info.el.style.textDecoration = 'line-through';
+      // No info.el.title: the desktop tooltip waits a second, wraps where it likes and
+      // cannot show the kind's colour. tip() is the page's own, in the chart's slate.
+      const props = info.event.extendedProps;
+      const body = [];
+      body.push(`<div class="ma-tip__row"><b>${stamp(info.event.start)}</b>`
+                + ` ${weekdays[info.event.start.getDay()]}요일</div>`);
+      if (props.missed) body.push('<div class="ma-tip__row ma-tip__miss">마감이 지났습니다</div>');
+      if (props.evidence) {
+        body.push(`<div class="ma-tip__row">근거: ${escapeHtml(props.evidence)}</div>`);
+      }
+      body.push('<div class="ma-tip__hint">누르면 이 일정이 나온 메일이 열립니다.</div>');
+      const html = '<div class="ma-tip__head">'
+        + `<span class="ma-tip__dot" style="background:${info.event.backgroundColor}"></span>`
+        + `<span class="ma-tip__title">${escapeHtml(props.clean || info.event.title)}</span>`
+        + `</div><div class="ma-tip__row">${escapeHtml(props.kind || '')}</div>`
+        + body.join('');
+      info.el.addEventListener('mouseenter', () => showTip(info.el, html));
+      info.el.addEventListener('mouseleave', hideTip);
+      if (props.missed) info.el.style.textDecoration = 'line-through';
     },
-    eventClick: (info) => { info.jsEvent.preventDefault(); emitEvent('mail-open', info.event.id); },
+    eventClick: (info) => {
+      info.jsEvent.preventDefault();
+      hideTip();
+      emitEvent('mail-open', info.event.id);
+    },
   });
   calendar.render();
 };
@@ -1404,6 +1610,20 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
 
     def collecting():
         return hub is not None and hub.running()
+
+    def bump():
+        """Say that a screen changed something another screen shows.
+
+        Every page reads the database on its own timer, so nothing is *lost* without
+        this — it only decides whether the 대시보드 catches a deletion in a second or
+        in five. Called by everything that writes: 처리 상태, 삭제, 다시 분석, 초안,
+        할 일. See Hub.touch().
+        """
+        if hub is not None:
+            hub.touch()
+
+    def revision():
+        return hub.revision if hub is not None else 0
 
     async def install():
         """Stop collecting, then bring the server down so main() can run Setup.
@@ -1558,7 +1778,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             ui.timer(0.4, lambda: block.refresh() if updater.state == WORKING else None)
         return block
 
-    # 현황 -------------------------------------------------------------
+    # 대시보드 ---------------------------------------------------------
 
     @ui.page('/')
     def home(request: Request):
@@ -1578,14 +1798,21 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             account = account_of(config)
             rows = list(store(directory).page(account)) if account else []
             todos = list(store(directory).todos(account)) if account else []
-            latest['data'] = overview(rows, date.today(), within=window['days'])
+            today = date.today()
+            latest['data'] = overview(rows, today, within=window['days'])
             latest['todo'] = board_counts(rows, todos)
-            latest['trend'] = trend(store(directory), account, date.today())
+            latest['today'] = today_rows(latest['data']['events'], today,
+                                         latest['data']['handled'])
+            latest['trend'] = trend(store(directory), account, today)
             return latest['data']
 
         @ui.refreshable
         def kpi_row():
             cards(latest['data'], token)
+
+        @ui.refreshable
+        def today_block():
+            today_panel(latest['today'], date.today(), token)
 
         @ui.refreshable
         def deadline_block():
@@ -1611,9 +1838,11 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             so the two screens cannot disagree about what is finished.
             """
             store(directory).set_handled(ident, HANDLED if done else '')
+            bump()
             read()
-            # The kanban's middle column is this same field, so its tally moves too.
-            for block in (kpi_row, deadline_block, todo_block, summary_row):
+            # The kanban's middle column is this same field, so its tally moves too,
+            # and a handled mail leaves 오늘 일정 the way it leaves the calendar.
+            for block in (kpi_row, today_block, deadline_block, todo_block, summary_row):
                 block.refresh()
 
         @ui.refreshable
@@ -1657,6 +1886,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                                  for name, _ in PRIORITIES], STATUS),
                                 24 * len(PRIORITIES) + 12, cap=460)
                 with ui.element('div').classes('ma-stack'):
+                    today_block()
                     with card(flush=True):
                         with ui.element('div').classes('ma-head') \
                                 .style('padding:16px 18px 0;margin-bottom:10px'):
@@ -1676,7 +1906,8 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
 
             def paint():
                 data = read()
-                for block in (kpi_row, deadline_block, todo_block, run_block, summary_row):
+                for block in (kpi_row, today_block, deadline_block, todo_block, run_block,
+                              summary_row):
                     block.refresh()
                 for element, option in (
                         (daily, trend_option(latest['trend'])),
@@ -1696,7 +1927,25 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 kpi_row.refresh()
                 deadline_block.refresh()
 
-            ui.timer(REFRESH_SECONDS, paint)
+            seen = {'revision': revision(), 'at': 0.0}
+
+            def beat():
+                """Repaint on the slow beat, or at once when another screen wrote.
+
+                Deleting a mail, ticking a 마감, moving a card: none of those happen on
+                this page, and before this the numbers here sat still for up to five
+                seconds afterwards — long enough to read as 'the 대시보드 does not
+                follow the 메일 화면'. The check itself is one integer compare.
+                """
+                moved = revision()
+                elapsed = time.monotonic() - seen['at']
+                if moved == seen['revision'] and elapsed < REFRESH_SECONDS:
+                    return
+                seen['revision'], seen['at'] = moved, time.monotonic()
+                paint()
+
+            seen['at'] = time.monotonic()
+            ui.timer(LIVE_SECONDS, beat)
 
     # 메일 -------------------------------------------------------------
 
@@ -1717,6 +1966,10 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             state['selected'] = opened
         wanted = {'ids': []}        # what the 삭제 confirmation is standing over
         touched = {'now': False}    # did the open mail change anything the list shows
+        # The table is rebuilt by the second now, and a rebuild is what clears q-table's
+        # checkboxes. `live` carries the ticked ids and the last painted signature
+        # across that rebuild, so a poll that finds nothing new does nothing at all.
+        live = {'table': None, 'signature': None}
 
         def remember(**changes):
             state.update(changes)
@@ -1759,6 +2012,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             if not ids:
                 return
             store(directory).delete(ids)
+            bump()
             if state['selected'] in ids:
                 remember(selected=None)
                 detail.close()
@@ -1827,6 +2081,12 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             data = listing(directory, config, state)
             if data['page'] != state['page']:
                 remember(page=data['page'])
+            live['signature'] = list_signature(data)
+            # What was ticked before this rebuild. mark(), again() and erase() clear
+            # the selection themselves, so only a repaint the *user* did not ask for
+            # — a poll that found new mail — restores anything here.
+            previous = live['table']
+            kept = {row['id'] for row in previous.selected} if previous is not None else set()
             # Widths are fixed except 제목, which takes the rest; max-width:0 is the
             # trick that makes a flexible table cell ellipsize instead of overflowing.
             # 수신 is wide enough for '09-14 13:39' on one line: at 104px it wrapped,
@@ -1865,8 +2125,14 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     table.add_slot('body-cell-category', tag_cell({}))
                     table.add_slot('body-cell-priority', tag_cell(STATUS))
                     table.add_slot('body-cell-state',
-                                   tag_cell(STATE_TONES, failure=css_color(SOON)))
+                                   tag_cell(STATE_TONES, failure=css_color(URGENT)))
                     table.on('rowClick', lambda event: choose(event.args[1]['id']))
+                    live['table'] = table
+                    if kept:
+                        # .selected is the same list object as the 'selected' prop, so
+                        # it is extended, never rebound.
+                        table.selected.extend(row for row in data['rows']
+                                              if row['id'] in kept)
 
                 def picked():
                     return [row['id'] for row in table.selected]
@@ -1877,6 +2143,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                         ui.notify('선택된 메일이 없습니다.')
                         return
                     store(directory).set_handled_many(ids, value)
+                    bump()
                     table.selected.clear()
                     rows.refresh()
                     ui.notify(f"{len(ids)}건을 {'처리 완료' if value else '미처리'}로 바꿨습니다.")
@@ -1886,12 +2153,16 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     if not ids:
                         ui.notify('선택된 메일이 없습니다.')
                         return
-                    store(directory).reset(ids, reanalyze=True)
+                    # reset() skips whatever Codex is holding right now, and says how
+                    # many it skipped: clearing a result that is already on its way
+                    # would be overwritten, and the request would vanish silently.
+                    asked = store(directory).reset(ids, reanalyze=True)
+                    bump()
                     if hub is not None:
                         hub.wake()
                     table.selected.clear()
                     rows.refresh()
-                    ui.notify(f'{len(ids)}건을 다시 분석하도록 요청했습니다.')
+                    ui.notify(reanalyze_text(asked, len(ids)))
 
                 def step(delta):
                     remember(page=max(0, min(data['pages'] - 1, state['page'] + delta)))
@@ -1938,16 +2209,24 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
 
             def toggle():
                 store(directory).set_handled(view['id'], '' if view['handled'] else HANDLED)
+                bump()
                 touched['now'] = True
                 panel.refresh()
 
             def retry():
-                store(directory).reset([view['id']], reanalyze=view['analysed'])
+                asked = store(directory).reset([view['id']], reanalyze=view['analysed'])
+                bump()
                 if hub is not None:
                     hub.wake()
                 touched['now'] = True
                 panel.refresh()
-                ui.notify('다시 분석하도록 요청했습니다.')
+                ui.notify(reanalyze_text(asked, 1))
+
+            def unhide():
+                store(directory).set_todo_hidden(view['id'], False)
+                bump()
+                panel.refresh()
+                ui.notify('할 일 판에 다시 올렸습니다.')
 
             with card().classes('ma-modal ma-scroll'):
                 with ui.element('div').style('display:flex;gap:14px;align-items:flex-start;'
@@ -1980,6 +2259,11 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                             .props('flat dense no-caps')
                         ui.button('다시 분석', icon='refresh', on_click=retry) \
                             .props('flat dense no-caps')
+                        # Only for a mail whose card was swept off the board: this is
+                        # the one place that can put it back, so it has to be here.
+                        if view['todo_hidden']:
+                            ui.button('할 일 판에 다시 올리기', icon='playlist_add',
+                                      on_click=unhide).props('flat dense no-caps')
                         ui.button(icon='delete_outline',
                                   on_click=lambda: ask_delete([view['id']])) \
                             .props('flat dense round text-color=negative').tooltip('삭제')
@@ -2043,8 +2327,12 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                         .props('flat dense no-caps')
                 draft = ui.textarea(value=view['draft']).classes('w-full')
                 draft.props('outlined autogrow debounce=800')
-                draft.on_value_change(lambda event: store(directory).set_draft(view['id'],
-                                                                              event.value or ''))
+
+                def save(text):
+                    store(directory).set_draft(view['id'], text or '')
+                    bump()      # 검토 전 초안 is a 대시보드 card, and this is what moves it
+
+                draft.on_value_change(lambda event: save(event.value))
 
         with shell('/mail', token):
             with card().style('padding:12px 14px;margin-bottom:14px'):
@@ -2093,8 +2381,24 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
 
             detail.on_value_change(left)
             rows()
+
+            def watch():
+                """Follow the worker: a mail that starts analysing says so here.
+
+                Not while a dialog is over the list — rebuilding rows nobody can see
+                costs a query and would pull the ground out from under the open mail.
+                The signature is what keeps this to one query on a quiet second: a
+                repaint clears the checkboxes, so it must happen only when something
+                the table actually draws has changed.
+                """
+                if detail.value or confirm.value:
+                    return
+                if list_signature(listing(directory, config, state)) != live['signature']:
+                    rows.refresh()
+
+            ui.timer(LIVE_SECONDS, watch)
             if opened:
-                # A link from 현황·일정·할 일·초안 points at one mail; open that mail.
+                # A link from 대시보드·일정·할 일·초안 points at one mail; open that mail.
                 detail.open()
 
     # 일정 -------------------------------------------------------------
@@ -2155,6 +2459,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 store(directory).set_handled(key, state)
             else:
                 store(directory).set_todo_state(int(key), state)
+            bump()
             lanes.refresh()
 
         def move(card_row, state):
@@ -2166,8 +2471,22 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 apply_move(landed[0], landed[1], state)
 
         def drop(card_row):
-            store(directory).delete_todo(card_row['key'])
+            """Take a card off the board. A mail card is swept, never deleted.
+
+            The 할 일 판 grows a card for every analysed mail that produced a next
+            action, and before this there was no way to be finished with one except to
+            mark the mail 완료 — which is a different sentence. Sweeping hides the card
+            and leaves the mail exactly as it was; 메일 화면 puts it back.
+            """
+            if card_row['kind'] == 'mail':
+                store(directory).set_todo_hidden(card_row['key'], True)
+                said = '할 일 판에서 치웠습니다. 메일은 그대로 있고, 메일 화면에서 다시 올릴 수 있습니다.'
+            else:
+                store(directory).delete_todo(card_row['key'])
+                said = '할 일을 지웠습니다.'
+            bump()
             lanes.refresh()
+            ui.notify(said)
 
         def add():
             text = (entry.value or '').strip()
@@ -2178,6 +2497,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 ui.notify('설정을 먼저 저장하세요.')
                 return
             store(directory).add_todo(account, text, (due.value or '').strip())
+            bump()
             entry.set_value('')
             due.set_value('')
             lanes.refresh()
@@ -2247,16 +2567,20 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                                                           href('/mail', token, id=c['key']))) \
                                                 .props('flat dense round size=sm color=grey-7') \
                                                 .tooltip('메일 열기')
-                                        else:
-                                            ui.button(icon='delete_outline',
-                                                      on_click=lambda c=item: drop(c)) \
-                                                .props('flat dense round size=sm color=grey-7') \
-                                                .tooltip('삭제')
+                                        # Both kinds can leave the board; only a manual
+                                        # todo is actually deleted by it.
+                                        ui.button(icon='delete_outline',
+                                                  on_click=lambda c=item: drop(c)) \
+                                            .props('flat dense round size=sm color=grey-7') \
+                                            .tooltip('할 일 판에서 치우기 (메일은 남습니다)'
+                                                     if item['kind'] == 'mail' else '삭제')
 
         with shell('/todo', token):
             ui.label('메일에서 나온 다음 행동과, 직접 적은 할 일을 한 판에 둡니다. '
                      '카드를 끌어다 옮기거나 화살표 버튼을 눌러 옮길 수 있고, '
-                     '메일 카드를 옮기면 그 메일의 처리 상태가 함께 바뀝니다.').classes('ma-lede')
+                     '메일 카드를 옮기면 그 메일의 처리 상태가 함께 바뀝니다. '
+                     '휴지통은 카드를 판에서 치웁니다 — 메일 카드는 메일을 지우지 않습니다.') \
+                .classes('ma-lede')
             with card().style('padding:12px 14px;margin-bottom:14px'):
                 with ui.element('div').style('display:flex;gap:8px;flex-wrap:wrap'):
                     entry = ui.input(placeholder='할 일 추가').props('dense outlined') \
@@ -2276,11 +2600,17 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             return
         account = account_of(config)
         chosen = {'id': request.query_params.get('id')}
+        live = {'ids': ()}
+
+        def queue_ids():
+            rows = list(store(directory).unedited_drafts(account)) if account else []
+            return tuple(row['id'] for row in review_queue(rows))
 
         @ui.refreshable
         def queue():
             rows = list(store(directory).unedited_drafts(account)) if account else []
             data = draft_view(rows, chosen['id'])
+            live['ids'] = tuple(item['id'] for item in data['queue'])
             if not data['queue']:
                 with card():
                     empty('검토할 초안이 없습니다. 답변이 필요한 메일이 분석되면 여기에 모입니다.')
@@ -2298,6 +2628,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
 
             def done():
                 store(directory).set_handled(view['id'], HANDLED)
+                bump()
                 chosen['id'] = None
                 queue.refresh()
 
@@ -2327,8 +2658,12 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     ui.label('입력을 멈추면 자동 저장됩니다.').classes('ma-meta__item')
                 draft = ui.textarea(value=view['draft']).classes('w-full')
                 draft.props('outlined autogrow debounce=800')
-                draft.on_value_change(lambda event: store(directory).set_draft(view['id'],
-                                                                              event.value or ''))
+
+                def save(text):
+                    store(directory).set_draft(view['id'], text or '')
+                    bump()
+
+                draft.on_value_change(lambda event: save(event.value))
                 with ui.element('div').style('display:flex;gap:6px;flex-wrap:wrap;'
                                              'margin-top:12px;align-items:center'):
                     ui.button('처리 완료', icon='done', on_click=done) \
@@ -2347,7 +2682,37 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
         with shell('/drafts', token):
             ui.label('답변이 필요한데 아직 손대지 않은 초안입니다. 입력을 멈추면 자동 저장되고, '
                      '저장하면 검토 완료로 간주해 목록에서 빠집니다.').classes('ma-lede')
+            with ui.element('div').classes('ma-alert ma-alert--warn') \
+                    .style('margin-bottom:12px') as notice:
+                ui.icon('mark_email_unread').style('font-size:16px')
+                arrived = ui.label('').style('font-size:12px')
+                ui.space()
+                ui.button('새로 고침', icon='refresh',
+                          on_click=lambda: queue.refresh()).props('flat dense no-caps')
+            notice.set_visibility(False)
             queue()
+
+            def watch():
+                """Say that the queue moved; never rebuild it from under the typist.
+
+                The one thing on this page is a textarea somebody is in the middle of,
+                and refresh() would replace it with whatever the database last saw —
+                exactly the edit-eating the window's draft_baseline exists to stop. So
+                a new draft is announced and the reader decides when to take it.
+                """
+                ids = queue_ids()
+                if ids == live['ids']:
+                    notice.set_visibility(False)
+                    return
+                if not live['ids']:
+                    queue.refresh()     # nothing on screen to lose
+                    return
+                fresh = len([ident for ident in ids if ident not in live['ids']])
+                arrived.set_text(f'새 초안 {fresh}건이 도착했습니다.' if fresh
+                                 else '검토할 초안 목록이 바뀌었습니다.')
+                notice.set_visibility(True)
+
+            ui.timer(REFRESH_SECONDS, watch)
 
     # 상담 -----------------------------------------------------------
 
@@ -2375,11 +2740,11 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                                 name='나' if mine else 'Codex', sent=mine,
                                 stamp=line_text(at, '')[:14], text_html=not mine)
             if busy['now']:
+                # The dots are the whole message: the composer is already disabled, and
+                # the page says out loud that an answer takes a while.
                 with ui.chat_message(name='Codex', sent=False):
                     with ui.element('div').classes('ma-wait'):
                         ui.spinner(type='dots', size='sm')
-                        ui.label('답하는 중입니다… 수십 초 걸릴 수 있습니다.') \
-                            .classes('ma-meta__item')
 
         async def scroll():
             """Yield a tick first: the new bubble is not laid out when refresh() returns.
@@ -2663,7 +3028,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             with ui.element('div').style('margin-top:14px'):
                 with card('업데이트', 'system_update_alt'):
                     update_panel()
-            ui.timer(REFRESH_SECONDS, body.refresh)
+            ui.timer(LIVE_SECONDS, body.refresh)
 
     # 설정 -------------------------------------------------------------
 
@@ -2909,7 +3274,7 @@ def serve(directory, config, token=None, host='127.0.0.1', port=None, native=Fal
                                                 min(WINDOW_MIN[1], height)))
     # flush: a redirected stdout is block-buffered, and spike.ps1 reads this line
     # out of the log to know the server is up.
-    print(f'메일 도우미 현황: http://{host}:{port}{target}', flush=True)
+    print(f'메일 도우미 대시보드: http://{host}:{port}{target}', flush=True)
     ui.run(host=host, port=port, reload=False, show=target if show else False,
            native=native, dark=False, title=f'메일 도우미 {__version__}',
            storage_secret=token, favicon='📬')

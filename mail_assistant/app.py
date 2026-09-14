@@ -24,9 +24,9 @@ from .overview import overview
 from .report import remember_secret, report
 from .settings import CUSTOM, FIELDS, model_rows, model_value, normalize, read_models
 from .style import ACCENT, CALM, DASH_BLUE, DASH_GREEN, DASH_RED, SOON, TODAY_FILL, tk_color
-# Size only: webui imports no toolkit at module level, and both windows should
-# open at the same size rather than each picking its own.
-from .webui import WINDOW_MIN, window_size
+# Size and one sentence: webui imports no toolkit at module level, and both windows
+# should open at the same size — and say the same thing when 다시 분석 was refused.
+from .webui import WINDOW_MIN, reanalyze_text, window_size
 
 ICONS = {'start': '▶', 'stop': '■', 'now': '⟳', 'excel': '▤', 'test': '⇄', 'settings': '⚙',
          'login': '⌨', 'folder': '📁', 'mail': '✉', 'retry': '↻', 'save': '💾', 'update': '⬆'}
@@ -426,9 +426,12 @@ class App:
         again = bool(row['result'])
         if again and not messagebox.askyesno('다시 분석', '기존 분석 결과를 지우고 다시 분석합니다. 계속할까요?'):
             return
-        self.store().reset([row['id']], reanalyze=again)
+        # reset() skips a mail Codex is holding right now, so the count is what the
+        # line may claim — the web screen says the same sentence for the same reason.
+        asked = self.store().reset([row['id']], reanalyze=again)
         self.hub.wake()
-        self.log('다시 분석하도록 요청했습니다.' + ('' if self.running() else ' 시작을 누르면 처리됩니다.'))
+        self.log(reanalyze_text(asked, 1)
+                 + ('' if not asked or self.running() else ' 시작을 누르면 처리됩니다.'))
         self.refresh()
 
     # 일정 -------------------------------------------------------------

@@ -14,6 +14,9 @@ KST = timezone(timedelta(hours=9))
 HANDLED = '처리'
 PROGRESS = '진행'      # the kanban's middle column; '' -> 진행 -> 처리
 FAILED = '실패'
+# Set by the worker while Codex is actually looking at a mail, cleared the moment it
+# is not. One process at a time (services.codex_slot), so at most one row carries it.
+ANALYZING = '분석 중'
 LOG_SCHEMA = 'CREATE TABLE IF NOT EXISTS log (at TEXT NOT NULL, text TEXT NOT NULL)'
 LOG_TRIM_EVERY = 50
 LIST_LIMIT = 50
@@ -31,9 +34,10 @@ def sql_text(value):
 
 def state_case():
     """state_of() as SQL, so '상태' can be sorted without reading every row."""
-    return (f'CASE WHEN handled = {sql_text(HANDLED)} THEN 4 '
-            f'WHEN handled = {sql_text(PROGRESS)} THEN 3 '
-            'WHEN result IS NOT NULL THEN 2 WHEN attempts > 0 THEN 1 ELSE 0 END')
+    return (f'CASE WHEN handled = {sql_text(HANDLED)} THEN 5 '
+            f'WHEN handled = {sql_text(PROGRESS)} THEN 4 '
+            "WHEN result IS NOT NULL THEN 3 WHEN analyzing <> '' THEN 1 "
+            'WHEN attempts > 0 THEN 2 ELSE 0 END')
 
 
 def priority_case():
@@ -44,17 +48,20 @@ def priority_case():
 
 
 # One fragment per filter value, so the list never loads a row it will not show.
+# 분석 중 wins over both 분석 대기 and 실패 for a row that is in Codex right now:
+# a retry that is being retried is not waiting, and state_of() reads the same order.
 STATE_SQL = {
     HANDLED: ('handled = ?', (HANDLED,)),
     PROGRESS: ('handled = ?', (PROGRESS,)),
     '미처리': ("handled = '' AND result IS NOT NULL", ()),
-    '분석 대기': ('result IS NULL AND attempts = 0', ()),
-    FAILED: ('result IS NULL AND attempts > 0', ()),
+    ANALYZING: ("result IS NULL AND analyzing <> ''", ()),
+    '분석 대기': ("result IS NULL AND attempts = 0 AND analyzing = ''", ()),
+    FAILED: ("result IS NULL AND attempts > 0 AND analyzing = ''", ()),
 }
 SORTS = {'received': 'received', 'subject': 'subject', 'sender': 'sender',
          'category': 'category', 'priority': priority_case(), 'state': state_case()}
 # The filter values a screen offers, in the order it offers them. '' is 전체.
-STATES = ('', '분석 대기', FAILED, '미처리', PROGRESS, HANDLED)
+STATES = ('', '분석 대기', ANALYZING, FAILED, '미처리', PROGRESS, HANDLED)
 
 
 def now():
@@ -148,7 +155,11 @@ class Store:
                      # Denormalised for the list, exactly as subject/sender are: the
                      # filter and the sort must not have to parse every result JSON.
                      ('category', "TEXT NOT NULL DEFAULT ''"),
-                     ('priority', "TEXT NOT NULL DEFAULT ''"))
+                     ('priority', "TEXT NOT NULL DEFAULT ''"),
+                     # The worker's own marker, and the one card the kanban was told
+                     # to forget. Both belong to a mail, so both are columns on it.
+                     ('analyzing', "TEXT NOT NULL DEFAULT ''"),
+                     ('todo_hidden', 'INTEGER NOT NULL DEFAULT 0'))
         with self.db:
             for column, declaration in additions:
                 if column not in present:
@@ -244,7 +255,7 @@ class Store:
         return dict(self.db.execute('SELECT COUNT(*) total, COALESCE(SUM(result IS NULL),0) pending, COALESCE(SUM(result IS NOT NULL AND exported=0),0) waiting FROM mail WHERE account=?', (account,)).fetchone())
 
     LIST_COLUMNS = ('id, received, subject, sender, parsed, result, handled, draft_edit, '
-                    'attempts, retry_at, error, exported, notified')
+                    'attempts, retry_at, error, exported, notified, analyzing, todo_hidden')
 
     def page(self, account, limit=2000):
         """Newest first, without the raw blob. Filtering happens in filter_rows().
@@ -355,11 +366,41 @@ class Store:
             self.db.execute('UPDATE mail SET draft_edit=? WHERE id=?', (text, ident))
 
     def reset(self, ids, reanalyze=False):
-        """Clear the backoff so the next cycle picks these up again."""
+        """Clear the backoff so the next cycle picks these up again; count what moved.
+
+        A mail Codex is looking at right now is skipped: clearing its result would be
+        overwritten by the answer already on its way, so the request would vanish with
+        nothing on screen saying so. The count is what lets the screen say it instead.
+        """
         clause = ", result=NULL, analyzed_at='', category='', priority=''" if reanalyze else ''
+        changed = 0
         with self.db:
-            self.db.executemany(f"UPDATE mail SET attempts=0, retry_at=0, error=''{clause} WHERE id=?",
-                                ((i,) for i in ids))
+            for ident in ids:
+                cursor = self.db.execute(
+                    f"UPDATE mail SET attempts=0, retry_at=0, error=''{clause} "
+                    "WHERE id=? AND analyzing=''", (ident,))
+                changed += cursor.rowcount
+        return changed
+
+    def analyzing(self, account):
+        """The id Codex is on right now, or '' — one process at a time, so one row."""
+        row = self.db.execute("SELECT id FROM mail WHERE account=? AND analyzing<>'' "
+                              'ORDER BY rowid LIMIT 1', (account,)).fetchone()
+        return row[0] if row else ''
+
+    def mark_analyzing(self, account, ident):
+        """Exactly one row carries the marker; clearing first is what keeps it true."""
+        with self.db:
+            self.db.execute("UPDATE mail SET analyzing='' WHERE account=? AND analyzing<>''",
+                            (account,))
+            if ident:
+                self.db.execute('UPDATE mail SET analyzing=? WHERE id=?', (now(), ident))
+
+    def set_todo_hidden(self, ident, hidden=True):
+        """Take a mail's card off the 할 일 판 without touching the mail itself."""
+        with self.db:
+            self.db.execute('UPDATE mail SET todo_hidden=? WHERE id=?',
+                            (1 if hidden else 0, ident))
 
     def retryable(self, account):
         return self.db.execute(f'SELECT {self.LIST_COLUMNS} FROM mail '
@@ -437,6 +478,10 @@ def state_of(row):
         return PROGRESS
     if row['result']:
         return '미처리'
+    # Before 실패 on purpose: a mail on its third attempt, in Codex right now, is
+    # being analysed — saying '2회 실패' of it is a week-old fact.
+    if row['analyzing']:
+        return ANALYZING
     if row['attempts']:
         return f"{row['attempts']}회 실패"
     return '분석 대기'
