@@ -1268,7 +1268,7 @@ window.mailCalendar = function (events, tries) {
 
 
 def build(directory, config, token, hub=None, services=None, config_path=None,
-          can_start=True):
+          can_start=True, updater=None):
     """Register the pages. The token gates the data, not the static assets."""
     import subprocess
 
@@ -1277,6 +1277,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
 
     from . import services as helpers, update
     from .report import remember_secret
+    from .updater import FAILED, READY, WORKING, consequence, offer_line, progress_text
 
     config_path = config_path or (directory / 'config.json')
 
@@ -1285,6 +1286,102 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
 
     def allowed(request):
         return not token or request.query_params.get('t') == token
+
+    # 업데이트 ---------------------------------------------------------
+
+    def collecting():
+        return hub is not None and hub.running()
+
+    async def install():
+        """Stop collecting, then bring the server down so main() can run Setup.
+
+        The installer replaces the files this process is running from, so it cannot
+        start until the window is gone — and main()'s finally is what starts it, after
+        the mutex is closed. Everything here does is get out of the way in that order.
+        """
+        if hub is not None:
+            hub.halt()
+        for _ in range(600):        # the window waited the same way, for the same reason
+            if not collecting():
+                break
+            await asyncio.sleep(1.0)
+        app.shutdown()
+
+    def update_body(refresh, close=None):
+        """Whichever of the four states the updater is in. Built by both screens."""
+        if updater is None:
+            empty('이 환경에서는 업데이트를 확인할 수 없습니다.')
+            return
+        if updater.state == READY:
+            with ui.element('div').classes('ma-wait'):
+                ui.spinner(size='sm')
+                ui.label('설치를 시작합니다. 잠시 후 메일 도우미가 다시 열립니다…') \
+                    .style(f'color:{INK};font-size:13px')
+            return
+        if updater.state == WORKING:
+            total = updater.progress.get('total') or 0
+            done = updater.progress.get('done') or 0
+            ui.label('설치 파일을 내려받는 중입니다. 창을 닫지 마세요.') \
+                .style(f'color:{INK};font-size:13px;margin-bottom:8px')
+            ui.linear_progress(done / total if total else 0, show_value=False) \
+                .classes('ma-progress').props('size=6px rounded'
+                                              + ('' if total else ' indeterminate'))
+            with ui.element('div').classes('ma-row').style('border:none'):
+                ui.label(progress_text(updater.progress)).classes('ma-meta__item')
+                ui.space()
+                ui.button('취소', on_click=updater.stop).props('flat dense no-caps')
+            return
+        if updater.offer is None:
+            empty(f'최신 버전을 쓰고 있습니다. (현재 {__version__})')
+            return
+        ui.label(f"새 버전 {updater.offer['version']}이(가) 나왔습니다.") \
+            .style(f'color:{INK};font-size:16px;font-weight:700;letter-spacing:-.01em')
+        ui.label(offer_line(updater.offer, __version__)).classes('ma-meta__item') \
+            .style('margin:2px 0 12px')
+        ui.label('변경 내용').classes('ma-field')
+        with ui.element('div').classes('ma-sunken ma-scroll ma-log') \
+                .style('max-height:190px;width:100%;margin-bottom:10px'):
+            ui.label(updater.offer['notes']).style('white-space:pre-wrap;'
+                                                   'overflow-wrap:anywhere')
+        ui.label(consequence(collecting())).classes('ma-lede').style('margin-bottom:0')
+        if updater.state == FAILED and updater.message:
+            with ui.element('div').classes('ma-alert').style('margin-top:10px'):
+                ui.icon('error_outline').style('font-size:16px')
+                ui.label(updater.message).style('font-size:12px')
+        elif updater.message:
+            ui.label(updater.message).classes('ma-meta__item').style('margin-top:8px')
+
+        async def take():
+            # The dialog stays open on purpose: it is where the progress bar is, and
+            # closing it here left the user staring at a page with nothing happening.
+            updater.asked = True
+            refresh()
+            done = await nicerun.io_bound(updater.take, collecting())
+            refresh()
+            if done:
+                await install()
+
+        def skip():
+            version = updater.skip()
+            updater.asked = True
+            if close:
+                close()
+            refresh()
+            ui.notify(f'{version} 버전은 건너뜁니다. 다음 버전이 나오면 다시 알려 드립니다.')
+
+        def later():
+            updater.asked = True
+            if close:
+                close()
+            ui.notify('실행 화면의 업데이트에서 언제든 설치할 수 있습니다.')
+
+        with ui.element('div').style('display:flex;gap:6px;margin-top:14px;flex-wrap:wrap'):
+            ui.button('지금 업데이트', icon='system_update_alt', on_click=take) \
+                .props('unelevated dense no-caps')
+            ui.button('나중에', on_click=later).props('outline dense no-caps')
+            ui.space()
+            ui.button('이 버전 건너뛰기', on_click=skip) \
+                .props('flat dense no-caps text-color=grey-7')
 
     # 현황 -------------------------------------------------------------
 
@@ -1344,8 +1441,30 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             for block in (kpi_row, deadline_block, todo_block, summary_row):
                 block.refresh()
 
+        @ui.refreshable
+        def offer_body():
+            update_body(offer_body.refresh, close=lambda: dialog.close())
+
+        async def look():
+            """The window checked 600ms after opening; update.check() gates the rest."""
+            if updater is None or updater.asked or updater.offer is not None:
+                return
+            if await nicerun.io_bound(updater.look):
+                offer_body.refresh()
+                dialog.open()
+
         read()
         with shell('/', token):
+            dialog = ui.dialog()
+            with dialog, card().style('max-width:620px'):
+                offer_body()
+            if updater is not None:
+                ui.timer(0.6, look, once=True)
+                # Only while a download is running; idle this costs one dead callback.
+                ui.timer(0.4, lambda: offer_body.refresh()
+                         if updater.state == WORKING else None)
+                if updater.waiting() and not updater.asked:
+                    dialog.open()
             kpi_row()
             with ui.element('div').classes('ma-split').style('margin-top:14px'):
                 with ui.element('div').classes('ma-stack'):
@@ -2293,6 +2412,28 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                               on_click=lambda: reveal(directory, '데이터 폴더')) \
                         .props('flat dense no-caps text-color=secondary')
             body()
+            with ui.element('div').style('margin-top:14px'):
+                with card('업데이트', 'system_update_alt'):
+                    @ui.refreshable
+                    def update_block():
+                        update_body(update_block.refresh)
+
+                    update_block()
+                    if updater is not None:
+                        ui.timer(0.4, lambda: update_block.refresh()
+                                 if updater.state == WORKING else None)
+
+                        async def relook():
+                            if await nicerun.io_bound(updater.look, True):
+                                update_block.refresh()
+                            else:
+                                ui.notify('새 버전이 없습니다.')
+                                update_block.refresh()
+
+                        if not updater.waiting() and updater.state != WORKING:
+                            ui.button('지금 확인', icon='refresh', on_click=relook) \
+                                .props('flat dense no-caps text-color=secondary') \
+                                .style('margin-top:10px')
             ui.timer(REFRESH_SECONDS, body.refresh)
 
     # 설정 -------------------------------------------------------------
@@ -2429,12 +2570,12 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
 
 
 def serve(directory, config, token=None, host='127.0.0.1', port=None, native=False, show=False,
-          hub=None, services=None, config_path=None, can_start=True):
+          hub=None, services=None, config_path=None, can_start=True, updater=None):
     """Loopback only: the page serves mail content and must not be reachable off the PC."""
     from nicegui import app, ui
     token = token or new_token()
     port = port or open_port(host)
-    build(directory, config, token, hub, services, config_path, can_start)
+    build(directory, config, token, hub, services, config_path, can_start, updater)
     app.on_shutdown(release_store)
     # Whatever opens the page has to carry the token, or it lands on the refusal.
     # nicegui's `show` takes a path (it appends it to the root URL), and the native

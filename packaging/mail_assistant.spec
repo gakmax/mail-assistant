@@ -63,11 +63,11 @@ HIDDEN = [
 EXCLUDES = ['numpy', 'pandas', 'matplotlib', 'scipy', 'PIL', 'pytest',
             'pip', 'wheel', 'IPython', 'sqlalchemy', 'setuptools', 'pkg_resources',
             # nicegui.testing pulls selenium in; the shipped build never tests.
-            'selenium',
-            # pywebview (nicegui's native mode) is not in requirements.txt, so a CI
-            # build would not have it anyway. Excluding it says so out loud instead
-            # of shipping a `--native` that works only on a dev box, and saves 4.3MB.
-            'webview', 'pythonnet', 'clr_loader']
+            'selenium']
+# pywebview is NOT excluded any more: MailAssistant.exe *is* the web screens in a
+# pywebview frame, so webview/pythonnet/clr_loader are load-bearing. It costs 4.3MB
+# because on Windows it drives WebView2 — the Edge engine already installed — rather
+# than embedding a browser the way Electron does.
 
 # The browser fetches these from /vendor. They are data, not importable modules, so
 # nothing fails until someone opens the 일정 page — selftest's check_webui catches it.
@@ -93,15 +93,18 @@ def wanted(entry):
     """Analysis.datas holds (destination, source, typecode), so match on the destination."""
     return not any(piece in str(entry[0]).replace('\\', '/') for piece in DROP_ASSETS)
 
+# Both exes serve the same screens now, so both carry nicegui, the vendored assets
+# and uvicorn. nicegui used to be excluded here, when MailAssistant.exe was tkinter:
+# leaving that in would have frozen a window that cannot import its own window.
+SERVER = ['webview'] + collect_submodules('uvicorn')
 gui = Analysis([str(ROOT / 'packaging' / 'entry_gui.py')], pathex=[str(ROOT)],
-               hiddenimports=HIDDEN, excludes=EXCLUDES + ['openpyxl', 'nicegui'],
-               noarchive=False)
-# `MailAssistantTools.exe web` is what pulls nicegui in; uvicorn picks its protocol
-# and loop implementations by name at runtime, so they have to be named here.
+               datas=VENDOR, hiddenimports=HIDDEN + SERVER,
+               excludes=EXCLUDES + ['openpyxl'], noarchive=False)
+# uvicorn picks its protocol and loop implementations by name at runtime, and pywebview
+# reaches its Edge backend through pythonnet, so neither is reachable by static analysis.
 tools = Analysis([str(ROOT / 'packaging' / 'entry_tools.py')], pathex=[str(ROOT)],
                  datas=VENDOR,
-                 hiddenimports=HIDDEN + ['openpyxl', 'diagnose', 'sample', 'demo']
-                 + collect_submodules('uvicorn'),
+                 hiddenimports=HIDDEN + SERVER + ['openpyxl', 'diagnose', 'sample', 'demo'],
                  excludes=EXCLUDES, noarchive=False)
 
 for analysis in (gui, tools):

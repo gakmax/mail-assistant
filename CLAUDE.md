@@ -123,9 +123,12 @@ Two things hold that number down and both are easy to lose:
   one deliberate exception** and must stay out of `DROP_ASSETS` in both specs: every
   chart in `webui.py` is a `ui.echart`, so its 1.8MB ships. `selftest`'s
   `check_echart` fails the CI build if a spec change drops it again.
-* `pywebview` is excluded on purpose. `requirements.txt` does not install it, so a
-  CI build would not have it: shipping a `web --native` that only works on a dev box
-  is worse than not offering it.
+* `pywebview` used to be excluded for exactly one reason — `requirements.txt` did not
+  install it — and that reason was circular, so 0.4.0 put it in requirements instead.
+  **`MailAssistant.exe` is now the screens in a pywebview frame**, which makes
+  `webview`, `pythonnet` and `clr_loader` load-bearing. It costs 4.3MB because on
+  Windows pywebview drives WebView2, the Edge engine already on the machine, rather
+  than embedding a browser the way Electron does.
 
 **The browser fetches third-party assets from `/vendor`, never a CDN.** FullCalendar
 (MIT, standard views only) and Pretendard (OFL-1.1, one 2.06MB variable woff2) are
@@ -227,12 +230,35 @@ The payload rides in `ui.add_body_html` instead, the `<script src>` goes in the
 retries while Vue mounts the div, then writes `data-state` so a failure is visible
 instead of silent.
 
-**The window lives in `app.py`, the worker in `hub.py`, the entry point in
-`__main__.py`.** `main()` owns the crash hooks, the mutex, `update.sweep()` and the
-installer launch in its `finally`; it builds the `Hub` and hands it to `App`.
-Everything visible belongs to `App`, which exposes `boot`, `close`, `start`,
-`pending_installer`, `pending_autostart` and `offer` because the entry point needs
-them after `mainloop()` returns.
+**The window is the web screens; `app.py` is the fallback, not the default.**
+`main()` still owns the crash hooks, the mutex, `update.sweep()` and the installer
+launch in its `finally`; what changed is what it opens. `native_ready()` decides:
+`--window`, or a `webview` that will not import, takes `open_window()` and the tkinter
+`App` exactly as before. Do not delete `app.py` — it is the only thing a PC without a
+WebView2 runtime can still show, and nothing in CI ever opens a pywebview frame, so
+the fallback is the only tested-by-a-human path on such a machine. Both paths hand
+`main()` the same `pending` dict, because the `finally` must not care which ran.
+
+**A windowed build may have no `sys.stdout` at all.** `MailAssistant.exe` is built
+`console=False`, where PyInstaller can leave `sys.stdout` and `sys.stderr` as `None` —
+and uvicorn's logger and nicegui's own startup line both write to them. The tkinter
+window never printed, so this only became load-bearing when the screens became the
+window: `route_output()` runs before `update.sweep()` and points both at
+`window.log`, truncated per launch so it cannot grow. Remove it and the app dies
+before anything is drawn, with a traceback only `entry_gui.py` would catch.
+
+**Both exes carry nicegui now.** The GUI `Analysis` used to list `'nicegui'` in its
+excludes, from when `MailAssistant.exe` was tkinter and only the tools exe served
+pages. Left in place it would have frozen a window that cannot import its own window —
+and nothing but a real Windows build would have said so.
+
+**The update offer is a state machine in `updater.py`, not in a screen.** `Updater`
+holds `offer`, `state`, `progress` and `message`, and — the part `main()` depends on —
+`installer` and `autostart`. Both windows drive the same object, so the install order
+is identical either way: the screen stops the worker, brings the server down with
+`app.shutdown()`, and only then does `main()`'s `finally` close the mutex and launch
+Setup. Nothing in `updater.py` imports a toolkit, which is what lets the tests cover
+every state off Windows.
 
 **The `Hub` owns the worker; a screen only watches it.** `Hub.start()` returns
 False when a worker is already running, which is what stops a second screen from

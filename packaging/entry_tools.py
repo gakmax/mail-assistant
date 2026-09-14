@@ -121,6 +121,16 @@ def check_chat():
     return f'{total:,} bytes'
 
 
+def check_native():
+    """MailAssistant.exe is the web screens in a pywebview frame. No frame, no window.
+
+    Imported, not just located: pywebview reaches its WebView2 backend through
+    pythonnet, and a bundle that lost clr_loader fails here rather than on a user's PC.
+    """
+    import webview
+    return f"pywebview {getattr(webview, '__version__', '?')}"
+
+
 def selftest():
     """Every import the app makes lazily, so a broken bundle fails here and not later."""
     checks = [
@@ -149,6 +159,8 @@ def selftest():
         # The answer bubble is ui.html under the hood: DOMPurify is the second lock on
         # what rich_text() produced, and a spec that drops it shows an empty answer.
         ('nicegui 상담 자산', check_chat),
+        # The window itself: MailAssistant.exe opens the screens in a pywebview frame.
+        ('pywebview (창)', check_native),
     ]
     failed = 0
     for name, probe in checks:

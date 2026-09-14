@@ -8,3 +8,6 @@ openpyxl>=3.1,<4
 # Pinned to a minor: a nicegui release moves its vendored Vue/Quasar and with them
 # the bundle size and the CSS the pages are laid out against.
 nicegui==3.16.*
+# The frame the web screens live in. On Windows pywebview drives WebView2 — the
+# Edge engine already on the machine — so this is 4.3MB, not an embedded browser.
+pywebview>=5.3,<6; sys_platform == 'win32'
