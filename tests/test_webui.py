@@ -9,16 +9,22 @@ from contextlib import contextmanager
 from email.message import EmailMessage
 from pathlib import Path
 
-from mail_assistant.core import HANDLED, PROGRESS, Store, account_key
+from mail_assistant.core import FAILED, HANDLED, PROGRESS, Store, account_key
 from mail_assistant.dashboard import PRIORITIES
 from mail_assistant.hub import Hub
-from mail_assistant.overview import DUE_DAYS, overview
-from mail_assistant.webui import (CARD_TONES, DEFAULT_LIST, STATUS, bar_rows, deadline_rows,
+from mail_assistant.overview import DUE_DAYS, due_window, failures, oldest_open, overview
+from mail_assistant.webui import (CARD_TONES, DEFAULT_LIST, FONT_FILE, STATE_TONES, STATUS,
+                                  THEME, TREND_LABELS,
+                                  bar_option, bar_rows, card_icon, deadline_rows,
                                   detail_view, href, list_state, listing, new_token, open_port,
-                                  release_store, run_summary, snapshot, summary_line, tidy_body,
+                                  release_store, run_summary, snapshot,
+                                  soft_of, summary_line, tag_cell, tidy_body,
                                   calendar_events, card_target, countdown_text, run_view,
-                                  board, chat_context, draft_view, label_step, stats_view,
-                                  vendor_path)
+                                  FAILED_CARD, board, board_counts, card_hint, card_rows,
+                                  chat_context, draft_view, label_step, stats_view,
+                                  deadline_progress, drag_drop, drag_payload, drag_start,
+                                  rich_text,
+                                  trend_option, vendor_path)
 
 CONFIG = {'host': 'pop3s.hiworks.com', 'port': 995, 'email': 'me@corp.example'}
 TODAY = datetime.date(2026, 9, 11)
@@ -54,6 +60,113 @@ def result(priority='보통', deadline='', reply=False):
             'priority': priority, 'priority_reason': '근거', 'next_action': '확인',
             'reply_needed': reply, 'reply_subject': 'Re: 제목' if reply else '',
             'reply_draft': '초안' if reply else ''}
+
+
+def style_expression(template):
+    """What sits inside the slot's :style="…" — the part that must survive the quotes."""
+    head = template.split(':style="', 1)[1]
+    return head.split('">', 1)[0]
+
+
+class ChartOptionTests(unittest.TestCase):
+    """The option dicts are pure, so the charts are testable without a browser."""
+
+    PAIRS = [('업무 요청', 3), ('견적·계약', 0), ('문의', 5)]
+
+    def test_bars_read_top_down_in_the_order_given(self):
+        option = bar_option(self.PAIRS)
+        self.assertEqual(option['yAxis']['data'], ['문의', '견적·계약', '업무 요청'])
+        self.assertEqual([item['value'] for item in option['series'][0]['data']], [5, 0, 3])
+
+    def test_a_zero_still_draws_its_track(self):
+        # Without showBackground a 0 is an invisible row, which is what the hand-drawn
+        # bars used a grey track to avoid.
+        self.assertTrue(bar_option(self.PAIRS)['series'][0]['showBackground'])
+
+    def test_a_tone_map_colours_each_bar_by_name(self):
+        option = bar_option([(name, 1) for name, _ in PRIORITIES], STATUS)
+        colours = [item['itemStyle']['color'] for item in option['series'][0]['data']]
+        self.assertEqual(colours, [STATUS[name] for name, _ in reversed(PRIORITIES)])
+
+    def test_the_trend_draws_one_line_per_measure(self):
+        rows = [(f'2026-09-{day:02d}', {'collected': day, 'analyzed': 0, 'exported': 1})
+                for day in range(1, 8)]
+        option = trend_option(rows)
+        self.assertEqual([series['name'] for series in option['series']],
+                         [label for _, label in TREND_LABELS])
+        self.assertEqual(option['xAxis']['data'][0], '09-01')
+        self.assertEqual(option['series'][0]['data'], list(range(1, 8)))
+
+    def test_ninety_days_drop_their_symbols_and_thin_their_labels(self):
+        rows = [(f'2026-{1 + day // 28:02d}-{1 + day % 28:02d}',
+                 {'collected': 0, 'analyzed': 0, 'exported': 0}) for day in range(90)]
+        option = trend_option(rows)
+        self.assertFalse(option['series'][0]['showSymbol'])
+        self.assertEqual(option['xAxis']['axisLabel']['interval'], label_step(90) - 1)
+
+
+class TagCellTests(unittest.TestCase):
+    def test_the_expression_never_closes_its_own_attribute(self):
+        # The whole lookup lives inside :style="…"; one double quote in it and the
+        # browser reads the rest of the expression as markup.
+        self.assertNotIn('"', style_expression(tag_cell(STATE_TONES)))
+        self.assertNotIn('"', style_expression(tag_cell(STATUS, failure='#c00000')))
+
+    def test_every_tone_reaches_the_lookup(self):
+        template = tag_cell(STATE_TONES)
+        for name, colour in STATE_TONES.items():
+            self.assertIn(f"'{name}':'color:{colour}", template)
+
+    def test_a_counted_failure_is_matched_by_substring(self):
+        # '3회 실패' carries its count, so it can never be a key in the table.
+        self.assertIn("props.value.includes('실패')", tag_cell(STATE_TONES, failure='#c00000'))
+
+    def test_an_empty_cell_draws_no_pill(self):
+        self.assertIn('v-if="props.value"', tag_cell({}))
+
+    def test_the_wash_comes_from_the_tone(self):
+        self.assertEqual(soft_of('#123456'), '#1234561a')
+
+
+class CardRowTests(unittest.TestCase):
+    """The fifth card, and the line under a number."""
+
+    def data(self, failed=0, oldest=None):
+        return {'cards': {'미처리 메일': 3, '긴급·높음': 1, '7일 내 마감': 2, '검토 전 초안': 0},
+                'failed': failed, 'oldest': oldest}
+
+    def test_nothing_failed_leaves_the_four_fixed_cards(self):
+        self.assertEqual([name for name, _ in card_rows(self.data())],
+                         ['미처리 메일', '긴급·높음', '7일 내 마감', '검토 전 초안'])
+
+    def test_a_failure_adds_its_own_card_at_the_end(self):
+        self.assertEqual(card_rows(self.data(failed=2))[-1], (FAILED_CARD, 2))
+
+    def test_the_failure_card_sends_you_to_the_failures(self):
+        target = card_target(FAILED_CARD, 'tok')
+        self.assertIn(f'state={FAILED}', target)
+        self.assertTrue(target.startswith('/mail?t=tok'))
+
+    def test_the_open_pile_says_how_long_as_well_as_how_many(self):
+        self.assertEqual(card_hint('미처리 메일', self.data(oldest=12)), '가장 오래된 건 12일 경과')
+
+    def test_nothing_open_means_no_line_at_all(self):
+        self.assertEqual(card_hint('미처리 메일', self.data()), '')
+        self.assertEqual(card_hint('긴급·높음', self.data(oldest=12)), '')
+
+    def test_the_failure_card_says_the_worker_keeps_trying(self):
+        self.assertIn('자동 재시도', card_hint(FAILED_CARD, self.data(failed=2)))
+
+
+class CardIconTests(unittest.TestCase):
+    def test_the_deadline_card_is_matched_by_its_suffix(self):
+        # Its name carries the window, so 7일/14일/30일 are three different keys.
+        for days in (7, 14, 30):
+            self.assertEqual(card_icon(f'{days}일 내 마감'), 'schedule')
+
+    def test_the_fixed_cards_keep_their_own_icons(self):
+        self.assertEqual(card_icon('미처리 메일'), 'inbox')
+        self.assertEqual(card_icon('긴급·높음'), 'priority_high')
 
 
 class BarTests(unittest.TestCase):
@@ -107,6 +220,159 @@ class DeadlineRowTests(unittest.TestCase):
                 store.set_handled(row['id'], HANDLED)
             self.assertNotIn('지난 마감', summary_line(overview(store.page(account), TODAY)))
             store.db.close()
+
+
+class OpenPileTests(unittest.TestCase):
+    """분석 실패 and 가장 오래된 건: the two numbers the 현황 cards had no way to say."""
+
+    def rows(self, folder):
+        store = Store(Path(folder) / 'mail.db')
+        account = account_key(CONFIG)
+        ids = {}
+        for uid in ('uid-1', 'uid-2', 'uid-3'):
+            ids[uid] = store.add(account, uid, mail())
+        for uid in ('uid-1', 'uid-2'):
+            store.analyzed(ids[uid], {'sender': 'a@b.c', 'subject': '제목', 'attachments': []},
+                           result())
+        return store, ids, account
+
+    def aged(self, store, ident, stamp):
+        store.db.execute('UPDATE mail SET received=? WHERE id=?', (stamp, ident))
+        store.db.commit()
+
+    def test_only_a_mail_that_tried_and_failed_counts_as_a_failure(self):
+        with workspace() as folder:
+            store, ids, account = self.rows(folder)
+            rows = list(store.page(account))
+            self.assertEqual(failures(rows), 0)       # uid-3 is 분석 대기, not 실패
+            store.db.execute('UPDATE mail SET attempts=3 WHERE id=?', (ids['uid-3'],))
+            store.db.commit()
+            self.assertEqual(failures(list(store.page(account))), 1)
+            store.db.close()
+
+    def test_the_age_is_the_oldest_one_still_open(self):
+        with workspace() as folder:
+            store, ids, account = self.rows(folder)
+            self.aged(store, ids['uid-1'], '2026-09-01T01:00:00+00:00')
+            rows = list(store.page(account))
+            self.assertEqual(oldest_open(rows, TODAY), 10)
+            store.db.close()
+
+    def test_closing_the_oldest_moves_the_age_to_the_next_one(self):
+        with workspace() as folder:
+            store, ids, account = self.rows(folder)
+            self.aged(store, ids['uid-1'], '2026-09-01T01:00:00+00:00')
+            self.aged(store, ids['uid-2'], '2026-09-08T01:00:00+00:00')
+            store.set_handled(ids['uid-1'], HANDLED)
+            rows = list(store.page(account))
+            self.assertEqual(oldest_open(rows, TODAY, {ids['uid-1']}), 3)
+            store.db.close()
+
+    def test_an_empty_pile_has_no_age_and_so_no_line(self):
+        with workspace() as folder:
+            store, ids, account = self.rows(folder)
+            handled = {ids['uid-1'], ids['uid-2']}
+            self.assertIsNone(oldest_open(list(store.page(account)), TODAY, handled))
+            store.db.close()
+
+    def test_everything_arrived_today_says_nothing_rather_than_zero_days(self):
+        with workspace() as folder:
+            store, ids, account = self.rows(folder)
+            for uid in ('uid-1', 'uid-2'):
+                self.aged(store, ids[uid], '2026-09-11T01:00:00+00:00')
+            data = overview(list(store.page(account)), TODAY)
+            self.assertEqual(data['oldest'], 0)
+            self.assertEqual(card_hint('미처리 메일', data), '')
+            store.db.close()
+
+    def test_a_clock_behind_the_server_does_not_report_negative_days(self):
+        with workspace() as folder:
+            store, ids, account = self.rows(folder)
+            self.aged(store, ids['uid-1'], '2026-09-20T01:00:00+00:00')
+            self.assertEqual(oldest_open(list(store.page(account)), TODAY), 0)
+            store.db.close()
+
+
+class DueWindowTests(unittest.TestCase):
+    """The 마감 checklist keeps what is finished; it never loses what is still owed."""
+
+    def rows(self, folder):
+        store = Store(Path(folder) / 'mail.db')
+        account = account_key(CONFIG)
+        ids = {}
+        for uid, deadline in (('uid-1', '2026-09-05'), ('uid-2', '2026-09-13'),
+                              ('uid-3', '2026-09-10')):
+            ident = store.add(account, uid, mail())
+            ids[uid] = ident
+            store.analyzed(ident, {'sender': 'a@b.c', 'subject': '제목', 'attachments': []},
+                           result('보통', deadline))
+        return store, ids, account
+
+    def listed(self, store, account, within=DUE_DAYS):
+        return deadline_rows(overview(store.page(account), TODAY, within=within), TODAY)
+
+    def test_a_finished_deadline_keeps_its_place_and_stops_being_a_miss(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store, ids, account = self.rows(folder)
+            store.set_handled(ids['uid-3'], HANDLED)     # 2026-09-10, a day past
+            rows = self.listed(store, account)
+            self.assertEqual([row['day'] for row in rows],
+                             ['2026-09-05', '2026-09-10', '2026-09-13'])
+            done = next(row for row in rows if row['day'] == '2026-09-10')
+            self.assertTrue(done['done'])
+            self.assertFalse(done['missed'])
+            store.db.close()
+
+    def test_an_unfinished_miss_never_falls_off_however_old(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store, ids, account = self.rows(folder)
+            rows = self.listed(store, account, within=1)
+            self.assertIn('2026-09-05', [row['day'] for row in rows])
+            store.db.close()
+
+    def test_a_finished_miss_older_than_the_window_drops_out(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store, ids, account = self.rows(folder)
+            store.set_handled(ids['uid-1'], HANDLED)     # 2026-09-05, six days past
+            self.assertNotIn('2026-09-05',
+                             [row['day'] for row in self.listed(store, account, within=1)])
+            self.assertIn('2026-09-05',
+                          [row['day'] for row in self.listed(store, account, within=30)])
+            store.db.close()
+
+    def test_the_card_still_counts_only_what_is_left(self):
+        """The list keeps finished rows; the KPI beside it must not start counting them."""
+        with tempfile.TemporaryDirectory() as folder:
+            store, ids, account = self.rows(folder)
+            before = overview(store.page(account), TODAY)['cards'][f'{DUE_DAYS}일 내 마감']
+            store.set_handled(ids['uid-2'], HANDLED)     # 2026-09-13, inside the window
+            after = overview(store.page(account), TODAY)['cards'][f'{DUE_DAYS}일 내 마감']
+            self.assertEqual((before, after), (1, 0))
+            store.db.close()
+
+    def test_the_window_is_the_same_list_the_panel_draws(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store, ids, account = self.rows(folder)
+            data = overview(store.page(account), TODAY)
+            self.assertEqual(data['due_window'],
+                             due_window(data['events'], TODAY, handled=data['handled']))
+            store.db.close()
+
+
+class DeadlineProgressTests(unittest.TestCase):
+    def rows(self, *done):
+        return [{'done': flag} for flag in done]
+
+    def test_it_counts_both_sides_and_rounds_the_percent(self):
+        self.assertEqual(deadline_progress(self.rows(True, False, True)),
+                         {'done': 2, 'left': 1, 'total': 3, 'ratio': 2 / 3, 'percent': 67})
+
+    def test_an_empty_list_is_not_finished(self):
+        self.assertEqual(deadline_progress([]),
+                         {'done': 0, 'left': 0, 'total': 0, 'ratio': 0.0, 'percent': 0})
+
+    def test_everything_done_fills_the_bar(self):
+        self.assertEqual(deadline_progress(self.rows(True, True))['percent'], 100)
 
 
 class SnapshotTests(unittest.TestCase):
@@ -369,6 +635,20 @@ class CalendarEventTests(unittest.TestCase):
         self.assertGreater(script.stat().st_size, 100_000)
         self.assertTrue((vendor_path() / 'fullcalendar' / 'LICENSE.md').is_file())
 
+    def test_the_vendored_font_is_where_the_stylesheet_asks_for_it(self):
+        """THEME's @font-face and the preload both point at this one path."""
+        face = vendor_path() / 'pretendard' / FONT_FILE
+        self.assertTrue(face.is_file())
+        self.assertIn(f'/vendor/pretendard/{FONT_FILE}', THEME)
+        # OFL-1.1 requires the licence to travel with the font.
+        self.assertTrue((vendor_path() / 'pretendard' / 'LICENSE.txt').is_file())
+
+    def test_the_page_asks_for_the_font_before_it_needs_it(self):
+        # ECharts paints its labels into a canvas once, so a font that arrives after
+        # the first chart never reaches it.
+        self.assertIn('rel="preload"', THEME)
+        self.assertIn(FONT_FILE, THEME.split('<style>')[0])
+
 
 class CountdownTests(unittest.TestCase):
     MOMENT = datetime.datetime(2026, 9, 11, 1, 0, 0, tzinfo=datetime.timezone.utc)
@@ -525,6 +805,88 @@ class BoardTests(unittest.TestCase):
             store.db.close()
 
 
+class DragTests(unittest.TestCase):
+    """What a dragged card carries between the two lanes, and what the drop makes of it."""
+
+    def card(self, kind='mail', key='uid-1'):
+        return {'kind': kind, 'key': key}
+
+    def test_a_card_moved_to_another_lane_names_its_kind_and_its_id(self):
+        payload = drag_payload('', self.card())
+        self.assertEqual(drag_drop(payload, HANDLED), ('mail', 'uid-1'))
+
+    def test_an_id_holding_a_colon_survives_the_round_trip(self):
+        payload = drag_payload(PROGRESS, self.card(key='<a:b@host>'))
+        self.assertEqual(drag_drop(payload, ''), ('mail', '<a:b@host>'))
+
+    def test_a_card_dropped_back_in_its_own_lane_is_not_a_move(self):
+        self.assertIsNone(drag_drop(drag_payload(PROGRESS, self.card()), PROGRESS))
+        self.assertIsNone(drag_drop(drag_payload('', self.card()), ''))
+
+    def test_a_manual_todo_travels_by_its_row_id(self):
+        self.assertEqual(drag_drop(drag_payload('', {'kind': 'todo', 'key': 7}), HANDLED),
+                         ('todo', '7'))
+
+    def test_a_todo_id_that_is_not_a_number_never_reaches_the_sql(self):
+        self.assertIsNone(drag_drop('todo::일곱', HANDLED))
+
+    def test_a_payload_from_nowhere_is_no_move(self):
+        for payload in ('', None, 'mail', 'mail::', '::uid-1', 'other::uid-1'):
+            self.assertIsNone(drag_drop(payload, HANDLED), payload)
+
+    def test_the_identity_cannot_close_the_handler_it_sits_in(self):
+        handler = drag_start(drag_payload('', self.card(key='he said "go"')))
+        self.assertIn(r'\"go\"', handler)
+        self.assertEqual(handler.count("setData('text/plain', "), 1)
+        self.assertTrue(handler.endswith("}"))
+
+
+class BoardCountTests(unittest.TestCase):
+    """The 현황 tally and the 할 일 판 count the same cards, by construction."""
+
+    def rows(self, folder):
+        store = Store(Path(folder) / 'mail.db')
+        account = account_key(CONFIG)
+        ids = {}
+        for uid, action in (('uid-1', '견적 확인'), ('uid-2', '회신 발송'), ('uid-3', '')):
+            ident = store.add(account, uid, mail(f'제목 {uid}'))
+            ids[uid] = ident
+            store.analyzed(ident, {'sender': 'a@b.c', 'subject': f'제목 {uid}', 'attachments': []},
+                           dict(result('보통'), next_action=action, requests=''))
+        return store, ids, account
+
+    def test_the_tally_is_the_lane_lengths(self):
+        with workspace() as folder:
+            store, ids, account = self.rows(folder)
+            store.set_handled(ids['uid-1'], HANDLED)
+            store.add_todo(account, '사무용품 주문')
+            rows, todos = list(store.page(account)), list(store.todos(account))
+            counts = board_counts(rows, todos)
+            lanes = board(rows, todos)
+            for state, _ in (('', ''), (PROGRESS, ''), (HANDLED, '')):
+                self.assertEqual(counts[state], len(lanes[state]), state)
+            store.db.close()
+
+    def test_a_mail_with_no_next_action_is_in_neither_count(self):
+        with workspace() as folder:
+            store, ids, account = self.rows(folder)
+            counts = board_counts(list(store.page(account)), [])
+            self.assertEqual(counts['total'], 2)      # uid-3 has no action
+            store.db.close()
+
+    def test_the_bar_measures_the_completed_share(self):
+        with workspace() as folder:
+            store, ids, account = self.rows(folder)
+            store.set_handled(ids['uid-1'], HANDLED)
+            counts = board_counts(list(store.page(account)), [])
+            self.assertEqual((counts[HANDLED], counts['total'], counts['ratio']), (1, 2, 0.5))
+            store.db.close()
+
+    def test_an_empty_board_does_not_divide_by_zero(self):
+        self.assertEqual(board_counts([], []), {'': 0, PROGRESS: 0, HANDLED: 0,
+                                                'total': 0, 'ratio': 0.0})
+
+
 class DraftQueueTests(unittest.TestCase):
     def rows(self, folder):
         store = Store(folder / 'mail.db')
@@ -625,6 +987,48 @@ class StatsViewTests(unittest.TestCase):
             store.db.close()
 
 
+class RichTextTests(unittest.TestCase):
+    """The Markdown subset a Codex answer gets rendered through."""
+
+    def test_nothing_in_nothing_out(self):
+        self.assertEqual(rich_text(''), '')
+        self.assertEqual(rich_text(None), '')
+
+    def test_the_answer_cannot_bring_its_own_markup(self):
+        html = rich_text('<script>alert(1)</script> & <b>x</b>')
+        self.assertNotIn('<script>', html)
+        self.assertIn('&lt;script&gt;', html)
+        self.assertIn('&amp;', html)
+
+    def test_a_blank_line_starts_a_paragraph_and_a_newline_does_not(self):
+        self.assertEqual(rich_text('가\n나\n\n다'), '<p>가<br>나</p><p>다</p>')
+
+    def test_bullets_and_numbers_become_their_own_lists(self):
+        self.assertEqual(rich_text('- 하나\n- 둘'), '<ul><li>하나</li><li>둘</li></ul>')
+        self.assertEqual(rich_text('1. 하나\n2) 둘'), '<ol><li>하나</li><li>둘</li></ol>')
+
+    def test_a_list_after_a_paragraph_keeps_both(self):
+        self.assertEqual(rich_text('머리말\n- 하나'),
+                         '<p>머리말</p><ul><li>하나</li></ul>')
+
+    def test_bold_and_code_are_the_only_inline_marks(self):
+        self.assertEqual(rich_text('**굵게** 와 `코드` 와 _밑줄_'),
+                         '<p><b>굵게</b> 와 <code>코드</code> 와 _밑줄_</p>')
+
+    def test_stars_inside_a_code_span_stay_literal(self):
+        self.assertEqual(rich_text('`a ** b`'), '<p><code>a ** b</code></p>')
+
+    def test_a_fenced_block_keeps_its_lines_and_still_escapes(self):
+        self.assertEqual(rich_text('```\nif a < b:\n    go()\n```'),
+                         '<pre><code>if a &lt; b:\n    go()</code></pre>')
+
+    def test_an_answer_cut_off_mid_block_still_renders(self):
+        self.assertEqual(rich_text('```\nx = 1'), '<pre><code>x = 1</code></pre>')
+
+    def test_a_heading_is_weight_not_a_heading_tag(self):
+        self.assertEqual(rich_text('## 정리'), "<div class='ma-md__h'>정리</div>")
+
+
 class ChatStoreTests(unittest.TestCase):
     def test_a_thread_per_mail_plus_a_general_one(self):
         with workspace() as folder:
@@ -707,9 +1111,11 @@ class PaletteTests(unittest.TestCase):
         self.assertEqual(set(STATUS), {name for name, _ in PRIORITIES})
 
     def test_card_tones_name_cards_that_exist(self):
+        """card_rows() and not ['cards']: 분석 실패 is a card the four-key dict never holds."""
         with tempfile.TemporaryDirectory() as folder:
-            cards = snapshot(Path(folder), {}, TODAY)['cards']
-        self.assertLessEqual(set(CARD_TONES), set(cards))
+            data = snapshot(Path(folder), {}, TODAY)
+        drawn = {name for name, _ in card_rows(dict(data, failed=1))}
+        self.assertLessEqual(set(CARD_TONES), drawn)
         self.assertIn(f'{DUE_DAYS}일 내 마감', CARD_TONES)
 
     def test_colours_are_css_hex(self):

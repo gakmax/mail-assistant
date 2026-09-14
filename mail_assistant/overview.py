@@ -4,7 +4,7 @@ The Excel dashboard keeps its formulas; the app counts the same things here so i
 can show them without a spreadsheet.
 """
 import json
-from datetime import timedelta
+from datetime import date, timedelta
 
 from .calendar_sheet import collect
 from .core import HANDLED, day_bounds, local_text
@@ -50,6 +50,45 @@ def past_due(events, today, handled=(), limit=UPCOMING):
     """Missed deadlines, nearest first: the 7-day window above would hide them entirely."""
     return [(day, entry) for day in sorted(events, reverse=True) if day < today
             for entry in events[day] if entry.kind != '시작' and entry.mail_id not in handled][:limit]
+
+
+def due_window(events, today, within=DUE_DAYS, limit=UPCOMING, handled=()):
+    """Missed then upcoming deadlines in date order, finished ones kept in view.
+
+    deadlines() and past_due() drop handled mail because the cards count what is left.
+    This list is the one place a finished deadline still has to show: it is a checklist,
+    and ticking a row must not delete the very thing whose progress it just moved. An
+    unhandled miss never falls off however old it is; a finished one only lingers while
+    it is inside the same window the panel is showing.
+    """
+    floor = today - timedelta(days=within)
+    missed = [(day, entry) for day, entry in past_due(events, today, limit=None)
+              if entry.mail_id not in handled or day >= floor][:limit]
+    return list(reversed(missed)) + deadlines(events, today, within=within)[:limit]
+
+
+def failures(rows):
+    """Analysed-and-failed, which is the 실패 filter's own rule (core.STATE_SQL)."""
+    return sum(1 for row in rows if not row['result'] and row['attempts'])
+
+
+def oldest_open(rows, today, handled=()):
+    """Days since the oldest analysed mail nobody has closed, or None when there is none.
+
+    The count beside it says how many are open; this says how long the worst one has
+    been open, which is the half a total cannot show.
+    """
+    days = []
+    for row in analysed(rows):
+        if row['id'] in handled:
+            continue
+        try:
+            days.append(date.fromisoformat(local_text(row['received'], '%Y-%m-%d')))
+        except ValueError:
+            continue
+    # max(0, …): `received` is the collection time, and a PC whose clock is behind
+    # the mail server's produces a mail from tomorrow. '-3일 경과' is not a thing.
+    return max(0, (today - min(days)).days) if days else None
 
 
 def counts_by(rows, field, allowed):
@@ -109,9 +148,14 @@ def overview(rows, today, within=DUE_DAYS):
         'recent': recent_days(rows, today),
         'upcoming': due[:UPCOMING],
         'past_due': past_due(events, today, handled=handled),
+        'due_window': due_window(events, today, within=within, handled=handled),
         'within': within,
         'events': events,
         'handled': handled,
         'total': len(rows),
         'waiting': sum(1 for row in rows if not row['result']),
+        # Beside the four cards, not among them: the window in app.py lays those out
+        # as a fixed four and a fifth key would land in none of its labels.
+        'failed': failures(rows),
+        'oldest': oldest_open(rows, today, handled),
     }

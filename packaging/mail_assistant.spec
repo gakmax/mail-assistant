@@ -74,13 +74,16 @@ EXCLUDES = ['numpy', 'pandas', 'matplotlib', 'scipy', 'PIL', 'pytest',
 VENDOR = [(str(ROOT / 'mail_assistant' / 'vendor'), 'mail_assistant/vendor')]
 
 # nicegui vendors the JavaScript for every element it offers and this app creates
-# none of the big ones. Dropping their asset folders saves about 21MB; their Python
-# modules stay, so nicegui still imports. The filtering has to happen on
+# almost none of the big ones. Dropping their asset folders saves about 19MB; their
+# Python modules stay, so nicegui still imports. The filtering has to happen on
 # Analysis.datas, *after* the hook runs: pyinstaller-hooks-contrib ships
 # hook-nicegui.py with a bare collect_data_files('nicegui'), which adds back anything
 # a spec-level collect_all dropped.
+#
+# echart is the one deliberate exception: every chart in webui.py is a ui.echart, so
+# its 1.8MB has to ship. selftest's check_webui is what notices if it stops shipping.
 DROP_ASSETS = ('nicegui/elements/plotly', 'nicegui/elements/mermaid',
-               'nicegui/elements/codemirror', 'nicegui/elements/echart',
+               'nicegui/elements/codemirror',
                'nicegui/elements/json_editor', 'nicegui/elements/scene',
                'nicegui/elements/aggrid', 'nicegui/elements/leaflet',
                'nicegui/elements/xterm', 'nicegui/static/sass.dart.js')

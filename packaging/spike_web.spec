@@ -24,8 +24,10 @@ ICON = str(ROOT / 'packaging' / 'app.ico')
 
 # Measured on nicegui 3.16: plotly 4.6M, mermaid 3.6M, codemirror 2.1M, echart 1.8M,
 # json_editor 1.4M, scene 1.2M, aggrid 1.2M, leaflet 440K, xterm 408K, sass 3.0M.
+# echart stays: the shipped pages draw every chart with it, so the spike has to
+# measure a bundle that carries it too.
 DROP = ('nicegui/elements/plotly', 'nicegui/elements/mermaid', 'nicegui/elements/codemirror',
-        'nicegui/elements/echart', 'nicegui/elements/json_editor', 'nicegui/elements/scene',
+        'nicegui/elements/json_editor', 'nicegui/elements/scene',
         'nicegui/elements/aggrid', 'nicegui/elements/leaflet', 'nicegui/elements/xterm',
         'nicegui/static/sass.dart.js')
 

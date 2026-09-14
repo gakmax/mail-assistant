@@ -83,12 +83,42 @@ def check_sqlite():
 
 
 def check_webui():
-    """Forces the web module and proves the vendored calendar survived freezing."""
-    from mail_assistant.webui import vendor_path
-    script = vendor_path() / 'fullcalendar' / 'index.global.min.js'
-    if not script.is_file():
-        raise RuntimeError(f'FullCalendar 자산이 없습니다: {script}')
-    return f'{script.stat().st_size:,} bytes'
+    """Forces the web module and proves the vendored assets survived freezing."""
+    from mail_assistant.webui import FONT_FILE, vendor_path
+    total = 0
+    for asset in (('fullcalendar', 'index.global.min.js'), ('pretendard', FONT_FILE)):
+        path = vendor_path().joinpath(*asset)
+        if not path.is_file():
+            raise RuntimeError(f'{asset[0]} 자산이 없습니다: {path}')
+        total += path.stat().st_size
+    return f'{total:,} bytes'
+
+
+def check_echart():
+    """The spec drops most vendored element JS; every chart on the pages needs this one."""
+    from pathlib import Path
+
+    import nicegui.elements.echart as element
+    bundle = Path(element.__file__).parent / 'dist'
+    files = list(bundle.glob('*.js')) if bundle.is_dir() else []
+    if not files:
+        raise RuntimeError(f'ECharts 자산이 없습니다: {bundle}')
+    return f'{sum(item.stat().st_size for item in files):,} bytes'
+
+
+def check_chat():
+    """The 상담 bubbles hand the browser HTML, which sanitises it before it is shown."""
+    from pathlib import Path
+
+    import nicegui
+    root = Path(nicegui.__file__).parent
+    total = 0
+    for name in ('static/dompurify.mjs', 'elements/html.js'):
+        asset = root / name
+        if not asset.is_file():
+            raise RuntimeError(f'상담 화면 자산이 없습니다: {asset}')
+        total += asset.stat().st_size
+    return f'{total:,} bytes'
 
 
 def selftest():
@@ -109,12 +139,16 @@ def selftest():
         # missed module would only show up when the user double-clicks the icon.
         ('mail_assistant.app', lambda: __import__('mail_assistant.app', fromlist=['App']).App.__name__),
         # The web screens and the assets the browser fetches from them. nicegui is a
-        # lazy import and the vendored FullCalendar is a data file, so a bundle can
-        # lose either one without anything failing until someone opens the page.
+        # lazy import and the vendored FullCalendar and Pretendard are data files, so a
+        # bundle can lose any of them without anything failing until someone looks.
         # __version__ goes through importlib.metadata, which needs the .dist-info in
         # the bundle; a missing one fails here rather than when someone runs `web`.
         ('nicegui', lambda: __import__('nicegui').__version__),
         ('mail_assistant.webui', check_webui),
+        ('nicegui ECharts 자산', check_echart),
+        # The answer bubble is ui.html under the hood: DOMPurify is the second lock on
+        # what rich_text() produced, and a spec that drops it shows an empty answer.
+        ('nicegui 상담 자산', check_chat),
     ]
     failed = 0
     for name, probe in checks:

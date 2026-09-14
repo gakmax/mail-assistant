@@ -16,7 +16,7 @@ that break silently if you don't know them.
 ## Commands
 
 ```bash
-python -m unittest discover -s tests -v    # from the repo root; 247 tests, all platforms
+python -m unittest discover -s tests -v    # from the repo root; 266 tests, all platforms
 ```
 
 ```powershell
@@ -112,21 +112,112 @@ UI coverage this project has ever had, and the reason to keep the split.
 
 **nicegui is the one declared exception to stdlib-only**, recorded in
 `requirements.txt` and priced in `UI-PLAN.md` 6절: the bundle went from 37.9MB to
-59.6MB. Two things hold that number down and both are easy to lose:
+59.6MB; ECharts adds ~1.8MB and Pretendard 2.06MB on top (the CI build prints the
+real number).
+Two things hold that number down and both are easy to lose:
 
 * `Analysis.datas` must be filtered *after* the hook runs. hooks-contrib ships
   `hook-nicegui.py` with a bare `collect_data_files('nicegui')`, so vendored
   JavaScript dropped in a spec-level `collect_all` is added straight back. The
-  filter drops ~21MB of element bundles this app never creates.
+  filter drops ~19MB of element bundles this app never creates. **`echart` is the
+  one deliberate exception** and must stay out of `DROP_ASSETS` in both specs: every
+  chart in `webui.py` is a `ui.echart`, so its 1.8MB ships. `selftest`'s
+  `check_echart` fails the CI build if a spec change drops it again.
 * `pywebview` is excluded on purpose. `requirements.txt` does not install it, so a
   CI build would not have it: shipping a `web --native` that only works on a dev box
   is worse than not offering it.
 
 **The browser fetches third-party assets from `/vendor`, never a CDN.** FullCalendar
-is vendored in `mail_assistant/vendor/` (MIT, standard views only) because this app
-has to work offline and behind a proxy, where a CDN reference leaves a blank page
-and no error. `webui.vendor_path()` locates it either side of freezing, the spec
-copies it, and `selftest`'s `check_webui` is what notices when it did not.
+(MIT, standard views only) and Pretendard (OFL-1.1, one 2.06MB variable woff2) are
+vendored in `mail_assistant/vendor/` because this app has to work offline and behind
+a proxy, where a CDN reference leaves a blank page and no error. `webui.vendor_path()`
+locates them either side of freezing, the spec copies the folder whole, and
+`selftest`'s `check_webui` is what notices when one did not arrive. The font's
+`@font-face` lives in `THEME` and **`FONT_PRELOAD` must stay in the head**: ECharts
+paints its labels into a canvas once and never repaints when a font lands late, so a
+merely-declared font gives you charts in 맑은 고딕 and a page in Pretendard. Two grid
+paddings exist for the same font — `AXIS_GUTTER`, and `trend_option`'s `left` — because
+`containLabel` sizes the axis gutter from ECharts' own guess at label height, which
+Pretendard's taller line box overruns.
+
+**Screen styling lives in `webui.THEME`, not in `.style()` calls.** One `<style>`
+block, injected once by `shell()`, holds the tokens (`--ink`, `--card`, `--brand`, …)
+and the component classes (`.ma-card`, `.ma-kpi`, `.ma-tag`, `.ma-table`, `.ma-lane`,
+`.ma-chat`). A page reaches for `.classes()` first and `.style()` only for a value
+that is genuinely per-element — a width, a computed tone. The colours themselves still
+come from `style.py` through `css_color()`, so the window and the pages cannot drift
+apart. Two of those rules exist because nicegui's own defaults fight the page:
+`.nicegui-content` is a flex column with `align-items:start`, which shrink-wraps the
+header band and stops a long log line wrapping, and every surface that stacks text
+(`.ma-card`, `.ma-sunken`, `.ma-note`) therefore declares `display:block`.
+
+**A `q-table` cell slot is coloured by an expression, never by a JSON blob.**
+`tag_cell()` builds the `:style` lookup with single quotes throughout, because the
+whole expression sits inside a double-quoted Vue attribute and `json.dumps` would
+close it on the first key. `'3회 실패'` carries its count, so the 실패 tone is matched
+with `props.value.includes('실패')` rather than a table key. The open row is marked by
+`.ma-table tbody tr:has(.ma-open)` — q-table hands a slot the cell, not the row.
+
+**A Codex answer is rendered by `rich_text()`, never by `ui.markdown`.** The
+difference is not the Markdown — it is that `nicegui.elements.markdown` imports
+markdown2 *and pygments*, and pygments is 8.7MB that UI-PLAN's 1단계 measurement
+listed as removable precisely because nothing imports it. Reaching for `ui.markdown`
+quietly welds it into an unsigned installer whose download size is the user's first
+friction. `rich_text()` escapes first and then emits only `<p> <br> <ul> <ol> <li>
+<b> <code> <pre>`; `ui.chat_message(text_html=True)` hands that to DOMPurify in the
+browser, so sanitising is a second lock rather than the only one — which is why
+`selftest`'s `check_chat` fails the build if `dompurify.mjs` or `elements/html.js`
+stops shipping.
+
+**Never build a `ui.timer` inside a handler that has just called `refresh()`.** The
+timer takes its client from whatever slot is current, `refresh()` has deleted that
+slot, and the `RuntimeError` it raises kills the rest of the handler — in 상담 that
+left `busy` True and the composer disabled with no way back except a reload, and
+nothing on screen said so. `scroll()` is `async` and awaits `asyncio.sleep` instead:
+the tick it needs before `scroll_to` costs nothing and creates no element.
+
+**`overview()['cards']` holds exactly four, and that is a layout contract.**
+`App.paint_overview()` in `app.py` walks a fixed list of four tkinter labels, so a
+fifth key added to that dict is drawn nowhere and silently lost. The web page's fifth
+card, 분석 실패, is therefore a separate `'failed'` count that `webui.card_rows()`
+appends — and appends only when it is non-zero, because a card reading 0 every day is
+how a reader learns to stop looking at that corner. `CARD_TONES` is checked against
+`card_rows()` and not against `['cards']` for the same reason.
+
+**The 현황 할 일 tally goes through `board()`, never through SQL.** `board_counts()`
+calls the same function the kanban renders from, so the two cannot disagree about what
+counts as a card — a mail whose analysis produced no `next_action` is not one, and no
+`COUNT(*)` on `handled` knows that. The same rule makes `home()`'s `read()` fetch rows
+and todos itself instead of calling `snapshot()`: the tally needs the rows the overview
+already read, and a second `page()` every five seconds reads the whole mailbox twice.
+
+**The 마감 checklist keeps what the card drops.** `overview.deadlines()` and
+`past_due()` filter handled mail out because the 현황 cards count what is *left*;
+`due_window()` deliberately keeps it, because a tick that deleted its own row would
+move the progress bar with nothing left to point at. So the panel and the `…일 내
+마감` card beside it show different numbers on purpose — filter the list to match the
+card and the bar reads 0% forever. What bounds the noise is the window: an unhandled
+miss never falls off however old, a finished one only lingers while it is inside the
+same 7/14/30-day window the toggle is showing. The tick writes the mail's own
+`handled` — the field the kanban moves — so the two screens cannot disagree, and a
+mail carrying several deadlines moves all of its rows at once.
+
+**The kanban's drag never talks to the server until the drop.** `dragover` fires
+once per frame while the pointer travels, so the highlight is a `js_handler` that
+only adds a class — give any of `dragover`/`dragleave`/`dragstart`/`dragend` a Python
+handler and a single card's travel becomes hundreds of websocket messages, to decorate
+a board that is rebuilt from sqlite anyway. Only `DRAG_DROP` calls `emit`. The card's
+identity rides in the drag's own `dataTransfer` (`drag_payload`, id last so a mail id
+holding a colon survives the split), which is also what lets `drag_drop()` drop a card
+returned to its own lane instead of rewriting the state it already has. The chevron
+buttons stay: `shoot.ps1` cannot click, so drag is the one thing on this page no test
+covers, and it must not be the only way to move a card.
+
+**The 현황 charts are updated, not rebuilt.** `home()` creates its four `ui.echart`
+elements once and `paint()` writes new options into them every `REFRESH_SECONDS`; only
+the text blocks are `@ui.refreshable`. Wrapping a chart in a refreshable drops the
+canvas and replays the entry animation on every tick, which on a 5-second timer reads
+as a page that will not sit still.
 
 **A page must not depend on `ui.run_javascript` to draw itself.** The calendar's
 first attempt passed its events that way and nothing ever rendered: the call needs a
@@ -218,7 +309,9 @@ cheapest way to exercise it. Run it *twice*: the second run is the one that appe
 to an existing sheet, which is where `first_column()` earns its keep.
 
 The web screens are covered two ways. Their shaping is plain functions with unit
-tests (`tests/test_webui.py`), and `packaging/shoot.ps1` renders a page with headless
+tests (`tests/test_webui.py`) — including the chart option dicts (`bar_option`,
+`recent_option`, `trend_option`) and the `tag_cell` slot templates, which is why those
+stay pure and nicegui-free — and `packaging/shoot.ps1` renders a page with headless
 Edge so layout can be looked at without a person at the machine — which is how the
 squeezed table columns, the centred 원문 panel and the overflowing trend bars were
 all found. What no test covers is clicking: typing in the search box, moving a kanban
