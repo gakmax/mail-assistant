@@ -16,7 +16,7 @@ that break silently if you don't know them.
 ## Commands
 
 ```bash
-python -m unittest discover -s tests -v    # from the repo root; 371 tests, all platforms
+python -m unittest discover -s tests -v    # from the repo root; 372 tests, all platforms
 ```
 
 ```powershell
@@ -240,6 +240,22 @@ slot, and the `RuntimeError` it raises kills the rest of the handler — in 상�
 left `busy` True and the composer disabled with no way back except a reload, and
 nothing on screen said so. `scroll()` is `async` and awaits `asyncio.sleep` instead:
 the tick it needs before `scroll_to` costs nothing and creates no element.
+
+The same rule covers `ui.notify`, and 업데이트's 지금 확인 is where it was learned:
+`refresh()` before `await` deleted the button the handler was running in, so the
+`ui.notify` after the await could not resolve `context.client`, and the
+`RuntimeError` killed the rest of the handler — leaving '확인하는 중입니다…' on
+screen for ever with no error anywhere a user could see. Refresh *last* in a handler,
+and say the in-between things with `set_text()` on a label that lives outside the
+refreshable. A plain element method (`set_text`, `props`, `disable`, a dialog's
+`open`) needs no client and is always safe; anything under `ui.` does.
+
+**Korean never goes into a `strftime` format.** Windows encodes the format string
+with the locale codec, so `time.strftime('마지막 확인: %Y…')` raises
+`UnicodeEncodeError` on any PC that is not set to Korean — and on CPython 3.11 that
+includes the CI runner, where it is a Windows-only test failure the dev box cannot
+reproduce. `updater.checked_text()` concatenates the label instead. `local_text()` in
+`core.py` is the same rule: every pattern it is given is ASCII.
 
 **The frame's size is `webui.WINDOW`, and both windows use it.** pywebview opens at
 800x600 unless told otherwise, which puts 현황's two columns and 메일's six-column table

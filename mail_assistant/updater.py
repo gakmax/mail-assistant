@@ -41,7 +41,10 @@ def checked_text(stamp):
     value = float(stamp) if isinstance(stamp, (int, float)) else 0.0
     if value <= 0:
         return '아직 업데이트를 확인한 적이 없습니다.'
-    return time.strftime('마지막 확인: %Y-%m-%d %H:%M', time.localtime(value))
+    # The Korean is concatenated, never passed to strftime: on Windows the format
+    # string goes through the locale codec, and on an English-locale PC '마지막' is
+    # a UnicodeEncodeError that takes the whole 업데이트 card down with it.
+    return '마지막 확인: ' + time.strftime('%Y-%m-%d %H:%M', time.localtime(value))
 
 
 def recheck_text(result, offer=None):

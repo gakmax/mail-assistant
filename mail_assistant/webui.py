@@ -1503,20 +1503,30 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
         ask again. 지금 확인 says which of the four things happened rather than going
         quiet: '새 버전이 없습니다' and '물어보지 못했습니다' are not the same sentence.
         """
-        said = {'line': ''}
+        def say(text):
+            """The one line under the card. It lives outside `block` on purpose.
+
+            Saying '확인하는 중입니다…' by rebuilding the panel deletes the 지금 확인
+            button — and the handler is running in that button's slot, so after the
+            await ui.notify() could not find the client any more: the RuntimeError
+            killed the rest of the handler and the waiting line stayed on screen for
+            ever. A label that is only re-texted deletes nothing.
+            """
+            note.set_text(text)
+            note.set_visibility(bool(text))
 
         def unskip():
             update.remember(config_path, {'update_skip': ''})
             config['update_skip'] = ''
-            said['line'] = '건너뛴 버전을 초기화했습니다. 지금 확인을 누르면 다시 알려 드립니다.'
+            say('건너뛴 버전을 초기화했습니다. 지금 확인을 누르면 다시 알려 드립니다.')
             block.refresh()
 
         async def recheck():
-            said['line'] = '확인하는 중입니다…'
-            block.refresh()
+            say('확인하는 중입니다…')
             result = await nicerun.io_bound(updater.recheck)
-            said['line'] = recheck_text(result, updater.offer)
-            ui.notify(said['line'])
+            say(recheck_text(result, updater.offer))
+            ui.notify(recheck_text(result, updater.offer))
+            # Last, because this is what deletes the button we were clicked from.
             block.refresh()
 
         @ui.refreshable
@@ -1530,8 +1540,6 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 if updater.state not in (WORKING, READY):
                     ui.button('지금 확인', icon='refresh', on_click=recheck) \
                         .props('flat dense no-caps text-color=secondary')
-            if said['line']:
-                ui.label(said['line']).classes('ma-meta__item').style('margin-top:2px')
             skipped = config.get('update_skip') or ''
             if skipped:
                 with ui.element('div').classes('ma-row') \
@@ -1542,6 +1550,8 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                         .props('flat dense no-caps')
 
         block()
+        note = ui.label('').classes('ma-meta__item').style('margin-top:2px')
+        note.set_visibility(False)
         if updater is not None:
             # Built here rather than inside a handler: refresh() deletes the slot a
             # timer would take its client from, and the RuntimeError kills the handler.

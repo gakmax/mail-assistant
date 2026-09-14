@@ -74,6 +74,17 @@ class RecheckTextTests(unittest.TestCase):
     def test_a_stamp_reads_as_a_local_time(self):
         text = checked_text(time.mktime((2026, 9, 14, 13, 20, 0, 0, 0, -1)))
         self.assertIn('2026-09-14 13:20', text)
+        self.assertIn('마지막 확인', text)
+
+    def test_the_korean_never_reaches_strftime(self):
+        """Windows encodes a strftime format with the locale codec, so Korean in the
+        format is a UnicodeEncodeError on any PC that is not set to Korean — and the
+        card it is drawn in goes down with it. The dev box never sees this."""
+        formats = []
+        with patch.object(time, 'strftime', lambda pattern, *rest: formats.append(pattern) or ''):
+            checked_text(1000.0)
+        self.assertTrue(formats and all(character.isascii() for character in formats[0]),
+                        f'strftime was handed {formats!r}')
 
 
 class RecheckTests(unittest.TestCase):
