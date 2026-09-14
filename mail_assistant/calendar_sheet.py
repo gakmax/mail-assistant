@@ -10,7 +10,7 @@ import re
 from collections import namedtuple
 from datetime import date, timedelta
 
-from .style import (CALM, CENTER, CONTINUOUS, HEADER_FILL, LEFT, LINE, SOON, THIN, TODAY_FILL,
+from .style import (CALM, CENTER, CONTINUOUS, HEADER_FILL, LEFT, LINE, LINK, THIN, TODAY_FILL,
                     TOP, URGENT, read_marker, write_marker)
 
 SHEET = '일정 달력'
@@ -18,13 +18,20 @@ CALENDAR_PROPERTY = 'MailAssistantCalendar'
 WEEKDAYS = ('월', '화', '수', '목', '금', '토', '일')
 DAY_DATE = re.compile(r'^(\d{4})-(\d{2})-(\d{2})')
 DAY_TIME = re.compile(r'^\d{4}-\d{2}-\d{2}[T ](\d{2}:\d{2})')
-MARKERS = {'마감': '◾', '시작': '▫', '확인 필요': '·'}
-COLORS = {'마감': URGENT, '시작': SOON, '확인 필요': CALM}
+# Three geometric shapes of the same cast, so a cell can say which kind it is without
+# colour. The old ◾/▫/· were three different sizes — a middle dot beside a filled
+# square reads as a glyph the font failed to draw rather than as a second kind.
+MARKERS = {'마감': '■', '시작': '▶', '확인 필요': '◆'}
+# 시작 is blue, not the amber it used to share with '높음': beside URGENT's deep red an
+# amber block is the same colour at a glance, and the calendar is where the two sit
+# side by side. Red / blue / grey are three hues, not three reds.
+COLORS = {'마감': URGENT, '시작': LINK, '확인 필요': CALM}
 PER_DAY = 3
-# evidence has a default so the four-argument construction in older code and tests
-# keeps working; only the calendar reads it.
-Entry = namedtuple('Entry', 'label kind mail_id row evidence')
-Entry.__new__.__defaults__ = ('',)
+# evidence and clock both default, so the four-argument construction in older code and
+# tests keeps working. clock is the entry's own time, kept beside the label because the
+# web calendar needs it as a number ('14:00' in a timeGrid slot) and not as text.
+Entry = namedtuple('Entry', 'label kind mail_id row evidence clock')
+Entry.__new__.__defaults__ = ('', '')
 
 
 def parse_day(value):
@@ -60,7 +67,7 @@ def collect(rows, first_row=2):
                 kind = '확인 필요'
             label = f'{MARKERS[kind]} {clock} {title}'.replace('  ', ' ').strip()
             events.setdefault(day, []).append(
-                (clock, Entry(label, kind, mail_id, first_row + offset, evidence)))
+                (clock, Entry(label, kind, mail_id, first_row + offset, evidence, clock)))
     return {day: [entry for _, entry in sorted(entries, key=lambda pair: (pair[0], pair[1].label))]
             for day, entries in events.items()}
 
@@ -161,12 +168,29 @@ def draw_month(sheet, top, year, month, events, today):
             cell.Characters(1, number).Font.Bold = True
 
 
+def legend_text():
+    """The legend line, and where each marker sits in it.
+
+    The offsets are counted off the text rather than assumed: a fixed stride coloured
+    whichever character happened to be there, which after the markers changed width
+    would have tinted a syllable of the label instead of the mark in front of it.
+    """
+    parts, spans, at = [], [], 1
+    for kind in ('마감', '시작', '확인 필요'):
+        spans.append((at, COLORS[kind]))
+        piece = f'{MARKERS[kind]} {kind}    '
+        parts.append(piece)
+        at += len(piece)
+    return ''.join(parts) + '    일정 시트를 매 반영마다 다시 그립니다.', spans
+
+
 def draw_notes(sheet, row, events, today):
     legend = sheet.Cells(row, 1)
     legend.NumberFormat = '@'
-    legend.Value = '◾ 마감    ▫ 시작    · 확인 필요        일정 시트를 매 반영마다 다시 그립니다.'
-    for index, kind in enumerate(('마감', '시작', '확인 필요')):
-        legend.Characters(1 + index * 10, 1).Font.Color = COLORS[kind]
+    text, spans = legend_text()
+    legend.Value = text
+    for at, color in spans:
+        legend.Characters(at, 1).Font.Color = color
     past = overdue(events, today)
     if not past:
         return

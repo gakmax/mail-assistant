@@ -62,7 +62,7 @@ def blocks(today=None):
     today = today or date.today()
     items = [
         (2, 2, 6, 'title', '메일 업무 도우미', ACCENT),
-        (3, 2, 8, 'subtitle', '하이웍스 메일을 정리하고 엑셀에 반영합니다. 답변은 초안으로만 저장합니다.', DASH_MUTED),
+        (3, 2, 8, 'subtitle', '메일을 정리하고 엑셀에 반영합니다. 답변은 초안으로만 저장합니다.', DASH_MUTED),
         (2, 11, 2, 'label', '마지막 엑셀 반영', DASH_MUTED),
         (3, 11, 4, 'stamp', "='실행 상태'!B3", DASH_TEXT),
     ]

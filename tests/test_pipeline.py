@@ -12,7 +12,7 @@ from email.message import EmailMessage
 from pathlib import Path
 from unittest.mock import call, patch, MagicMock
 
-from mail_assistant.core import (ANALYZING, FAILED, HANDLED, HEADERS, PRIORITY_ORDER, Store,
+from mail_assistant.core import (ANALYZING, FAILED, HANDLED, HEADERS, PRIORITY_ORDER, ROOM_MARK, Store,
                                  account_key, STATES, STATE_SQL, day_bounds, filter_rows,
                                  local_text, parse_mail, row_view, sql_text, state_of,
                                  workbook_rows)
@@ -469,6 +469,91 @@ class SearchTests(unittest.TestCase):
             self.assertEqual(len(store.chat(self.ACCOUNT)), 1)
             store.db.close()
 
+    def test_a_thread_is_listed_for_every_room_that_has_one(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            store.add_chat(self.ACCOUNT, 'user', '이 건 어떻게 할까요', self.ids['uid-1'])
+            store.add_chat(self.ACCOUNT, 'codex', '이렇게 하세요', self.ids['uid-1'])
+            store.add_chat(self.ACCOUNT, 'user', '일반 상담')
+            rooms = {row['key']: row for row in store.rooms(self.ACCOUNT)}
+            self.assertEqual(set(rooms), {'', self.ids['uid-1']})
+            self.assertEqual(rooms[self.ids['uid-1']]['turns'], 2)
+            # The mail thread is named after the mail, in one query for all of them.
+            self.assertEqual(rooms[self.ids['uid-1']]['name'], '견적 검토 요청')
+            self.assertEqual(rooms[self.ids['uid-1']]['role'], 'codex')
+            self.assertEqual(rooms[self.ids['uid-1']]['last'], '이렇게 하세요')
+            store.db.close()
+
+    def test_the_general_thread_is_listed_even_when_it_is_empty(self):
+        """It is where the page lands when nothing else is asked for."""
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            self.assertEqual([row['key'] for row in store.rooms(self.ACCOUNT)], [''])
+            store.db.close()
+
+    def test_rooms_come_back_newest_activity_first(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            store.add_chat(self.ACCOUNT, 'user', '먼저', self.ids['uid-1'])
+            store.add_chat(self.ACCOUNT, 'user', '나중', self.ids['uid-2'])
+            self.assertEqual([row['key'] for row in store.rooms(self.ACCOUNT)][:2],
+                             [self.ids['uid-2'], self.ids['uid-1']])
+            store.db.close()
+
+    def test_a_free_room_shows_up_before_anyone_has_written_in_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            ident = store.new_room(self.ACCOUNT)
+            rooms = {row['key']: row for row in store.rooms(self.ACCOUNT)}
+            self.assertIn(ident, rooms)
+            self.assertEqual((rooms[ident]['turns'], rooms[ident]['name']), (0, ''))
+            store.db.close()
+
+    def test_a_room_names_itself_once_and_a_rename_always_wins(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            ident = store.new_room(self.ACCOUNT)
+            store.name_room(ident, '첫 질문', only_if_unnamed=True)
+            # A second question must not rename the room out from under the first.
+            store.name_room(ident, '둘째 질문', only_if_unnamed=True)
+            rooms = {row['key']: row for row in store.rooms(self.ACCOUNT)}
+            self.assertEqual(rooms[ident]['name'], '첫 질문')
+            store.name_room(ident, '손으로 바꾼 이름')
+            rooms = {row['key']: row for row in store.rooms(self.ACCOUNT)}
+            self.assertEqual(rooms[ident]['name'], '손으로 바꾼 이름')
+            store.db.close()
+
+    def test_a_free_room_id_can_never_be_a_mail_id(self):
+        """Mail ids are 24 hex characters, so the marker is what tells the two apart."""
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            ident = store.new_room(self.ACCOUNT)
+            self.assertTrue(ident.startswith(ROOM_MARK))
+            self.assertNotIn(ident, self.ids.values())
+            store.db.close()
+
+    def test_dropping_a_free_room_takes_its_turns_and_nothing_else(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            ident = store.new_room(self.ACCOUNT)
+            store.add_chat(self.ACCOUNT, 'user', '자유 질문', ident)
+            store.add_chat(self.ACCOUNT, 'user', '메일 질문', self.ids['uid-1'])
+            self.assertTrue(store.drop_room(self.ACCOUNT, ident))
+            self.assertEqual(store.chat(self.ACCOUNT, ident), [])
+            self.assertEqual(len(store.chat(self.ACCOUNT, self.ids['uid-1'])), 1)
+            self.assertNotIn(ident, [row['key'] for row in store.rooms(self.ACCOUNT)])
+            store.db.close()
+
+    def test_drop_room_refuses_a_mail_thread(self):
+        """A mail's thread goes with the mail; this button must not be able to reach it."""
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            store.add_chat(self.ACCOUNT, 'user', '메일 질문', self.ids['uid-1'])
+            self.assertFalse(store.drop_room(self.ACCOUNT, self.ids['uid-1']))
+            self.assertFalse(store.drop_room(self.ACCOUNT, ''))
+            self.assertEqual(len(store.chat(self.ACCOUNT, self.ids['uid-1'])), 1)
+            store.db.close()
+
     def test_deleted_mail_is_not_collected_again(self):
         """`seen` keeps the uid: the mail is still on the server, and the user threw
         away the copy on purpose."""
@@ -693,7 +778,7 @@ class OverviewTests(unittest.TestCase):
             ident = store.add('acct', 'uid-4', mail())
             store.analyzed(ident, {'sender': 'a@b.c', 'subject': 's', 'attachments': []}, late)
             data = overview(store.page('acct'), self.TODAY)
-            self.assertEqual([entry.label for _, entry in data['past_due']], ['◾ 지난 회신'])
+            self.assertEqual([entry.label for _, entry in data['past_due']], ['■ 지난 회신'])
             self.assertEqual(data['cards']['7일 내 마감'], 1)   # a missed deadline is not 임박
             store.set_handled(ident, HANDLED)
             self.assertEqual(overview(store.page('acct'), self.TODAY)['past_due'], [])
@@ -704,7 +789,7 @@ class OverviewTests(unittest.TestCase):
                           ['2:0', 'mail-new', '어제 마감', '', '2026-09-10', '', '', ''],
                           ['3:0', 'mail-next', '앞으로', '', '2026-09-14', '', '', '']])
         self.assertEqual([entry.label for _, entry in past_due(events, self.TODAY)],
-                         ['◾ 어제 마감', '◾ 오래된 마감'])
+                         ['■ 어제 마감', '■ 오래된 마감'])
         self.assertEqual(past_due(events, self.TODAY, limit=1)[0][0], datetime.date(2026, 9, 10))
 
     def test_edited_draft_is_no_longer_review_pending(self):
@@ -1394,25 +1479,25 @@ class CalendarTests(unittest.TestCase):
     def test_collect_splits_start_deadline_and_review(self):
         events = collect(self.ROWS)
         deadline = events[datetime.date(2026, 9, 16)][0]
-        self.assertEqual((deadline.label, deadline.kind), ('◾ 18:00 견적 회신 마감', '마감'))
+        self.assertEqual((deadline.label, deadline.kind), ('■ 18:00 견적 회신 마감', '마감'))
         self.assertEqual(deadline.mail_id, 'm1')
         self.assertEqual(deadline.row, 2)          # first data row of the 일정 sheet
         start = events[datetime.date(2026, 9, 14)][0]
-        self.assertEqual((start.label, start.kind, start.row), ('▫ 10:00 사양 확정 회의', '시작', 3))
+        self.assertEqual((start.label, start.kind, start.row), ('▶ 10:00 사양 확정 회의', '시작', 3))
         # 확인 필요 wins over the start/deadline colour.
         review = events[datetime.date(2026, 9, 15)][0]
-        self.assertEqual((review.label, review.kind), ('· 유지보수 미팅', '확인 필요'))
+        self.assertEqual((review.label, review.kind), ('◆ 유지보수 미팅', '확인 필요'))
 
     def test_cell_text_colour_spans_line_up(self):
-        entries = [Entry('◾ 마감', '마감', 'm1', 2), Entry('▫ 시작', '시작', 'm1', 3)]
+        entries = [Entry('■ 마감', '마감', 'm1', 2), Entry('▶ 시작', '시작', 'm1', 3)]
         text, spans = cell_text(datetime.date(2026, 9, 16), entries)
-        self.assertEqual(text.split('\n'), ['16', '◾ 마감', '▫ 시작'])
+        self.assertEqual(text.split('\n'), ['16', '■ 마감', '▶ 시작'])
         for (start, length, color), entry in zip(spans, entries):
             self.assertEqual(text[start - 1:start - 1 + length], entry.label)
         self.assertEqual(spans[0][2], URGENT)
 
     def test_cell_text_caps_long_days(self):
-        entries = [Entry(f'◾ 일정 {index}', '마감', 'm1', 2 + index) for index in range(5)]
+        entries = [Entry(f'■ 일정 {index}', '마감', 'm1', 2 + index) for index in range(5)]
         text, spans = cell_text(datetime.date(2026, 9, 16), entries)
         self.assertEqual(len(spans), 3)
         self.assertTrue(text.endswith('…외 2건'))
@@ -1427,7 +1512,7 @@ class CalendarTests(unittest.TestCase):
 
     def test_overdue_lists_only_past_deadlines(self):
         self.assertEqual(overdue(collect(self.ROWS), self.TODAY),
-                         [(datetime.date(2026, 8, 25), '◾ 도면 회신')])
+                         [(datetime.date(2026, 8, 25), '■ 도면 회신')])
 
     def test_next_month_crosses_the_year(self):
         self.assertEqual(next_month(datetime.date(2026, 12, 31)), datetime.date(2027, 1, 1))
@@ -1553,13 +1638,13 @@ class DashboardTests(unittest.TestCase):
                 taken.add((row, column))
 
     def test_upcoming_lists_nearest_deadlines_only(self):
-        events = {datetime.date(2026, 9, 9): [Entry('◾ 지난 건', '마감', 'm1', 2)],
-                  datetime.date(2026, 9, 11): [Entry('◾ 오늘 마감', '마감', 'm2', 3)],
-                  datetime.date(2026, 9, 14): [Entry('▫ 착수', '시작', 'm3', 4),
-                                               Entry('◾ 보고서', '마감', 'm3', 5)]}
+        events = {datetime.date(2026, 9, 9): [Entry('■ 지난 건', '마감', 'm1', 2)],
+                  datetime.date(2026, 9, 11): [Entry('■ 오늘 마감', '마감', 'm2', 3)],
+                  datetime.date(2026, 9, 14): [Entry('▶ 착수', '시작', 'm3', 4),
+                                               Entry('■ 보고서', '마감', 'm3', 5)]}
         self.assertEqual([(day, entry.label) for day, entry in upcoming(events, self.TODAY)],
-                         [(datetime.date(2026, 9, 11), '◾ 오늘 마감'),
-                          (datetime.date(2026, 9, 14), '◾ 보고서')])
+                         [(datetime.date(2026, 9, 11), '■ 오늘 마감'),
+                          (datetime.date(2026, 9, 14), '■ 보고서')])
         self.assertEqual(describe(datetime.date(2026, 9, 9), self.TODAY), '2일 지남')
         self.assertEqual(describe(datetime.date(2026, 9, 11), self.TODAY), '오늘')
 
@@ -1569,14 +1654,14 @@ class DashboardTests(unittest.TestCase):
         # One mock per cell, or every write lands on the same object.
         sheet.Cells.side_effect = lambda row, col: cells.setdefault((row, col), MagicMock())
         book.Worksheets.side_effect = {DASHBOARD: sheet}.__getitem__
-        events = {datetime.date(2026, 9, 14): [Entry('◾ 보고서', '마감', 'm3', 5)]}
+        events = {datetime.date(2026, 9, 14): [Entry('■ 보고서', '마감', 'm3', 5)]}
         update_dashboard(book, events, self.TODAY, mail_rows={'m3': 7})
         sheet.Cells.Clear.assert_called_once()
         book.CustomDocumentProperties.return_value.Value = '1'
         update_dashboard(book, events, self.TODAY, mail_rows={'m3': 7})
         sheet.Cells.Clear.assert_called_once()                     # layout stays put
         self.assertEqual(cells[10, 8].Value, '2026-09-14')         # list still refilled
-        self.assertEqual(cells[10, 9].Value, '◾ 보고서')
+        self.assertEqual(cells[10, 9].Value, '■ 보고서')
         self.assertEqual(cells[10, 12].Value, '3일 뒤')
         self.assertEqual(cells[11, 9].Value, '')                   # empty rows cleared
         target = sheet.Hyperlinks.Add.call_args.kwargs

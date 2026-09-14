@@ -17,8 +17,8 @@ from pathlib import Path
 
 from . import __version__
 from .calendar_sheet import COLORS, MARKERS
-from .core import (ANALYZING, FAILED, HANDLED, LIST_LIMIT, PROGRESS, SORTS, STATES, Store,
-                   account_key, local_text, now, parse_mail, row_view, state_of)
+from .core import (ANALYZING, FAILED, HANDLED, LIST_LIMIT, PROGRESS, ROOM_MARK, SORTS, STATES,
+                   Store, account_key, local_text, now, parse_mail, row_view, state_of)
 from .dashboard import CATEGORIES, PRIORITIES, describe
 from .excel import mailto
 from .hub import line_text
@@ -368,8 +368,12 @@ a.ma-kpi:hover {{
    are scoped to .ma-chat so nothing else on the site inherits the override. */
 .ma-chat {{ height:min(58vh, 470px); width:100%; }}
 /* nicegui pads the scroll content and lets it shrink-wrap, so on a narrow window the
-   padding alone is wider than the area and the whole thread scrolls sideways. */
-.ma-chat .q-scrollarea__content {{ width:100%; padding:2px 10px 2px 2px; }}
+   padding alone is wider than the area and the whole thread scrolls sideways.
+   The right gutter clears Quasar's overlay thumb: a sent bubble is margin-left:auto
+   and sat directly under it, so the scrollbar crossed my own message. */
+.ma-chat .q-scrollarea__content {{ width:100%; padding:6px 20px 6px 14px; }}
+.ma-chat .q-scrollarea__thumb {{ width:6px; border-radius:6px; opacity:.28; }}
+.ma-chat .q-scrollarea__thumb:hover {{ opacity:.5; }}
 .ma-chat .q-message {{ max-width:min(76%, 660px); margin-bottom:12px; }}
 .ma-chat .q-message-sent {{ margin-left:auto; }}
 .ma-chat .q-message-name {{ font-size:11px; color:var(--muted); margin-bottom:3px; }}
@@ -386,6 +390,40 @@ a.ma-kpi:hover {{
 .ma-chat .q-message-text:last-child:before {{ display:none; }}
 .ma-chat .q-message-text-content {{ color:var(--ink); }}
 .ma-wait {{ display:flex; align-items:center; gap:8px; }}
+
+/* 상담: the thread list beside the thread. One column on a narrow window, where a
+   250px sidebar would leave the bubbles no room at all. */
+.ma-chatwrap {{ display:flex; gap:14px; align-items:stretch; width:100%; }}
+.ma-rooms {{ flex:0 0 252px; min-width:0; display:flex; flex-direction:column; padding:0; }}
+.ma-thread {{ flex:1 1 auto; min-width:0; }}
+@media (max-width:900px) {{
+  .ma-chatwrap {{ flex-direction:column; }}
+  .ma-rooms {{ flex:none; width:100%; }}
+  .ma-rooms__list {{ max-height:220px; }}
+}}
+.ma-rooms__head {{
+  display:flex; align-items:center; gap:8px; padding:12px 12px 6px;
+}}
+.ma-rooms__find {{ padding:0 12px 8px; width:100%; }}
+.ma-rooms__list {{ flex:1 1 auto; max-height:min(58vh, 470px); padding:0 6px 8px; }}
+.ma-room {{
+  border-radius:10px; padding:8px 10px; cursor:pointer; display:block;
+  border:1px solid transparent;
+}}
+.ma-room:hover {{ background:var(--sunken); }}
+.ma-room.is-open {{ background:var(--brand-soft); border-color:#d8e3fb; }}
+.ma-room__top {{ display:flex; align-items:center; gap:6px; min-width:0; }}
+.ma-room__icon {{ font-size:15px; color:var(--muted); flex:none; }}
+.ma-room.is-open .ma-room__icon {{ color:var(--brand); }}
+.ma-room__title {{
+  font-size:12.5px; font-weight:600; color:var(--ink);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0;
+}}
+.ma-room__when {{ font-size:10.5px; color:var(--muted); flex:none; }}
+.ma-room__last {{
+  display:block; font-size:11.5px; color:var(--muted); margin-top:2px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}}
 
 /* What rich_text() emits, and nothing else: no tables, no images, no links. */
 .ma-chat p {{ margin:0 0 6px; }}
@@ -469,6 +507,21 @@ a.ma-kpi:hover {{
 .fc .fc-daygrid-day-number {{ color:{SUBTLE}; font-size:12px; padding:5px 7px; }}
 .fc .fc-daygrid-event {{ border:none; border-radius:5px; padding:1px 5px; font-size:11.5px; }}
 .fc .fc-list-day-cushion {{ background:{SUNKEN}; }}
+.fc .fc-timegrid-event {{ border:none; border-radius:5px; padding:1px 4px; }}
+.fc .fc-timegrid-event .fc-event-main {{ padding:0; }}
+/* One row per event: icon, then time, then whatever room the title has left. */
+.ma-ev {{ display:flex; align-items:center; gap:4px; min-width:0; overflow:hidden; }}
+.ma-ev__icon {{ font-size:13px; line-height:1; flex:none; opacity:.92; }}
+.ma-ev__time {{ font-weight:700; flex:none; font-variant-numeric:tabular-nums; }}
+.ma-ev__title {{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
+/* In 주 the block is as tall as the event is long, so the title may wrap. */
+.fc-timegrid-event .ma-ev {{ align-items:flex-start; flex-wrap:wrap; }}
+.fc-timegrid-event .ma-ev__title {{ white-space:normal; overflow-wrap:anywhere; }}
+.fc .fc-list-event-title .ma-ev__title {{ white-space:normal; }}
+.fc .fc-timegrid-now-indicator-line {{ border-color:{css_color(URGENT)}; }}
+.fc .fc-timegrid-now-indicator-arrow {{
+  border-color:{css_color(URGENT)}; border-top-color:transparent; border-bottom-color:transparent;
+}}
 .fc-theme-standard td, .fc-theme-standard th {{ border-color:{HAIR}; }}
 .q-field--outlined .q-field__control {{ border-radius:9px; }}
 .q-btn {{ border-radius:9px; }}
@@ -583,10 +636,10 @@ def day_title(day):
 def plain_title(label):
     """An entry label without the marker calendar_sheet puts on the front of it.
 
-    ◾/▫/· are how an Excel cell says 마감·시작·확인 필요 in one colour of text. This
-    row has a coloured dot *and* the kind spelled out beside it, so the marker is the
-    third time and reads as a missing glyph. The 마감 checklist keeps it: colour is
-    the only other thing carrying kind there.
+    ■/▶/◆ are how an Excel cell says 마감·시작·확인 필요 in one colour of text. Every
+    screen that shows an entry draws KIND_ICONS beside it instead, in the kind's own
+    colour, so the marker would be the same thing said twice — and it arrived here in
+    the surrounding text's colour, which said nothing at all.
     """
     text = str(label or '')
     if text[:1] in MARKERS.values():
@@ -610,9 +663,14 @@ def deadline_rows(data, today):
 
     A done row keeps its place but stops being a miss — the red is for what is still
     owed, and a deadline that was met late is not owed.
+
+    The kind rides along so the row can carry the same icon the calendar draws: this
+    panel sits directly under 오늘 일정, and the label's own marker arrived here in
+    the link's colour, which said nothing about which kind it was.
     """
-    return [{'day': day.isoformat(), 'title': entry.label, 'left': describe(day, today),
-             'mail': entry.mail_id, 'done': entry.mail_id in data['handled'],
+    return [{'day': day.isoformat(), 'title': plain_title(entry.label), 'kind': entry.kind,
+             'left': describe(day, today), 'mail': entry.mail_id,
+             'done': entry.mail_id in data['handled'],
              'missed': day < today and entry.mail_id not in data['handled']}
             for day, entry in data['due_window']]
 
@@ -936,6 +994,73 @@ def chat_context(row):
             'events': view['events'], 'body': view['body'][:8000]}
 
 
+# 상담 rooms. The general thread and every mail's thread already existed as keys in
+# `chat.mail_id`; a free-standing room is the third kind and is the only one that has
+# to carry a name of its own.
+GENERAL_ROOM = '일반 상담'
+NEW_ROOM = '새 대화'
+# One icon per kind of thread, so the list says what a row is without a second word.
+ROOM_ICONS = {'general': 'forum', 'mail': 'mark_email_read', 'room': 'chat_bubble_outline'}
+ROOM_TITLE_MAX = 26
+ROOM_PREVIEW_MAX = 46
+
+
+def room_title(text):
+    """A free room names itself after its first question, the way a chat list does.
+
+    One line: a pasted question arrives with its newlines, and a title is one row in a
+    narrow column.
+    """
+    line = ' '.join(str(text or '').split())
+    if len(line) <= ROOM_TITLE_MAX:
+        return line
+    return line[:ROOM_TITLE_MAX - 1].rstrip() + '…'
+
+
+def room_preview(row):
+    """What was last said in a thread, and by whom. '' for a room nobody has used."""
+    text = ' '.join(str(row.get('last') or '').split())
+    if not text:
+        return ''
+    line = ('나: ' if row.get('role') == 'user' else 'Codex: ') + text
+    if len(line) <= ROOM_PREVIEW_MAX:
+        return line
+    return line[:ROOM_PREVIEW_MAX - 1].rstrip() + '…'
+
+
+def room_rows(rooms, open_key=''):
+    """`Store.rooms()` as the sidebar draws it: kind, name, last line, when.
+
+    Three kinds, because only one of them owns its name — a mail thread is called
+    after the mail and dies with it, the general thread is always there and cannot be
+    deleted, and only a 새 대화 can be renamed or thrown away.
+    """
+    shaped = []
+    for row in rooms:
+        key = str(row.get('key') or '')
+        name = str(row.get('name') or '').strip()
+        if not key:
+            kind, title = 'general', GENERAL_ROOM
+        elif key.startswith(ROOM_MARK):
+            kind, title = 'room', name or NEW_ROOM
+        else:
+            kind, title = 'mail', name or '(제목 없음)'
+        shaped.append({'key': key, 'kind': kind, 'title': title,
+                       'preview': room_preview(row),
+                       'when': local_text(row['at']) if row.get('at') else '',
+                       'turns': int(row.get('turns') or 0), 'open': key == open_key})
+    return shaped
+
+
+def room_search(rows, query):
+    """Filter the sidebar by title or by what was last said in the thread."""
+    text = str(query or '').strip().lower()
+    if not text:
+        return rows
+    return [row for row in rows
+            if text in row['title'].lower() or text in row['preview'].lower()]
+
+
 def stats_view(store, account, today, days=30):
     """Totals and the daily trend for the 통계 page."""
     rows = list(store.page(account)) if account else []
@@ -976,21 +1101,37 @@ def collect_text(message, running):
     return message + ' · 분석은 수집을 시작하면 진행됩니다.'
 
 
-def reanalyze_text(asked, wanted):
-    """What 다시 분석 reports when Codex was already holding some of the selection.
+# 다시 분석 queues; the analysis itself is the worker's, exactly as collecting is.
+# The tooltip says so unconditionally rather than only while the worker is stopped:
+# it is built once and the worker can start or stop under it, and a tooltip that has
+# to be right at two different moments is better off saying the thing that is always
+# true.
+REANALYZE_TIP = ('기존 분석 결과를 지우고 다시 분석하도록 예약합니다. '
+                 '분석은 수집이 실행 중일 때 진행됩니다.')
+
+
+def reanalyze_text(asked, wanted, running=True):
+    """What 다시 분석 reports: what it skipped, and whether anything will act on it.
 
     Store.reset() skips a mail that is in Codex right now, because clearing its result
     would be overwritten by the answer already on its way. A button that then said
     '요청했습니다' would be describing something that did not happen.
+
+    Nor does the button analyse anything itself — it clears the result and wakes the
+    worker, and with the collector stopped there is no worker to wake. So it says so,
+    the way collect_text() does: the request is real and keeps, but nothing moves
+    until 실행 is started.
     """
     skipped = max(0, wanted - asked)
-    if not skipped:
-        return f'{asked}건을 다시 분석하도록 요청했습니다.'
-    if not asked:
+    if skipped and not asked:
         return ('지금 분석 중이라 다시 분석할 수 없습니다. '
                 '분석이 끝나면 다시 눌러 주세요.')
-    return (f'{asked}건을 다시 분석하도록 요청했습니다. '
-            f'{skipped}건은 지금 분석 중이라 건너뛰었습니다.')
+    text = f'{asked}건을 다시 분석하도록 요청했습니다.'
+    if skipped:
+        text += f' {skipped}건은 지금 분석 중이라 건너뛰었습니다.'
+    if not running:
+        text += ' 분석은 수집을 시작하면 진행됩니다.'
+    return text
 
 
 def run_view(hub, directory, config, services=None, limit=RUN_LINES * 3):
@@ -1043,25 +1184,44 @@ def vendor_path():
     return Path(__file__).resolve().parent / 'vendor'
 
 
+def event_title(entry):
+    """The entry's own title: no marker, and no clock once the event carries its time.
+
+    The label is built for an Excel cell, which has neither an icon nor a slot to sit
+    in, so it spells both out. A timed event prints its own '14:00' beside the icon,
+    and the label's copy of it in front of the title made that the second one.
+    """
+    text = plain_title(entry.label)
+    clock = getattr(entry, 'clock', '')
+    if clock and text.startswith(clock):
+        text = text[len(clock):].lstrip()
+    return text
+
+
 def calendar_events(events, today, handled=()):
     """calendar_sheet entries as FullCalendar events — all of them.
 
     A mailbox produces hundreds, not thousands, so handing the client the whole set
     lets it page through months without another round trip.
+
+    An entry that knows its time is a *timed* event, not an all-day one: every event
+    used to be allDay, so 주 view stacked a 14:00 웨비나 in the 종일 band and left the
+    2pm slot it belongs in empty — the one thing a week view is for.
     """
     payload = []
     for day in sorted(events):
         for entry in events[day]:
             if entry.mail_id in handled:
                 continue
+            clock = getattr(entry, 'clock', '')
             payload.append({
                 'id': entry.mail_id,
-                'title': entry.label,
-                'start': day.isoformat(),
-                'allDay': True,
+                'title': event_title(entry),
+                'start': f'{day.isoformat()}T{clock}:00' if clock else day.isoformat(),
+                'allDay': not clock,
                 'color': css_color(COLORS[entry.kind]),
-                # `clean` is the title without the ◾/▫/· the Excel cell needs: the
-                # tooltip already has a coloured dot and the kind spelled out.
+                # `clean` is what the tooltip shows: the title with its time back in
+                # front, because a tooltip has no slot to say when from.
                 'extendedProps': {'kind': entry.kind, 'evidence': entry.evidence,
                                   'clean': plain_title(entry.label),
                                   'missed': entry.kind == '마감' and day < today},
@@ -1291,6 +1451,9 @@ def deadlines(data, today, token, on_tick):
                             on_change=lambda event, ident=row['mail']:
                             on_tick(ident, event.value)) \
                     .props('dense size=xs').tooltip('체크하면 처리 완료가 됩니다')
+                ui.icon(KIND_ICONS[row['kind']]) \
+                    .style(f'color:{css_color(COLORS[row["kind"]])};font-size:14px;flex:none') \
+                    .tooltip(row['kind'])
                 ui.label(row['day']).classes('ma-due__day')
                 ui.link(row['title'], href('/mail', token, id=row['mail'])) \
                     .classes('ma-due__title')
@@ -1320,8 +1483,9 @@ def today_panel(rows, today, token):
         with ui.element('div').classes('ma-today'):
             for row in rows:
                 with ui.element('div').classes('ma-today__row'):
-                    ui.element('div').classes('ma-dot') \
-                        .style(f'background:{css_color(COLORS[row["kind"]])}')
+                    ui.icon(KIND_ICONS[row['kind']]) \
+                        .style(f'color:{css_color(COLORS[row["kind"]])};font-size:15px;'
+                               'flex:none')
                     ui.link(row['title'], href('/mail', token, id=row['mail'])) \
                         .classes('ma-today__title')
                     ui.space()
@@ -1459,6 +1623,11 @@ def drag_start(payload):
             " e.currentTarget.classList.add('is-dragging'); }" % json.dumps(payload))
 
 
+# One icon per kind, drawn at one size. The ◾/▫/· of the Excel cell are three
+# different glyph sizes, which beside each other read as a font that failed rather
+# than as three kinds; Quasar's Material Icons are already on every page.
+KIND_ICONS = {'마감': 'flag', '시작': 'play_arrow', '확인 필요': 'help_outline'}
+
 CALENDAR_SCRIPT = '<script src="/vendor/fullcalendar/index.global.min.js"></script>'
 CALENDAR_SETUP = """
 <script>
@@ -1505,6 +1674,8 @@ function showTip(anchor, html) {
 window.addEventListener('scroll', hideTip, true);
 window.addEventListener('resize', hideTip);
 
+const MA_KIND_ICONS = __KIND_ICONS__;
+
 window.mailCalendar = function (events, tries) {
   const host = document.getElementById('calendar');
   // Vue may not have mounted the div yet, so wait rather than silently doing nothing.
@@ -1532,6 +1703,15 @@ window.mailCalendar = function (events, tries) {
     expandRows: true,
     dayMaxEvents: 4,
     events: events,
+    // A timed event renders as a dot in dayGrid by default, which would turn the
+    // month view into three shades of speck; the block is what carries the colour.
+    eventDisplay: 'block',
+    // 24-hour, two digits: FullCalendar's own default is '2p', and every label this
+    // app writes elsewhere is '14:00'.
+    eventTimeFormat: {hour: '2-digit', minute: '2-digit', hour12: false},
+    slotLabelFormat: {hour: '2-digit', minute: '2-digit', hour12: false},
+    scrollTime: '08:00:00',
+    nowIndicator: true,
     headerToolbar: {left: 'prev,next today', center: '',
                     right: 'dayGridMonth,timeGridWeek,listMonth'},
     buttonText: {today: '오늘', month: '월', week: '주', list: '목록'},
@@ -1543,6 +1723,19 @@ window.mailCalendar = function (events, tries) {
       // Paging months rebuilds every event element, and the one the pointer was over
       // goes with them — without this the tooltip outlives its own anchor.
       hideTip();
+      // 주 is the one view with a 24-hour column behind it: at height 'auto' it draws
+      // all of it, so a 14:00 webinar sits a screen and a half below the fold and
+      // midnight is what the page opens on. A fixed height gives the grid its own
+      // scroll, which is what makes scrollTime mean anything.
+      const tall = info.view.type.startsWith('timeGrid')
+        ? Math.max(520, window.innerHeight - 250) : 'auto';
+      if (calendar.getOption('height') !== tall) {
+        calendar.setOption('height', tall);
+        // After the tick, not in it: setOption rebuilds the scroller this is trying
+        // to scroll, so the call in here would land on the element being replaced
+        // and 주 would open on midnight with the day's events below the fold.
+        if (tall !== 'auto') setTimeout(() => calendar.scrollToTime('08:00:00'), 0);
+      }
       const label = document.getElementById('calendar-title');
       if (!label) return;
       const start = info.view.currentStart;
@@ -1550,6 +1743,34 @@ window.mailCalendar = function (events, tries) {
       label.textContent = info.view.type === 'dayGridMonth'
         ? `${start.getFullYear()}년 ${start.getMonth() + 1}월`
         : `${stamp(start)} ~ ${stamp(last)}`;
+    },
+    // The kind's icon, the time, then the title — one row, one icon size, in every
+    // view. Built as nodes rather than innerHTML: the title is whatever the sender
+    // wrote and must never be parsed as markup.
+    eventContent: (arg) => {
+      const box = document.createElement('div');
+      box.className = 'ma-ev';
+      const icon = document.createElement('i');
+      icon.className = 'material-icons ma-ev__icon';
+      icon.textContent = MA_KIND_ICONS[arg.event.extendedProps.kind] || 'circle';
+      // 목록 draws the event on the page's own white, where an icon in currentColor
+      // would be the only thing on the row not saying which kind it is.
+      const list = arg.view.type.startsWith('list');
+      if (list) icon.style.color = arg.event.backgroundColor;
+      box.appendChild(icon);
+      // 목록 has a column of its own for the time; anywhere else this is the only
+      // place it can be said.
+      if (arg.timeText && !list) {
+        const when = document.createElement('span');
+        when.className = 'ma-ev__time';
+        when.textContent = arg.timeText;
+        box.appendChild(when);
+      }
+      const title = document.createElement('span');
+      title.className = 'ma-ev__title';
+      title.textContent = arg.event.title;
+      box.appendChild(title);
+      return {domNodes: [box]};
     },
     eventDidMount: (info) => {
       // No info.el.title: the desktop tooltip waits a second, wraps where it likes and
@@ -1581,7 +1802,7 @@ window.mailCalendar = function (events, tries) {
   calendar.render();
 };
 </script>
-"""
+""".replace('__KIND_ICONS__', json.dumps(KIND_ICONS, ensure_ascii=False))
 
 
 def build(directory, config, token, hub=None, services=None, config_path=None,
@@ -2162,7 +2383,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                         hub.wake()
                     table.selected.clear()
                     rows.refresh()
-                    ui.notify(reanalyze_text(asked, len(ids)))
+                    ui.notify(reanalyze_text(asked, len(ids), running=collecting()))
 
                 def step(delta):
                     remember(page=max(0, min(data['pages'] - 1, state['page'] + delta)))
@@ -2177,7 +2398,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     ui.button('미처리로', icon='undo', on_click=lambda: mark('')) \
                         .props('flat dense no-caps text-color=secondary')
                     ui.button('다시 분석', icon='refresh', on_click=again) \
-                        .props('flat dense no-caps text-color=secondary')
+                        .props('flat dense no-caps text-color=secondary').tooltip(REANALYZE_TIP)
                     ui.button('삭제', icon='delete_outline',
                               on_click=lambda: ask_delete(picked())) \
                         .props('flat dense no-caps text-color=negative')
@@ -2220,7 +2441,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     hub.wake()
                 touched['now'] = True
                 panel.refresh()
-                ui.notify(reanalyze_text(asked, 1))
+                ui.notify(reanalyze_text(asked, 1, running=collecting()))
 
             def unhide():
                 store(directory).set_todo_hidden(view['id'], False)
@@ -2258,7 +2479,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                                       href('/chat', token, id=view['id']))) \
                             .props('flat dense no-caps')
                         ui.button('다시 분석', icon='refresh', on_click=retry) \
-                            .props('flat dense no-caps')
+                            .props('flat dense no-caps').tooltip(REANALYZE_TIP)
                         # Only for a mail whose card was swept off the board: this is
                         # the one place that can put it back, so it has to be here.
                         if view['todo_hidden']:
@@ -2424,9 +2645,11 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                         .style(f'color:{INK};font-size:15px;font-weight:700')
                     ui.space()
                     for kind in ('마감', '시작', '확인 필요'):
-                        with ui.element('div').classes('ma-meta').style('gap:5px'):
-                            ui.element('div').classes('ma-dot') \
-                                .style(f'background:{css_color(COLORS[kind])}')
+                        with ui.element('div').classes('ma-meta').style('gap:4px'):
+                            # The same icon the events carry, so the legend explains
+                            # what is actually on the grid rather than a second key.
+                            ui.icon(KIND_ICONS[kind]) \
+                                .style(f'color:{css_color(COLORS[kind])};font-size:15px')
                             ui.label(kind).classes('ma-meta__item')
                     ui.label('일정을 누르면 그 메일이 열립니다.').classes('ma-meta__item')
                 ui.element('div').props('id=calendar').style('width:100%')
@@ -2437,9 +2660,13 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     with card(f'지난 마감 {len(missed)}건', 'error_outline'):
                         for day, entry in reversed(missed):
                             with ui.element('div').classes('ma-row'):
+                                ui.icon(KIND_ICONS[entry.kind]) \
+                                    .style(f'color:{css_color(COLORS[entry.kind])};'
+                                           'font-size:14px;flex:none')
                                 ui.label(day.isoformat()).classes('ma-meta__item') \
                                     .style('min-width:86px')
-                                ui.link(entry.label, href('/mail', token, id=entry.mail_id)) \
+                                ui.link(plain_title(entry.label),
+                                        href('/mail', token, id=entry.mail_id)) \
                                     .style(f"color:{css_color(URGENT)};font-size:13px;"
                                            'text-decoration:none;font-weight:500')
                                 ui.space()
@@ -2722,13 +2949,29 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             refused()
             return
         account = account_of(config)
-        mail_id = request.query_params.get('id') or ''
-        row = store(directory).detail(mail_id) if mail_id else None
+        # `id` is the room key: a mail's id, a 새 대화's own key, or '' for 일반 상담.
+        state = {'room': request.query_params.get('id') or '', 'query': ''}
         busy = {'now': False}
+
+        def mail_of(key):
+            """The mail a room hangs off, or None — a 새 대화 has no mail behind it."""
+            if not key or key.startswith(ROOM_MARK):
+                return None
+            return store(directory).detail(key)
+
+        def current():
+            """The open room as the sidebar shapes it, so both say the same name."""
+            rows = room_rows(store(directory).rooms(account), state['room']) if account else []
+            for row in rows:
+                if row['open']:
+                    return rows, row
+            # A key nobody has written to yet is not in the list: shape it on its own.
+            return rows, room_rows([{'key': state['room'], 'at': '', 'turns': 0,
+                                     'name': ''}], state['room'])[0]
 
         @ui.refreshable
         def thread():
-            lines = list(store(directory).chat(account, mail_id)) if account else []
+            lines = list(store(directory).chat(account, state['room'])) if account else []
             if not lines:
                 empty('질문을 입력하면 Codex가 답합니다. 답변은 한 번에 하나씩 오고, '
                       '분석이 돌고 있으면 그 뒤에 처리됩니다.')
@@ -2762,63 +3005,182 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             if not account:
                 ui.notify('설정을 먼저 저장하세요.')
                 return
+            # The room is captured here, not read at the end: an answer takes tens of
+            # seconds and the reader may well have moved to another thread by then. It
+            # belongs to the room it was asked in either way.
+            room = state['room']
             box.set_value('')
-            store(directory).add_chat(account, 'user', question, mail_id)
+            store(directory).add_chat(account, 'user', question, room)
+            # A 새 대화 has no name until its first question, which is the name.
+            if room.startswith(ROOM_MARK):
+                store(directory).name_room(room, room_title(question), only_if_unnamed=True)
             busy['now'] = True
             # One Codex process at a time (services.codex_slot): a second question would
             # sit in that queue for the whole of this run with nothing on screen saying so.
             box.disable()
             send.disable()
             thread.refresh()
+            rooms.refresh()
             await scroll()
             history = [(role, text) for role, text, _ in
-                       store(directory).chat(account, mail_id)][:-1]
+                       store(directory).chat(account, room)][:-1]
             try:
                 reply = await nicerun.io_bound(helpers.chat_reply, question, history,
-                                               chat_context(row), config)
+                                               chat_context(mail_of(room)), config)
             except Exception as exc:
                 reply = f'답하지 못했습니다: {type(exc).__name__}: {exc}'
-            store(directory).add_chat(account, 'codex', reply, mail_id)
+            store(directory).add_chat(account, 'codex', reply, room)
             busy['now'] = False
             box.enable()
             send.enable()
+            rooms.refresh()
+            if state['room'] != room:
+                # Answered into a thread nobody is looking at; the list already says so.
+                ui.notify('다른 대화의 답변이 도착했습니다.')
+                return
             thread.refresh()
             await scroll()
 
         def wipe():
-            store(directory).clear_chat(account, mail_id)
+            store(directory).clear_chat(account, state['room'])
             thread.refresh()
+            rooms.refresh()
+            head.refresh()
+
+        async def open_room(key):
+            if key == state['room']:
+                return
+            state['room'] = key
+            thread.refresh()
+            rooms.refresh()
+            head.refresh()
+            await scroll()
+
+        async def start_room():
+            if not account:
+                ui.notify('설정을 먼저 저장하세요.')
+                return
+            state['room'] = store(directory).new_room(account)
+            state['query'] = ''
+            thread.refresh()
+            rooms.refresh()
+            head.refresh()
+            # Refresh first, then touch the composer: box lives outside the refreshables.
+            box.run_method('focus')
+            await scroll()
+
+        def rename(key):
+            def save():
+                store(directory).name_room(key, room_title(field.value))
+                naming.close()
+                rooms.refresh()
+                head.refresh()
+            naming = ui.dialog()
+            with naming, card('대화 이름 바꾸기', 'edit'):
+                field = ui.input(value=current()[1]['title']) \
+                    .props('outlined dense autofocus').style('width:100%')
+                field.on('keydown.enter', save)
+                with ui.element('div').classes('ma-foot'):
+                    ui.space()
+                    ui.button('취소', on_click=naming.close).props('flat dense no-caps')
+                    ui.button('저장', on_click=save).props('unelevated dense no-caps')
+            naming.open()
+
+        def remove(key):
+            def go():
+                store(directory).drop_room(account, key)
+                asking.close()
+                state['room'] = ''
+                thread.refresh()
+                rooms.refresh()
+                head.refresh()
+                ui.notify('대화를 지웠습니다.')
+            asking = ui.dialog()
+            with asking, card('대화 삭제', 'delete_outline'):
+                ui.label('이 대화와 주고받은 내용을 모두 지웁니다. 되돌릴 수 없습니다.') \
+                    .classes('ma-lede')
+                with ui.element('div').classes('ma-foot'):
+                    ui.space()
+                    ui.button('취소', on_click=asking.close).props('flat dense no-caps')
+                    ui.button('삭제', on_click=go) \
+                        .props('unelevated dense no-caps color=negative')
+            asking.open()
+
+        @ui.refreshable
+        def rooms():
+            """The thread list. Rebuilt on every write, which is cheap: one grouped query."""
+            shaped = room_search(current()[0], state['query'])
+            if not shaped:
+                empty('찾는 대화가 없습니다.')
+                return
+            for entry in shaped:
+                classes = 'ma-room' + (' is-open' if entry['open'] else '')
+                with ui.element('div').classes(classes) \
+                        .on('click', lambda key=entry['key']: open_room(key)):
+                    with ui.element('div').classes('ma-room__top'):
+                        ui.icon(ROOM_ICONS[entry['kind']]).classes('ma-room__icon')
+                        ui.label(entry['title']).classes('ma-room__title')
+                        ui.space()
+                        ui.label(entry['when']).classes('ma-room__when')
+                    if entry['preview']:
+                        ui.label(entry['preview']).classes('ma-room__last')
+
+        @ui.refreshable
+        def head():
+            """The open thread's own line: what it is, and what may be done to it."""
+            entry = current()[1]
+            mail = mail_of(state['room'])
+            with ui.element('div').classes('ma-head').style('margin-bottom:6px'):
+                ui.icon(ROOM_ICONS[entry['kind']]).style(f'color:{MUTED};font-size:17px')
+                ui.label(entry['title']).classes('ma-head__title')
+                ui.space()
+                if mail is not None:
+                    ui.link('메일에서 보기', href('/mail', token, id=state['room'])) \
+                        .style(f'color:{BRAND};font-size:12px;text-decoration:none')
+                if entry['kind'] == 'room':
+                    ui.button(icon='edit', on_click=lambda: rename(state['room'])) \
+                        .props('flat dense round').tooltip('이름 바꾸기')
+                    ui.button(icon='delete_outline', on_click=lambda: remove(state['room'])) \
+                        .props('flat dense round text-color=negative').tooltip('대화 삭제')
+                ui.button(icon='delete_sweep', on_click=wipe) \
+                    .props('flat dense round').tooltip('주고받은 내용만 지우기')
+
+        def filter_rooms(value):
+            state['query'] = value or ''
+            rooms.refresh()
 
         with shell('/chat', token):
-            with card():
-                with ui.element('div').classes('ma-head').style('margin-bottom:6px'):
-                    if row is not None:
-                        ui.icon('mark_email_read').style(f'color:{MUTED};font-size:17px')
-                        ui.label(f"이 메일에 대한 상담: {row['subject'] or '(제목 없음)'}") \
-                            .classes('ma-head__title')
+            with ui.element('div').classes('ma-chatwrap'):
+                with card(flush=True).classes('ma-rooms'):
+                    with ui.element('div').classes('ma-rooms__head'):
+                        ui.label('대화').classes('ma-head__title')
                         ui.space()
-                        ui.link('메일에서 보기', href('/mail', token, id=mail_id)) \
-                            .style(f'color:{BRAND};font-size:12px;text-decoration:none')
-                    else:
-                        ui.icon('forum').style(f'color:{MUTED};font-size:17px')
-                        ui.label('일반 상담').classes('ma-head__title')
-                ui.label('메일 화면에서 넘어오면 그 메일 내용을 함께 봅니다. 주의: 메일 본문이 '
-                         '로그인한 Codex 계정으로 전송되며, 대화는 이 PC에만 저장됩니다.') \
-                    .classes('ma-lede').style('margin-bottom:12px')
-                area = ui.scroll_area().classes('ma-chat')
-                with area:
-                    thread()
-                with ui.element('div').classes('ma-compose'):
-                    box = ui.textarea(
-                        placeholder='질문을 입력하세요 · Enter 전송, Shift+Enter 줄바꿈')
-                    box.props('outlined autogrow dense').style('flex:1 1 auto;min-width:0')
-                    # .exact so Shift+Enter still writes a newline; .prevent so the
-                    # newline it would have written does not land in the empty box.
-                    box.on('keydown.enter.exact.prevent', ask)
-                    send = ui.button('보내기', icon='send', on_click=ask) \
-                        .props('unelevated no-caps').style('flex:none')
-                    ui.button(icon='delete_sweep', on_click=wipe) \
-                        .props('flat dense round').tooltip('대화 지우기')
+                        ui.button('새 대화', icon='add', on_click=start_room) \
+                            .props('flat dense no-caps')
+                    ui.input(placeholder='대화 검색') \
+                        .props('outlined dense clearable') \
+                        .classes('ma-rooms__find') \
+                        .on_value_change(lambda event: filter_rooms(event.value))
+                    with ui.element('div').classes('ma-rooms__list ma-scroll'):
+                        rooms()
+                with card().classes('ma-thread'):
+                    head()
+                    ui.label('메일 화면에서 넘어오면 그 메일 내용을 함께 봅니다. 주의: 메일 본문이 '
+                             '로그인한 Codex 계정으로 전송되며, 대화는 이 PC에만 저장됩니다.') \
+                        .classes('ma-lede').style('margin-bottom:12px')
+                    area = ui.scroll_area().classes('ma-chat')
+                    with area:
+                        thread()
+                    with ui.element('div').classes('ma-compose'):
+                        box = ui.textarea(
+                            placeholder='질문을 입력하세요 · Enter 전송, Shift+Enter 줄바꿈')
+                        box.props('outlined autogrow dense') \
+                            .style('flex:1 1 auto;min-width:0')
+                        # .exact so Shift+Enter still writes a newline; .prevent so the
+                        # newline it would have written does not land in the empty box.
+                        box.on('keydown.enter.exact.prevent', ask)
+                        send = ui.button('보내기', icon='send', on_click=ask) \
+                            .props('unelevated no-caps').style('flex:none')
             # A thread opens where it was left off, which is at the end of it.
             ui.timer(0.15, lambda: area.scroll_to(percent=1.0), once=True)
 

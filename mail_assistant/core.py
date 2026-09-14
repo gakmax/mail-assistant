@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import secrets
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from email import policy
@@ -12,6 +13,9 @@ from pathlib import Path
 
 KST = timezone(timedelta(hours=9))
 HANDLED = '처리'
+# What tells a free-standing 상담 room's key from a mail's. A mail id is 24 hex
+# characters, so '#' can never be one.
+ROOM_MARK = '#'
 PROGRESS = '진행'      # the kanban's middle column; '' -> 진행 -> 처리
 FAILED = '실패'
 # Set by the worker while Codex is actually looking at a mail, cleared the moment it
@@ -131,6 +135,9 @@ class Store:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, account TEXT NOT NULL,
                 mail_id TEXT NOT NULL DEFAULT '', role TEXT NOT NULL,
                 text TEXT NOT NULL, at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS chat_room (
+                id TEXT PRIMARY KEY, account TEXT NOT NULL,
+                title TEXT NOT NULL DEFAULT '', created TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS todo (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, account TEXT NOT NULL,
                 text TEXT NOT NULL, state TEXT NOT NULL DEFAULT '',
@@ -336,6 +343,70 @@ class Store:
     def clear_chat(self, account, mail_id=''):
         with self.db:
             self.db.execute('DELETE FROM chat WHERE account=? AND mail_id=?', (account, mail_id))
+
+    # --- 상담 rooms -------------------------------------------------------
+    #
+    # `chat.mail_id` was always the room key: a mail's id, or '' for the general
+    # thread. A free-standing room is the third kind and needs somewhere to keep a
+    # title, which is all `chat_room` is. Its ids carry ROOM_MARK, which a mail id
+    # cannot: those are 24 hex characters.
+
+    def new_room(self, account, title=''):
+        ident = ROOM_MARK + secrets.token_hex(8)
+        with self.db:
+            self.db.execute('INSERT INTO chat_room(id,account,title,created) VALUES (?,?,?,?)',
+                            (ident, account, title, now()))
+        return ident
+
+    def name_room(self, ident, title, only_if_unnamed=False):
+        """Rename a room, or let it name itself after its first question exactly once.
+
+        The guard is in the UPDATE rather than in a read-then-write: a second question
+        sent while the first was still being answered would otherwise rename the room
+        out from under the title it had just taken.
+        """
+        clause = " AND title=''" if only_if_unnamed else ''
+        with self.db:
+            self.db.execute(f'UPDATE chat_room SET title=? WHERE id=?{clause}', (title, ident))
+
+    def drop_room(self, account, ident):
+        """A free room and its turns. A mail's thread goes with the mail, not through here."""
+        if not str(ident).startswith(ROOM_MARK):
+            return False
+        with self.db:
+            self.db.execute('DELETE FROM chat WHERE account=? AND mail_id=?', (account, ident))
+            self.db.execute('DELETE FROM chat_room WHERE id=? AND account=?', (ident, account))
+        return True
+
+    def rooms(self, account):
+        """Every 상담 thread that exists, newest activity first.
+
+        The general thread is always in the list even when it is empty, because it is
+        where the page lands when nothing else is asked for. A room with no turns yet
+        sorts by when it was made, so 새 대화 appears at the top where it was created.
+        """
+        turns = self.db.execute(
+            'SELECT mail_id AS key, COUNT(*) AS turns, MAX(at) AS at,'
+            ' (SELECT role FROM chat WHERE account=c.account AND mail_id=c.mail_id'
+            '  ORDER BY id DESC LIMIT 1) AS role,'
+            ' (SELECT text FROM chat WHERE account=c.account AND mail_id=c.mail_id'
+            '  ORDER BY id DESC LIMIT 1) AS last'
+            ' FROM chat c WHERE c.account=? GROUP BY mail_id', (account,)).fetchall()
+        found = {row['key']: dict(row) for row in turns}
+        for row in self.db.execute('SELECT id, title, created FROM chat_room WHERE account=?',
+                                   (account,)).fetchall():
+            entry = found.setdefault(row['id'], {'key': row['id'], 'turns': 0, 'at': row['created'],
+                                                 'role': '', 'last': ''})
+            entry['name'] = row['title']
+        found.setdefault('', {'key': '', 'turns': 0, 'at': '', 'role': '', 'last': ''})
+        # Subjects for the mail threads, in one query rather than one per row.
+        wanted = [key for key in found if key and not key.startswith(ROOM_MARK)]
+        if wanted:
+            marks = ','.join('?' * len(wanted))
+            for row in self.db.execute(f'SELECT id, subject FROM mail WHERE id IN ({marks})',
+                                       wanted).fetchall():
+                found[row['id']]['name'] = row['subject']
+        return sorted(found.values(), key=lambda row: row['at'], reverse=True)
 
     def set_handled_many(self, ids, state):
         with self.db:

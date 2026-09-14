@@ -117,7 +117,7 @@ class App:
         head = ttk.Frame(self.root, padding=(14, 12, 14, 0))
         head.pack(fill='x')
         ttk.Label(head, text='메일 업무 도우미', font=('맑은 고딕', 15, 'bold')).pack(side='left')
-        ttk.Label(head, text='하이웍스 메일을 정리하고 엑셀에 반영합니다. 답변은 초안으로만 저장합니다.',
+        ttk.Label(head, text='메일을 정리하고 엑셀에 반영합니다. 답변은 초안으로만 저장합니다.',
                   style='Card.TLabel').pack(side='left', padx=(12, 0), pady=(6, 0))
         self.tabs = ttk.Notebook(self.root)
         self.tabs.pack(fill='both', expand=True, padx=12, pady=12)
@@ -430,8 +430,7 @@ class App:
         # line may claim — the web screen says the same sentence for the same reason.
         asked = self.store().reset([row['id']], reanalyze=again)
         self.hub.wake()
-        self.log(reanalyze_text(asked, 1)
-                 + ('' if not asked or self.running() else ' 시작을 누르면 처리됩니다.'))
+        self.log(reanalyze_text(asked, 1, running=self.running()))
         self.refresh()
 
     # 일정 -------------------------------------------------------------

@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Windows-only tkinter app with a second, web-based set of screens. Polls a Hiworks POP3 mailbox, sends each mail to the
+Windows-only tkinter app with a second, web-based set of screens. Polls a POP3 mailbox (Hiworks is only the default host), sends each mail to the
 Codex CLI for analysis, stores everything in sqlite, and writes the result into a
 desktop Excel workbook over COM. The window (`app.py`) reads from the database,
 not from the workbook: 현황·메일·일정·실행·설정 tabs over `mail.db` — those are the
@@ -97,6 +97,15 @@ is a week-old fact. `reset()` skips a marked row and returns how many it changed
 clearing a result whose answer is already on its way would be overwritten, so a
 button that said '요청했습니다' would be describing something that did not happen;
 `reanalyze_text()` is that count turned into a sentence.
+
+**'다시 분석' is a booking, not the analysis.** It clears the result and calls
+`Hub.wake()`; the analysis is the worker's, exactly as collecting is. With 수집
+stopped there is no worker to wake, and the screen said '요청했습니다' and nothing ever
+moved — the same silence `collect_text()` exists to break, which is why
+`reanalyze_text(asked, wanted, running)` adds the same kind of sentence rather than
+the button being disabled: a request made before 시작 is real and keeps. `REANALYZE_TIP`
+says the dependency unconditionally, because the tooltip is built once and the worker
+can start or stop underneath it.
 
 **One list of filter values, in `core.STATES`.** The dropdown in `app.py`, the one
 in `webui.py` and the SQL in `core.STATE_SQL` are the same set; a value offered with
@@ -282,6 +291,25 @@ browser, so sanitising is a second lock rather than the only one — which is wh
 `selftest`'s `check_chat` fails the build if `dompurify.mjs` or `elements/html.js`
 stops shipping.
 
+**`chat.mail_id` is the room key, and always was.** A mail's id, or `''` for 일반
+상담 — which is why the 상담 thread list needed no migration of what is already
+stored. A free-standing 새 대화 is the third kind and the only one that owns a name,
+so `chat_room` holds nothing but that; its ids start with `core.ROOM_MARK`, which a
+mail id (24 hex characters) cannot. `Store.rooms()` is one grouped query plus one
+`IN (…)` for the subjects, never one query per room. `name_room(..., only_if_unnamed)`
+puts the guard in the UPDATE rather than in a read-then-write: a second question sent
+while the first was still being answered would otherwise rename the room out from
+under the title it had just taken. `drop_room()` refuses anything without the marker,
+because a mail's thread goes with the mail and that button must not be able to reach
+it.
+
+**A 상담 answer belongs to the room it was asked in.** `ask()` captures `state['room']`
+before the await, not after: a reply takes tens of seconds and the reader may well
+have moved on. It is stored against the captured room either way, and `thread.refresh()`
+is skipped — with a notice instead — when the open room has changed, or the answer
+would be painted into somebody else's thread. Switching rooms redraws `thread`,
+`rooms` and `head` rather than navigating, so a half-typed question survives it.
+
 **Never build a `ui.timer` inside a handler that has just called `refresh()`.** The
 timer takes its client from whatever slot is current, `refresh()` has deleted that
 slot, and the `RuntimeError` it raises kills the rest of the handler — in 상담 that
@@ -364,6 +392,26 @@ the text blocks are `@ui.refreshable`. Wrapping a chart in a refreshable drops t
 canvas and replays the entry animation on every tick, which on a 5-second timer reads
 as a page that will not sit still.
 
+**An entry that knows its time is a timed event.** `calendar_sheet.Entry` carries
+`clock` beside the label because the label is built for an Excel cell, which has
+neither an icon nor a slot to sit in and so spells everything out. `calendar_events()`
+turns that into a real `start` with `allDay: False`: while every event was allDay, 주
+stacked a 14:00 웨비나 in the 종일 band and left the 2pm row — the only thing a week
+view is for — empty. `event_title()` then takes the clock back off the title, because
+the slot and `eventTimeFormat` already say it; `clean` keeps it for the tooltip, which
+has no slot. 주 is also the one view with 24 hours behind it, so `datesSet` swaps
+`height` to a fixed number there (the grid gets its own scroll, which is what makes
+`scrollTime` mean anything) and back to `'auto'` elsewhere — and `scrollToTime` is
+called *after* the tick, because `setOption` rebuilds the scroller it scrolls.
+
+**Kind is carried by `KIND_ICONS` and three hues, not by three sizes of glyph.**
+마감 is red, 시작 is `LINK` blue and 확인 필요 grey — 시작 used to share `SOON` with
+'높음', and beside URGENT's deep red an amber block is the same colour at a glance,
+which on the calendar is exactly where the two sit side by side. The web draws a
+Material icon of one size (`eventContent` builds nodes, never innerHTML: the title is
+whatever the sender wrote); Excel keeps ■/▶/◆, one cast and one width. `legend_text()`
+counts its colour offsets off the string rather than striding by a constant.
+
 **The 일정 tooltip is the page's own, and there is exactly one of it.** `info.el.title`
 was the desktop's: it waits a second, wraps where it likes, and cannot show the kind's
 colour. `showTip()` fills one `div.ma-tip` — one for the page, not one per event,
@@ -371,11 +419,11 @@ because a month view mounts and unmounts hundreds — measures it *after* the co
 in so it can be clamped to the viewport, and `hideTip()` is wired to `scroll`
 (capturing), `resize`, `datesSet` and `eventClick`, because a tooltip anchored to an
 element that has been scrolled away or rebuilt is pointing at nothing. The title comes
-from `extendedProps.clean`: `calendar_sheet` puts ◾/▫/· on the front of a label so an
-Excel cell can say 마감·시작·확인 필요 in one colour, and beside a coloured dot and the
-kind spelled out that marker is the third time and reads as a missing glyph.
-`plain_title()` strips it here and in 오늘 일정; the 마감 checklist keeps it, because
-colour is the only other thing carrying kind there.
+from `extendedProps.clean`: `calendar_sheet` puts ■/▶/◆ on the front of a label so an
+Excel cell can say 마감·시작·확인 필요 in one colour, and beside `KIND_ICONS` and the
+kind spelled out that marker is the same thing said twice. `plain_title()` strips it
+everywhere on the web — the tooltip, 오늘 일정, the 마감 checklist and 지난 마감 — each
+of which draws the icon instead.
 
 **A page must not depend on `ui.run_javascript` to draw itself.** The calendar's
 first attempt passed its events that way and nothing ever rendered: the call needs a

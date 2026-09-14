@@ -12,6 +12,7 @@ from pathlib import Path
 from mail_assistant.core import (ANALYZING, FAILED, HANDLED, PROGRESS, SORTS, Store,
                                  account_key)
 from mail_assistant.dashboard import PRIORITIES
+from mail_assistant.calendar_sheet import MARKERS
 from mail_assistant.hub import Hub
 from mail_assistant.overview import DUE_DAYS, due_window, failures, oldest_open, overview
 from mail_assistant.webui import (CARD_TONES, DEFAULT_LIST, FONT_FILE, STATE_TONES, STATUS,
@@ -29,7 +30,10 @@ from mail_assistant.webui import (CARD_TONES, DEFAULT_LIST, FONT_FILE, STATE_TON
                                   LIST_FIELDS, clicked_key, collect_text, header_cell, next_sort,
                                   WINDOW, WINDOW_FLOOR, WINDOW_MIN, window_size,
                                   WEEKDAYS, day_title, list_signature, plain_title,
-                                  reanalyze_text, today_rows)
+                                  KIND_ICONS, event_title, reanalyze_text, today_rows,
+                                  GENERAL_ROOM, NEW_ROOM, ROOM_ICONS, ROOM_PREVIEW_MAX,
+                                  ROOM_TITLE_MAX, room_preview, room_rows, room_search,
+                                  room_title)
 
 CONFIG = {'host': 'pop3s.hiworks.com', 'port': 995, 'email': 'me@corp.example'}
 TODAY = datetime.date(2026, 9, 11)
@@ -230,6 +234,16 @@ class DeadlineRowTests(unittest.TestCase):
                              ['2026-09-05', '2026-09-10', '2026-09-13'])
             self.assertEqual([row['left'] for row in rows], ['6일 지남', '1일 지남', '2일 뒤'])
             self.assertEqual([row['missed'] for row in rows], [True, True, False])
+            store.db.close()
+
+    def test_every_row_carries_a_kind_and_no_marker(self):
+        # The panel draws the kind's icon itself, so the label's marker would be the
+        # same thing twice — and it arrived in the link's colour, saying nothing.
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.rows(folder)
+            rows = deadline_rows(overview(store.page(account_key(CONFIG)), TODAY), TODAY)
+            self.assertTrue(all(row['kind'] in KIND_ICONS for row in rows))
+            self.assertTrue(all(row['title'][:1] not in MARKERS.values() for row in rows))
             store.db.close()
 
     def test_every_row_carries_the_mail_it_came_from(self):
@@ -679,24 +693,37 @@ class TidyBodyTests(unittest.TestCase):
 class CalendarEventTests(unittest.TestCase):
     ROWS = [['1:0', 'mail-a', '견적 회신', '', '2026-09-14', '9월 14일까지 회신', '', ''],
             ['2:0', 'mail-b', '정기 점검', '2026-09-20', '', '', '필요', ''],
-            ['3:0', 'mail-c', '지난 마감', '', '2026-09-04', '', '', '']]
+            ['3:0', 'mail-c', '지난 마감', '', '2026-09-04', '', '', ''],
+            ['4:0', 'mail-d', '온라인 웨비나', '2026-09-17T14:00', '', '', '', '']]
 
     def events(self):
         from mail_assistant.calendar_sheet import collect
         return collect(self.ROWS)
 
-    def test_every_entry_becomes_one_all_day_event(self):
-        payload = calendar_events(self.events(), TODAY)
-        self.assertEqual(len(payload), 3)
-        self.assertTrue(all(item['allDay'] for item in payload))
-        self.assertEqual([item['start'] for item in payload],
-                         ['2026-09-04', '2026-09-14', '2026-09-20'])
+    def test_an_entry_with_no_time_stays_an_all_day_event(self):
+        by_mail = {item['id']: item for item in calendar_events(self.events(), TODAY)}
+        for ident, start in (('mail-a', '2026-09-14'), ('mail-b', '2026-09-20'),
+                             ('mail-c', '2026-09-04')):
+            self.assertTrue(by_mail[ident]['allDay'])
+            self.assertEqual(by_mail[ident]['start'], start)
 
-    def test_the_tooltip_title_drops_the_marker_the_spreadsheet_needs(self):
+    def test_an_entry_that_knows_its_time_is_a_timed_event(self):
+        # The 주 view stacked everything in the 종일 band while this was allDay.
+        webinar = {item['id']: item for item in calendar_events(self.events(), TODAY)}['mail-d']
+        self.assertFalse(webinar['allDay'])
+        self.assertEqual(webinar['start'], '2026-09-17T14:00:00')
+
+    def test_a_timed_title_says_its_hour_once(self):
+        webinar = {item['id']: item for item in calendar_events(self.events(), TODAY)}['mail-d']
+        # The grid slot and the event's own time text already say 14:00.
+        self.assertEqual(webinar['title'], '온라인 웨비나')
+        # The tooltip has no slot to sit in, so it keeps the hour.
+        self.assertEqual(webinar['extendedProps']['clean'], '14:00 온라인 웨비나')
+
+    def test_the_title_drops_the_marker_the_spreadsheet_needs(self):
         payload = calendar_events(self.events(), TODAY)
-        self.assertEqual(payload[0]['extendedProps']['clean'],
-                         plain_title(payload[0]['title']))
-        self.assertNotEqual(payload[0]['extendedProps']['clean'], payload[0]['title'])
+        self.assertTrue(all(item['title'][:1] not in MARKERS.values() for item in payload))
+        self.assertEqual(payload[0]['extendedProps']['clean'], payload[0]['title'])
 
     def test_the_kind_picks_the_colour_and_the_evidence_rides_along(self):
         by_mail = {item['id']: item for item in calendar_events(self.events(), TODAY)}
@@ -712,7 +739,7 @@ class CalendarEventTests(unittest.TestCase):
 
     def test_handled_mail_leaves_the_calendar(self):
         payload = calendar_events(self.events(), TODAY, handled={'mail-a'})
-        self.assertEqual({item['id'] for item in payload}, {'mail-b', 'mail-c'})
+        self.assertEqual({item['id'] for item in payload}, {'mail-b', 'mail-c', 'mail-d'})
 
     def test_no_events_is_no_payload(self):
         self.assertEqual(calendar_events({}, TODAY), [])
@@ -977,7 +1004,7 @@ class TodayTests(unittest.TestCase):
 
     def test_a_label_with_no_marker_is_left_alone(self):
         self.assertEqual(plain_title('회신 마감'), '회신 마감')
-        self.assertEqual(plain_title('◾ 14:00 회신 마감'), '14:00 회신 마감')
+        self.assertEqual(plain_title('■ 14:00 회신 마감'), '14:00 회신 마감')
         self.assertEqual(plain_title(''), '')
 
     def test_the_date_is_built_by_hand_and_never_by_strftime(self):
@@ -1058,6 +1085,179 @@ class ReanalyzeTextTests(unittest.TestCase):
         said = reanalyze_text(2, 3)
         self.assertIn('2건을 다시 분석', said)
         self.assertIn('1건은 지금 분석 중', said)
+
+    def test_a_stopped_collector_is_said_out_loud(self):
+        # The button queues; the worker is what analyses. With no worker the mail sits
+        # at 분석 대기 and the old sentence claimed the work had been requested of
+        # something that was not running.
+        said = reanalyze_text(3, 3, running=False)
+        self.assertIn('3건을 다시 분석하도록 요청했습니다.', said)
+        self.assertIn('수집을 시작하면', said)
+
+    def test_a_running_collector_says_nothing_extra(self):
+        self.assertEqual(reanalyze_text(3, 3, running=True),
+                         '3건을 다시 분석하도록 요청했습니다.')
+        self.assertNotIn('수집', reanalyze_text(2, 3, running=True))
+
+    def test_the_skipped_half_still_shows_when_the_collector_is_stopped(self):
+        said = reanalyze_text(2, 3, running=False)
+        self.assertIn('1건은 지금 분석 중', said)
+        self.assertIn('수집을 시작하면', said)
+
+
+class EventTitleTests(unittest.TestCase):
+    """A calendar event says its hour once: in its slot, not again in its title."""
+
+    def entry(self, label, clock=''):
+        from mail_assistant.calendar_sheet import Entry
+        return Entry(label, '시작', 'm1', 2, '', clock)
+
+    def test_the_clock_comes_off_a_timed_entry(self):
+        self.assertEqual(event_title(self.entry('▶ 14:00 웨비나', '14:00')), '웨비나')
+
+    def test_an_untimed_entry_only_loses_its_marker(self):
+        self.assertEqual(event_title(self.entry('▶ 착수 회의')), '착수 회의')
+
+    def test_a_title_that_starts_with_its_own_hour_is_left_whole(self):
+        # Only the label's own clock comes off, never a title that reads like one.
+        self.assertEqual(event_title(self.entry('▶ 14:00 회의', '')), '14:00 회의')
+
+    def test_an_entry_built_without_a_clock_still_works(self):
+        from mail_assistant.calendar_sheet import Entry
+        self.assertEqual(event_title(Entry('■ 마감', '마감', 'm1', 2)), '마감')
+
+
+class KindIconTests(unittest.TestCase):
+    """One icon and one marker per kind — a kind with neither draws nothing."""
+
+    def test_every_kind_has_an_icon_and_a_marker(self):
+        from mail_assistant.calendar_sheet import COLORS
+        self.assertEqual(set(KIND_ICONS), set(COLORS))
+        self.assertEqual(set(MARKERS), set(COLORS))
+
+    def test_the_markers_are_one_character_each(self):
+        # The old ◾/▫/· were one character too, but three sizes; these are one cast.
+        self.assertTrue(all(len(mark) == 1 for mark in MARKERS.values()))
+
+    def test_the_three_colours_are_three_colours(self):
+        from mail_assistant.calendar_sheet import COLORS
+        self.assertEqual(len(set(COLORS.values())), 3)
+
+    def test_the_calendar_page_ships_the_icon_vocabulary_to_the_browser(self):
+        from mail_assistant.webui import CALENDAR_SETUP
+        self.assertNotIn('__KIND_ICONS__', CALENDAR_SETUP)
+        for kind, icon in KIND_ICONS.items():
+            self.assertIn(f'"{kind}": "{icon}"', CALENDAR_SETUP)
+
+
+class LegendTests(unittest.TestCase):
+    """The Excel legend colours the mark in front of each label, not a syllable of it."""
+
+    def test_each_span_lands_on_its_own_marker(self):
+        from mail_assistant.calendar_sheet import COLORS, legend_text
+        text, spans = legend_text()
+        self.assertEqual(len(spans), 3)
+        for (at, color), kind in zip(spans, ('마감', '시작', '확인 필요')):
+            self.assertEqual(text[at - 1], MARKERS[kind])
+            self.assertEqual(color, COLORS[kind])
+
+
+class RoomTitleTests(unittest.TestCase):
+    """A 새 대화 is named by its first question, in one line that fits the column."""
+
+    def test_a_short_question_is_the_whole_title(self):
+        self.assertEqual(room_title('세금계산서 문의'), '세금계산서 문의')
+
+    def test_newlines_and_runs_of_space_collapse(self):
+        # A pasted question arrives with its own line breaks; a title is one row.
+        self.assertEqual(room_title('  두 줄짜리\n  질문입니다  '), '두 줄짜리 질문입니다')
+
+    def test_a_long_question_is_cut_with_an_ellipsis(self):
+        said = room_title('가' * 80)
+        self.assertEqual(len(said), ROOM_TITLE_MAX)
+        self.assertTrue(said.endswith('…'))
+
+    def test_nothing_in_nothing_out(self):
+        self.assertEqual(room_title(''), '')
+        self.assertEqual(room_title(None), '')
+
+
+class RoomPreviewTests(unittest.TestCase):
+    """The list says what was last said, and who said it."""
+
+    def test_my_own_line_is_marked_as_mine(self):
+        self.assertEqual(room_preview({'role': 'user', 'last': '언제까지인가요?'}),
+                         '나: 언제까지인가요?')
+
+    def test_an_answer_is_marked_as_codex(self):
+        self.assertEqual(room_preview({'role': 'codex', 'last': '9월 14일입니다.'}),
+                         'Codex: 9월 14일입니다.')
+
+    def test_a_room_with_nothing_in_it_previews_nothing(self):
+        self.assertEqual(room_preview({'role': '', 'last': ''}), '')
+
+    def test_a_long_line_is_cut(self):
+        said = room_preview({'role': 'user', 'last': '나' * 200})
+        self.assertEqual(len(said), ROOM_PREVIEW_MAX)
+        self.assertTrue(said.endswith('…'))
+
+
+class RoomRowTests(unittest.TestCase):
+    """Three kinds of thread, and only one of them owns its name."""
+
+    ROOMS = [{'key': '', 'turns': 2, 'at': '2026-09-14T01:00:00+00:00',
+              'role': 'codex', 'last': '일반 답'},
+             {'key': '#abcd', 'turns': 1, 'at': '2026-09-14T02:00:00+00:00',
+              'role': 'user', 'last': '자유 질문', 'name': '세금 문의'},
+             {'key': 'a' * 24, 'turns': 4, 'at': '2026-09-14T03:00:00+00:00',
+              'role': 'user', 'last': '메일 질문', 'name': '견적 회신 요청'}]
+
+    def test_each_key_becomes_its_own_kind(self):
+        rows = room_rows(self.ROOMS)
+        self.assertEqual([row['kind'] for row in rows], ['general', 'room', 'mail'])
+        self.assertTrue(all(row['kind'] in ROOM_ICONS for row in rows))
+
+    def test_the_general_thread_is_named_for_us(self):
+        self.assertEqual(room_rows(self.ROOMS)[0]['title'], GENERAL_ROOM)
+
+    def test_an_unnamed_free_room_reads_as_a_new_one(self):
+        rows = room_rows([{'key': '#zz', 'turns': 0, 'at': '', 'role': '', 'last': '',
+                           'name': ''}])
+        self.assertEqual(rows[0]['title'], NEW_ROOM)
+        self.assertEqual(rows[0]['when'], '')
+
+    def test_a_mail_without_a_subject_still_has_a_name(self):
+        rows = room_rows([{'key': 'b' * 24, 'turns': 1, 'at': '', 'role': 'user',
+                           'last': '질문', 'name': '   '}])
+        self.assertEqual(rows[0]['title'], '(제목 없음)')
+
+    def test_exactly_the_open_key_is_marked_open(self):
+        rows = room_rows(self.ROOMS, '#abcd')
+        self.assertEqual([row['open'] for row in rows], [False, True, False])
+        self.assertEqual([row['open'] for row in room_rows(self.ROOMS)],
+                         [True, False, False])
+
+
+class RoomSearchTests(unittest.TestCase):
+    """Search reads the title and what was last said, because that is all a row shows."""
+
+    def rows(self):
+        return room_rows(RoomRowTests.ROOMS)
+
+    def test_an_empty_query_keeps_everything(self):
+        self.assertEqual(len(room_search(self.rows(), '')), 3)
+        self.assertEqual(len(room_search(self.rows(), '   ')), 3)
+
+    def test_a_title_match(self):
+        found = room_search(self.rows(), '견적')
+        self.assertEqual([row['title'] for row in found], ['견적 회신 요청'])
+
+    def test_a_match_on_the_last_line(self):
+        found = room_search(self.rows(), '일반 답')
+        self.assertEqual([row['kind'] for row in found], ['general'])
+
+    def test_nothing_matching_is_an_empty_list(self):
+        self.assertEqual(room_search(self.rows(), '없는말'), [])
 
 
 class DashboardFollowsTests(unittest.TestCase):

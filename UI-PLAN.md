@@ -535,16 +535,37 @@ tkinter를 들어내면 tcl/tk 3.7MB가 빠져 순증이 +0.6MB가 되지만, na
       pywebview가 Windows에서 WebView2(이미 깔린 Edge 엔진)를 빌려 쓰기 때문이며, 크롬을
       동봉하는 Electron(+120MB대)과는 다른 비용이다. 창을 닫으면 프로세스가 끝나므로
       트레이 아이콘도 필요 없어졌다
-- [x] 트레이 아이콘을 넣을지(pystray 추가 의존성), 아니면 창 닫기 = 종료를 유지할지 —
-      **창 닫기 = 종료를 유지한다.** native 창이 수명을 쥐고 있어 pystray가 필요 없다
+- [ ] 트레이 아이콘을 넣을지(창 닫기 = 트레이로 숨김) — **0.6.0에서 다시 물었고, 보류.**
+      한 번 "필요 없다"고 접었던 항목이지만 사용자가 다시 요청했으므로 조사 결과를 남긴다.
+      **막히는 지점:** nicegui는 pywebview 창을 *별도 프로세스*에서 띄우고, 닫기를 취소할 수
+      있는 유일한 이벤트인 `closing`을 부모로 중계하지 않는다 — `nicegui/native/native_mode.py`의
+      `_bind_pywebview_events()`에 `# 'closing' is not bridged yet — it requires a synchronous
+      round-trip to support vetoing the close`라고 적혀 있다. `shown`/`closed`/`minimized` 등
+      나머지는 중계되지만 전부 *사후* 통지라 X를 가로챌 수 없다.
+      **뚫는 방법:** `app.native.start_args['func']`에 최상위 함수를 넘기면 pywebview가 창
+      프로세스 안에서 그 함수를 호출한다(`webview.start(**start_args)`). 거기서
+      `webview.windows[0].events.closing += handler`로 veto를 걸고 트레이 아이콘을 만들면 된다.
+      함수 참조는 모듈 경로로 피클되므로 frozen 빌드의 spawn에서도 넘어간다.
+      **아이콘은 pywin32의 `Shell_NotifyIcon`으로** — 이미 의존성이라 번들이 늘지 않는다.
+      pystray는 Pillow를 끌고 와 +3~4MB이고, 설치본 크기는 6절이 계속 방어해 온 숫자다.
+      **비용:** 창 프로세스 안에 숨은 윈도와 메시지 루프가 생기고, '완전 종료' 경로가
+      `main()`의 `finally`(뮤텍스 해제 → 설치 프로그램 실행)와 얽힌다. 리눅스 박스에서도
+      CI에서도 검증이 전혀 안 되는 코드다 — 사람이 Windows에서 직접 눌러 봐야 한다
 - [x] 로그 보관 기간과 상한 — 최신 2000줄만 남기고 50줄마다 정리한다(`Hub.keep`)
 - [x] 채팅 대화 기록의 보관 정책 — `mail.db`의 `chat` 테이블에만 남고, 화면의
       "대화 지우기"로 스레드 단위로 지운다. 자동 만료는 없다
+- [x] 상담을 채팅방 목록으로 볼지 — **0.6.0에서 넣었다.** `chat.mail_id`가 처음부터 방
+      번호였으므로(메일 id, 또는 일반 상담의 `''`) 목록은 그 위에 얹혔다. 세 번째 종류인
+      자유 방만 이름을 스스로 가져야 해서 `chat_room` 테이블 하나가 생겼고, 키는 `ROOM_MARK`
+      로 시작해 24자리 hex인 메일 id와 절대 겹치지 않는다. 방 전환은 페이지를 다시 읽지 않고
+      `thread`/`rooms`/`head` 세 refreshable만 다시 그린다
 - [x] 상담 말풍선을 `ui.chat_message`로, 답변은 `rich_text()`로 렌더 — `ui.markdown`은
       pygments 8.7MB를 설치본에 고정시키므로 쓰지 않는다(1단계 실측표의 제외 후보)
 - [ ] 검색을 FTS5로 올릴지 (지금은 JSON 전체 LIKE, 3단계의 알려진 한계)
-- [ ] `webui.py`가 1540줄이다. 페이지별로 쪼갤지 — 지금은 한 파일에서 shell·팔레트·
-      상태를 공유해 이득이 있지만, 여기서 더 커지면 분리가 맞다
+- [ ] `webui.py`가 3600줄을 넘었다(계획 당시 1540줄). 페이지별로 쪼갤지 — 한 파일에서
+      shell·팔레트·상태를 공유하는 이득은 그대로지만, 이제는 분리가 맞다. 쪼갤 때
+      "nicegui 없이도 import된다"는 성질(모듈 수준은 순수 함수만, `from nicegui import ui`는
+      함수 안에서)을 조각마다 지켜야 `tests/test_webui.py`가 리눅스에서 계속 돈다
 - [x] 할 일 카드 드래그 — nicegui에 sortable 엘리먼트가 없어 HTML5 drag 이벤트를
       `js_handler`로 직접 붙였다. 강조는 브라우저 안에서 끝나고 서버로 가는 것은
       드롭 한 번뿐이다. 화살표 버튼은 유일한 조작 수단이 사라지지 않도록 남겼다

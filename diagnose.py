@@ -173,7 +173,7 @@ def main():
         return
     except Exception as exc:
         print(f'  실패: {type(exc).__name__}: {exc}')
-        print(f'  → {port} 포트 차단 또는 하이웍스 허용 국가/IP 정책일 수 있습니다.')
+        print(f'  → {port} 포트 차단 또는 메일 서비스의 허용 국가/IP 정책일 수 있습니다.')
         return
 
     try:
@@ -184,7 +184,7 @@ def main():
             print('  OK: 인증 성공')
         except poplib.error_proto as exc:
             print(f'  실패: 서버 응답 {exc}')
-            print('  → 하이웍스 웹메일에서 POP3 사용 설정 + 메일 전용 비밀번호 발급을 확인하세요.')
+            print('  → 웹메일 설정에서 POP3 사용을 켜고, 앱(메일 전용) 비밀번호를 발급해 쓰는지 확인하세요.')
             return
 
         step('5. UIDL 지원 여부')
