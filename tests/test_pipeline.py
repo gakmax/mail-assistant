@@ -332,6 +332,25 @@ class SearchTests(unittest.TestCase):
                              ['회의 일정 조정', 'Weekly report', '견적 검토 요청'])         # requests
             store.db.close()
 
+    def test_mail_stored_in_the_same_tick_still_has_one_order(self):
+        """`received` comes from now(), and a Windows clock ticks about every 15ms.
+
+        A cycle that stores several mails therefore writes the same string for all of
+        them, and an ORDER BY with no tie-break may hand back a different order every
+        call — which is how the list reshuffled itself between two refreshes.
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            store.db.execute("UPDATE mail SET received='2026-09-11T01:00:00+00:00'")
+            store.db.commit()
+            first = self.subjects(store, query='회신 필요')
+            self.assertEqual(first, ['회의 일정 조정', 'Weekly report', '견적 검토 요청'])
+            for _ in range(5):
+                self.assertEqual(self.subjects(store, query='회신 필요'), first)
+            self.assertEqual([row['subject'] for row in store.page(self.ACCOUNT)][:3],
+                             ['분석 실패한 메일', '아직 분석 안 됨', '회의 일정 조정'])
+            store.db.close()
+
     def test_each_state_filter_returns_its_own_rows(self):
         with tempfile.TemporaryDirectory() as folder:
             store = self.store(folder)

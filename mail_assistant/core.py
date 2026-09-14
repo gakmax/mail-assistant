@@ -247,9 +247,16 @@ class Store:
                     'attempts, retry_at, error, exported, notified')
 
     def page(self, account, limit=2000):
-        """Newest first, without the raw blob. Filtering happens in filter_rows()."""
+        """Newest first, without the raw blob. Filtering happens in filter_rows().
+
+        rowid breaks the tie. `received` is written by now() at insert, and a Windows
+        clock ticks about every 15ms, so a cycle that stores several mails gives them
+        the same string — and an ORDER BY with no tie-break may then hand back a
+        different order every call. rowid is the order they arrived in.
+        """
         return self.db.execute(f'SELECT {self.LIST_COLUMNS} FROM mail WHERE account=? '
-                               'ORDER BY received DESC LIMIT ?', (account, limit)).fetchall()
+                               'ORDER BY received DESC, rowid DESC LIMIT ?',
+                               (account, limit)).fetchall()
 
     def search(self, account, query='', state='', sort='received', desc=True,
                limit=LIST_LIMIT, offset=0):
@@ -272,7 +279,8 @@ class Store:
         order = SORTS.get(sort) or SORTS['received']
         rows = self.db.execute(
             f'SELECT {self.LIST_COLUMNS} FROM mail WHERE {condition} '
-            f"ORDER BY {order} {'DESC' if desc else 'ASC'}, received DESC LIMIT ? OFFSET ?",
+            f"ORDER BY {order} {'DESC' if desc else 'ASC'}, received DESC, rowid DESC "
+            'LIMIT ? OFFSET ?',
             params + [limit, offset]).fetchall()
         return rows, total
 
@@ -300,7 +308,8 @@ class Store:
         would depend on how json.dumps happened to space its separators."""
         return self.db.execute(f'SELECT {self.LIST_COLUMNS} FROM mail WHERE account=? '
                                "AND result IS NOT NULL AND draft_edit='' AND handled<>? "
-                               'ORDER BY received DESC', (account, HANDLED)).fetchall()
+                               'ORDER BY received DESC, rowid DESC',
+                               (account, HANDLED)).fetchall()
 
     def add_chat(self, account, role, text, mail_id=''):
         with self.db:

@@ -256,6 +256,14 @@ asks with `check_login(timeout=LAMP_WAIT)` and reports 확인 중 rather than qu
 behind a 240-second analysis. `CodexBusy` subclasses `RuntimeError`, so catch it
 *before* the `RuntimeError` branch or 'busy' is reported as '로그인 필요'.
 
+**Every list query needs `rowid` as its last tie-break.** `received` is written by
+`now()` when the mail is stored, and a Windows clock ticks about every 15ms, so one
+poll cycle gives every mail it collected the same string. `ORDER BY received DESC`
+alone then has nothing left to decide with and sqlite may return a different order on
+each call — the list reshuffling between two refreshes, and a Windows-only CI failure
+that does not reproduce on the dev box. `page()`, `search()` and `unedited_drafts()`
+all end `, rowid DESC`, which is the order the mails actually arrived in.
+
 **Schema changes are `ALTER TABLE ADD COLUMN` only.** `Store.migrate()` adds what
 is missing to `mail` and nothing else; installed databases hold the only copy of
 collected mail. A whole new table is different and allowed: it goes in
