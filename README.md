@@ -236,6 +236,7 @@ MailAssistantTools.exe demo
 | 증상 | 확인할 내용 |
 |---|---|
 | 메일 연결 실패 | POP3 사용 설정, 메일 전용 비밀번호, 허용 국가/IP, SSL 995 접근 |
+| `ModuleNotFoundError: win32timezone` | 0.4.1 이하의 설치본 문제입니다(비밀번호 저장과 수집이 모두 막힙니다). 0.4.2 이상으로 업데이트하세요 |
 | Codex 로그인 안내 | 도우미의 Codex 로그인 버튼 또는 `codex login`, `codex login status` |
 | 분석 대기 | Plus 사용량 한도, 인터넷, Codex CLI 업데이트, 과도하게 긴 본문 |
 | 엑셀 반영 대기 | Excel 설치/인증, 입력 중인 셀·대화상자, 읽기 전용, 파일 위치, 시트 열 이름 |

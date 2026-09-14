@@ -51,6 +51,28 @@ def show_paths():
     return 0
 
 
+def check_cred():
+    """Writes, reads back and deletes a throwaway credential.
+
+    Reading a constant out of win32cred proved nothing: CredRead returns a
+    'LastWritten' time, and pywin32 builds its tzinfo by importing win32timezone from
+    C — an import no static analysis can see. A bundle missing it raised
+    ModuleNotFoundError on every password read, which is every poll, while selftest
+    said win32cred was fine. The name is one the app never uses, and the finally
+    removes it either way.
+    """
+    from mail_assistant.services import delete_password, read_password, save_password
+    email = 'selftest@mail-assistant.invalid'
+    save_password(email, 'selftest')
+    try:
+        stored = read_password(email)
+    finally:
+        delete_password(email)
+    if stored != 'selftest':
+        raise RuntimeError('자격 증명을 저장했지만 읽은 값이 다릅니다.')
+    return 'CredWrite → CredRead → CredDelete ok'
+
+
 def check_shell():
     from win32com.shell import shell, shellcon
     return shell.SHGetFolderPath(0, shellcon.CSIDL_DESKTOPDIRECTORY, None, 0)
@@ -143,7 +165,7 @@ def selftest():
     checks = [
         ('win32api', lambda: __import__('win32api').GetLastError),
         ('win32event', lambda: __import__('win32event').CreateMutex),
-        ('win32cred', lambda: __import__('win32cred').CRED_TYPE_GENERIC),
+        ('win32cred 왕복', check_cred),
         ('win32com.shell', check_shell),
         ('pythoncom / win32com.client', check_com),
         ('jsonschema 메타스키마', check_schema),

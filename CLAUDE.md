@@ -114,6 +114,17 @@ the lamp reads 확인 실패 instead of 없음. Swallowing it told the user to r
 a password that was already stored. `save_settings()` reads the password back
 after writing it for the same reason.
 
+**`win32timezone` is imported by pywin32's C code, and only the frozen build
+notices.** Any Win32 call that returns a time builds its tzinfo by importing that
+module from C, and `CredRead`'s `LastWritten` is one — so `read_password()` raises
+`ModuleNotFoundError: No module named 'win32timezone'` in a bundle that did not list
+it, which is every poll and every 비밀번호 저장. No static analysis can see the import;
+it is in the spec's `HIDDEN` for that reason alone. `selftest` used to read
+`win32cred.CRED_TYPE_GENERIC` — a constant, which proved only that the .pyd loaded —
+and so passed while the app could not read a password at all. `check_cred()` now
+writes, reads back and deletes a throwaway credential instead. A probe that only
+imports a module is not a probe of what the app does with it.
+
 **A `.ps1` carrying Korean text needs a UTF-8 BOM.** Windows PowerShell 5.1 reads
 a BOM-less script as the ANSI codepage — 949 on a Korean box — and CP949 is
 double-byte, so an odd-length run of non-ASCII bytes pairs its last byte with the

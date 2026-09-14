@@ -51,6 +51,11 @@ def version_resource(description, filename):
 # the jsonschema data files; listing them here is documentation plus insurance.
 HIDDEN = [
     'win32api', 'win32event', 'win32cred',
+    # win32timezone is imported by pywin32's C code, not by ours: any Win32 call that
+    # returns a time attaches a tzinfo built from it, and CredRead's 'LastWritten' is
+    # one. Nothing static can see that import, so a bundle without this line raises
+    # ModuleNotFoundError the first time a password is read — which is every poll.
+    'win32timezone',
     'win32com', 'win32com.client', 'win32com.shell',
     'win32comext.shell.shell', 'win32comext.shell.shellcon',
     'pythoncom', 'pywintypes',
