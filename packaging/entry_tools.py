@@ -126,9 +126,16 @@ def check_native():
 
     Imported, not just located: pywebview reaches its WebView2 backend through
     pythonnet, and a bundle that lost clr_loader fails here rather than on a user's PC.
+    The number comes from importlib.metadata — pywebview exposes no __version__, so
+    reading the attribute printed a bare '?' and looked like a broken bundle. That
+    needs the .dist-info, which the spec copies for exactly this line.
     """
-    import webview
-    return f"pywebview {getattr(webview, '__version__', '?')}"
+    from importlib.metadata import PackageNotFoundError, version
+    import webview                                    # noqa: F401  the real check
+    try:
+        return f'pywebview {version("pywebview")}'
+    except PackageNotFoundError:
+        return 'pywebview (버전 정보 없음)'
 
 
 def selftest():

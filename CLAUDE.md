@@ -5,7 +5,7 @@ Codex CLI for analysis, stores everything in sqlite, and writes the result into 
 desktop Excel workbook over COM. The window (`app.py`) reads from the database,
 not from the workbook: 현황·메일·일정·실행·설정 tabs over `mail.db`. The same database
 also backs the NiceGUI screens in `webui.py`, opened with
-`MailAssistantTools.exe web` — ten pages on 127.0.0.1, sharing one `Hub`. Shipped as
+`MailAssistantTools.exe web` — nine pages on 127.0.0.1, sharing one `Hub`. Shipped as
 an unsigned Inno Setup installer built by GitHub Actions, with in-app updates from
 public GitHub Releases.
 
@@ -16,7 +16,7 @@ that break silently if you don't know them.
 ## Commands
 
 ```bash
-python -m unittest discover -s tests -v    # from the repo root; 266 tests, all platforms
+python -m unittest discover -s tests -v    # from the repo root; 371 tests, all platforms
 ```
 
 ```powershell
@@ -60,11 +60,30 @@ uses to recognise an upgrade; a new GUID installs side by side instead.
 `AppMutex` check collides and, under `/SUPPRESSMSGBOXES`, fails as exit code 2 —
 "user cancelled" — with no visible error.
 
+**'새 버전이 없습니다' and '물어보지 못했습니다' are different sentences.**
+`update.check()` returns None for both, so `Updater.recheck()` tells them apart by
+whether `update_checked` moved: `remember()` writes that stamp only after the manifest
+was really fetched. A 지금 확인 that silently claimed 최신 버전입니다 behind a proxy
+that ate the request is exactly the failure this replaces — the old 설정 화면 said
+'건너뛴 버전이 없습니다', which answered a question nobody asked. `recheck()` also
+copies the stamp back into the live `config` dict, because `remember()` only touches
+the file and 마지막 확인 reads the dict.
+
 **Settings saves must merge.** `App.save_settings()` writes
 `{**config, **updated}`. The form holds seven fields; `webhook`, `update`,
 `update_skip` and `update_checked` are not among them and a plain write deletes
 them. `update.remember()` exists for the same reason and is the only thing that
 should touch `config.json` from outside the GUI.
+
+**The Codex model list is read, never shipped.** `settings.read_models()` parses
+`%USERPROFILE%\.codex\models_cache.json` — the file the CLI itself writes on every
+run — and offers only the entries marked `visibility: list`. Hardcoding slugs was
+tried and thrown away: the ones a ChatGPT account may use turn over every few weeks
+(every `gpt-5.1-codex*` name was already refused by the API by the time the radio was
+written), and a stale default fails *every* analysis with nothing on screen to explain
+it. So a missing cache offers 기본값 and 직접 입력 only, `model_rows()` keeps a row for
+whatever is saved even after Codex stops listing it, and `field_errors` rejects a model
+with a space in it because the value becomes one `--model` argument.
 
 **One list of filter values, in `core.STATES`.** The dropdown in `app.py`, the one
 in `webui.py` and the SQL in `core.STATE_SQL` are the same set; a value offered with
@@ -158,8 +177,40 @@ header band and stops a long log line wrapping, and every surface that stacks te
 `tag_cell()` builds the `:style` lookup with single quotes throughout, because the
 whole expression sits inside a double-quoted Vue attribute and `json.dumps` would
 close it on the first key. `'3회 실패'` carries its count, so the 실패 tone is matched
-with `props.value.includes('실패')` rather than a table key. The open row is marked by
-`.ma-table tbody tr:has(.ma-open)` — q-table hands a slot the cell, not the row.
+with `props.value.includes('실패')` rather than a table key. There is no longer a mark
+for the open row: the mail opens in a dialog over the list, and a highlight that only
+moves when the table is rebuilt pointed at the wrong row more often than the right one.
+
+**The 메일 list is sorted by its own header, and that costs three slots.** The page is
+sorted and paged in sqlite, so q-table's own `sortable` would only reorder the fifty
+rows it is holding; `header_cell()` emits instead, and `$parent.$emit` is the *only*
+route a slot template has back to the server — `$parent` is the q-table, whose vnode
+props carry the `onSortby` that `table.on('sortby', …)` registered. Two things a
+custom header cell must not forget: `:style="props.col.headerStyle"`, because q-table
+stops applying the column widths the moment the cell is yours, and that the argument
+arrives as the client's *list*, which is what `clicked_key()` unwraps. The third slot
+is `body-selection`: Quasar's own checkbox lets the click reach the row, so without
+`@click.stop` ticking a box also opens the mail.
+
+**The 메일 detail is a dialog, and the list is repainted when it closes — if it
+changed anything.** Rebuilding the table is also what clears q-table's checkboxes, so
+a mail opened to be *read* must not cost the user the selection they made; `touched`
+is set by the things that change a list column (처리 상태, 다시 분석, 삭제) and nothing
+else. Refreshing while the dialog is open is the same work done where nobody can see
+it, behind a dialog that covers the rows.
+
+**Deleting mail keeps its `seen` uid.** `Store.delete()` drops the mail row and the
+chat hung off it, and deliberately leaves `seen` alone: the mail is still on the POP3
+server, and forgetting the uid means the next poll collects and analyses the very mail
+the user just threw away. Rows already written to the workbook stay there — Excel does
+not read this database.
+
+**'지금 가져오기' opens a `Store` of its own.** It runs through `nicerun.io_bound`,
+which is a pool thread, and a sqlite connection cannot cross threads — the page's
+`store(directory)` belongs to the event loop's. It also only collects: analysis is the
+worker's and takes minutes per mail, which is why `collect_text()` says so out loud
+when the collector is stopped. When the worker *is* running the button wakes it rather
+than opening a second POP3 session against the same account.
 
 **A Codex answer is rendered by `rich_text()`, never by `ui.markdown`.** The
 difference is not the Markdown — it is that `nicegui.elements.markdown` imports
@@ -178,6 +229,15 @@ slot, and the `RuntimeError` it raises kills the rest of the handler — in 상�
 left `busy` True and the composer disabled with no way back except a reload, and
 nothing on screen said so. `scroll()` is `async` and awaits `asyncio.sleep` instead:
 the tick it needs before `scroll_to` costs nothing and creates no element.
+
+**The frame's size is `webui.WINDOW`, and both windows use it.** pywebview opens at
+800x600 unless told otherwise, which puts 현황's two columns and 메일's six-column table
+inside a scrollbar from the first launch. `serve()` passes `window_size(screen_size())`
+into `app.native.window_args`, and `app.py` asks tkinter for the same number — importing
+it from `webui`, which costs nothing because that module imports no toolkit at module
+level. Both clamp `min_size` to the opening size: on a small screen a minimum larger
+than the window is what pywebview obeys, and the title bar ends up below the desktop
+where it cannot be dragged back.
 
 **`overview()['cards']` holds exactly four, and that is a layout contract.**
 `App.paint_overview()` in `app.py` walks a fixed list of four tkinter labels, so a
@@ -297,6 +357,13 @@ collected mail. A whole new table is different and allowed: it goes in
 `log` arrived, and `LogStore` repeats the same statement so whichever of the two
 opens the file first is fine. The window opens its own connection on the UI thread — sqlite connections
 are not shareable across threads, and WAL is what lets the worker keep writing.
+
+**A version printed from an attribute is a version that will read `?`.**
+`selftest`'s `check_native` asks importlib.metadata for pywebview's version, because
+pywebview exposes no `__version__` and `getattr(webview, '__version__', '?')` printed a
+bare `?` that looks exactly like a broken bundle. That needs the `.dist-info`, which is
+why the spec carries `copy_metadata('pywebview')`; nicegui's arrives free with
+hooks-contrib's own hook.
 
 **Any new console script needs `use_utf8()`** from `mail_assistant.console` as
 the first line of `main()`. Windows gives a redirected stdout the ANSI codepage,

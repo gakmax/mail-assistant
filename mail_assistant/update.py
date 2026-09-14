@@ -197,6 +197,20 @@ def remember(config_path, values):
         pass
 
 
+def stamp(config_path):
+    """When a check last actually reached GitHub, as remember() wrote it. 0.0 if never.
+
+    Read back from the file rather than kept in memory: remember() is what records it,
+    and it is also what a second process (the tools exe) would have updated.
+    """
+    try:
+        data = json.loads(Path(config_path).read_text(encoding='utf-8'))
+        value = data.get('update_checked') if isinstance(data, dict) else None
+        return float(value) if isinstance(value, (int, float)) else 0.0
+    except (OSError, ValueError, TypeError):
+        return 0.0
+
+
 def fetch(url, timeout, accept='application/json'):
     """GET with the User-Agent GitHub requires. Raises on anything but success."""
     request = urllib.request.Request(url, headers={'User-Agent': AGENT, 'Accept': accept})

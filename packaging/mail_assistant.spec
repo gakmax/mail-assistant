@@ -13,7 +13,7 @@ tcl/tk and pywin32.
 import re
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, copy_metadata
 from PyInstaller.utils.win32.versioninfo import (FixedFileInfo, StringFileInfo, StringStruct,
                                                  StringTable, VarFileInfo, VarStruct,
                                                  VSVersionInfo)
@@ -73,6 +73,11 @@ EXCLUDES = ['numpy', 'pandas', 'matplotlib', 'scipy', 'PIL', 'pytest',
 # nothing fails until someone opens the 일정 page — selftest's check_webui catches it.
 VENDOR = [(str(ROOT / 'mail_assistant' / 'vendor'), 'mail_assistant/vendor')]
 
+# pywebview has no __version__ attribute, so selftest reads its version out of the
+# .dist-info. Nothing else needs the metadata, and without it the check prints a
+# missing version that reads like a broken bundle.
+METADATA = copy_metadata('pywebview')
+
 # nicegui vendors the JavaScript for every element it offers and this app creates
 # almost none of the big ones. Dropping their asset folders saves about 19MB; their
 # Python modules stay, so nicegui still imports. The filtering has to happen on
@@ -98,12 +103,12 @@ def wanted(entry):
 # leaving that in would have frozen a window that cannot import its own window.
 SERVER = ['webview'] + collect_submodules('uvicorn')
 gui = Analysis([str(ROOT / 'packaging' / 'entry_gui.py')], pathex=[str(ROOT)],
-               datas=VENDOR, hiddenimports=HIDDEN + SERVER,
+               datas=VENDOR + METADATA, hiddenimports=HIDDEN + SERVER,
                excludes=EXCLUDES + ['openpyxl'], noarchive=False)
 # uvicorn picks its protocol and loop implementations by name at runtime, and pywebview
 # reaches its Edge backend through pythonnet, so neither is reachable by static analysis.
 tools = Analysis([str(ROOT / 'packaging' / 'entry_tools.py')], pathex=[str(ROOT)],
-                 datas=VENDOR,
+                 datas=VENDOR + METADATA,
                  hiddenimports=HIDDEN + SERVER + ['openpyxl', 'diagnose', 'sample', 'demo'],
                  excludes=EXCLUDES, noarchive=False)
 

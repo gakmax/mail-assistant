@@ -334,6 +334,18 @@ class Store:
     def detail(self, ident):
         return self.db.execute('SELECT * FROM mail WHERE id=?', (ident,)).fetchone()
 
+    def delete(self, ids):
+        """Remove mail for good, with whatever chat hung off it.
+
+        `seen` keeps the uid on purpose: the mail is still on the POP3 server, and
+        forgetting it would collect and analyse the very mail the user just threw away
+        on the next poll. Rows already written to the workbook stay there — this
+        database is not what Excel reads.
+        """
+        with self.db:
+            self.db.executemany('DELETE FROM mail WHERE id=?', ((i,) for i in ids))
+            self.db.executemany('DELETE FROM chat WHERE mail_id=?', ((i,) for i in ids))
+
     def set_handled(self, ident, state):
         with self.db:
             self.db.execute('UPDATE mail SET handled=? WHERE id=?', (state, ident))

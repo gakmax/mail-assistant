@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from email.message import EmailMessage
 from pathlib import Path
 
-from mail_assistant.core import FAILED, HANDLED, PROGRESS, Store, account_key
+from mail_assistant.core import FAILED, HANDLED, PROGRESS, SORTS, Store, account_key
 from mail_assistant.dashboard import PRIORITIES
 from mail_assistant.hub import Hub
 from mail_assistant.overview import DUE_DAYS, due_window, failures, oldest_open, overview
@@ -24,7 +24,9 @@ from mail_assistant.webui import (CARD_TONES, DEFAULT_LIST, FONT_FILE, STATE_TON
                                   chat_context, draft_view, label_step, stats_view,
                                   deadline_progress, drag_drop, drag_payload, drag_start,
                                   rich_text,
-                                  trend_option, vendor_path)
+                                  trend_option, vendor_path,
+                                  LIST_FIELDS, clicked_key, collect_text, header_cell, next_sort,
+                                  WINDOW, WINDOW_FLOOR, WINDOW_MIN, window_size)
 
 CONFIG = {'host': 'pop3s.hiworks.com', 'port': 995, 'email': 'me@corp.example'}
 TODAY = datetime.date(2026, 9, 11)
@@ -66,6 +68,30 @@ def style_expression(template):
     """What sits inside the slot's :style="…" — the part that must survive the quotes."""
     head = template.split(':style="', 1)[1]
     return head.split('">', 1)[0]
+
+
+class WindowSizeTests(unittest.TestCase):
+    """The frame opens at WINDOW, except on a screen that cannot hold it."""
+
+    def test_a_big_screen_gets_the_size_the_layout_was_drawn_for(self):
+        self.assertEqual(window_size((1920, 1080)), WINDOW)
+        self.assertEqual(window_size((3840, 2160)), WINDOW)
+
+    def test_a_laptop_screen_keeps_the_window_inside_the_desktop(self):
+        width, height = window_size((1366, 768))
+        self.assertLess(width, 1366)
+        self.assertLess(height, 768)
+
+    def test_a_screen_that_cannot_be_asked_still_opens_at_the_full_size(self):
+        for screen in (None, (), (0, 0), (0,)):
+            with self.subTest(screen=screen):
+                self.assertEqual(window_size(screen), WINDOW)
+
+    def test_a_silly_screen_value_never_collapses_the_window(self):
+        self.assertEqual(window_size((100, 100)), WINDOW_FLOOR)
+
+    def test_the_minimum_is_smaller_than_what_the_window_opens_at(self):
+        self.assertLess(WINDOW_MIN, WINDOW)
 
 
 class ChartOptionTests(unittest.TestCase):
@@ -467,6 +493,60 @@ class ListStateTests(unittest.TestCase):
         self.assertEqual(href('/mail', 'tok'), '/mail?t=tok')
         self.assertEqual(href('/mail', 'tok', id='abc'), '/mail?t=tok&id=abc')
         self.assertEqual(href('/mail', 'tok', id=None), '/mail?t=tok')
+
+
+class HeaderSortTests(unittest.TestCase):
+    """The column header is the sort control, so it has to name a sort SQL knows."""
+
+    def test_every_column_can_be_sorted_by(self):
+        for key, _ in LIST_FIELDS:
+            self.assertIn(key, SORTS)
+
+    def test_the_same_column_flips_and_a_new_one_opens_the_way_it_reads(self):
+        self.assertEqual(next_sort('received', True, 'received'), ('received', False))
+        self.assertEqual(next_sort('received', False, 'received'), ('received', True))
+        # 제목 from ㄱ, 우선순위 most urgent first.
+        self.assertEqual(next_sort('received', True, 'subject'), ('subject', False))
+        self.assertEqual(next_sort('subject', False, 'priority'), ('priority', True))
+
+    def test_a_column_sql_does_not_know_changes_nothing(self):
+        self.assertEqual(next_sort('received', True, 'DROP TABLE'), ('received', True))
+
+    def test_a_click_arrives_as_the_client_sent_it(self):
+        self.assertEqual(clicked_key(['subject']), 'subject')
+        self.assertEqual(clicked_key('subject'), 'subject')
+        self.assertEqual(clicked_key([]), '')
+        self.assertEqual(clicked_key(None), '')
+
+    def test_the_header_never_closes_its_own_attribute(self):
+        # Same rule as tag_cell: the emit sits inside a double-quoted Vue attribute.
+        template = header_cell('received', 'received', True)
+        inside = template.split('@click="', 1)[1].split('">', 1)[0]
+        self.assertNotIn('"', inside)
+        self.assertIn("$parent.$emit('sortby', 'received')", inside)
+
+    def test_only_the_sorted_column_wears_the_arrow(self):
+        live = header_cell('subject', 'subject', False)
+        self.assertIn('ma-th is-live', live)
+        self.assertIn('arrow_upward', live)
+        self.assertIn('arrow_downward', header_cell('subject', 'subject', True))
+        idle = header_cell('subject', 'received', True)
+        self.assertNotIn('is-live', idle)
+        self.assertIn('unfold_more', idle)
+
+    def test_the_header_keeps_the_column_width(self):
+        # q-table stops applying col.headerStyle once the cell is a slot of ours.
+        self.assertIn(':style="props.col.headerStyle"', header_cell('received', 'received', True))
+
+
+class CollectTextTests(unittest.TestCase):
+    def test_a_stopped_collector_says_analysis_is_not_running(self):
+        self.assertEqual(collect_text('새 메일 2건 수집', True), '새 메일 2건 수집')
+        self.assertTrue(collect_text('새 메일 2건 수집', False).startswith('새 메일 2건 수집 · '))
+        self.assertIn('분석', collect_text('새 메일 2건 수집', False))
+
+    def test_a_silent_fetch_still_reports(self):
+        self.assertEqual(collect_text('', True), '가져올 새 메일이 없습니다.')
 
 
 class ListingTests(unittest.TestCase):

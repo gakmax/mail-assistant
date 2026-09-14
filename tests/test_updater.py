@@ -1,13 +1,15 @@
 """The update state machine the native window draws, with no toolkit in sight."""
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from mail_assistant import update
-from mail_assistant.updater import (FAILED, IDLE, READY, WORKING, Updater, consequence,
-                                    failure_text, offer_line, progress_text)
+from mail_assistant.updater import (CURRENT, DISABLED, FAILED, IDLE, NEW, READY, UNREACHABLE,
+                                    WORKING, Updater, checked_text, consequence, failure_text,
+                                    offer_line, progress_text, recheck_text)
 
 OFFER = {'version': '0.4.0', 'name': 'Setup-0.4.0.exe', 'url': 'https://example/x.exe',
          'sha256': 'a' * 64, 'size': 31_457_280, 'notes': '- 새 화면', 'silent': update.SILENT}
@@ -51,6 +53,77 @@ class TextTests(unittest.TestCase):
     def test_a_running_collector_is_told_it_will_be_waited_for(self):
         self.assertIn('끝난 뒤', consequence(True))
         self.assertIn('다시 시작', consequence(False))
+
+
+class RecheckTextTests(unittest.TestCase):
+    """지금 확인 has four answers and only one of them is '최신 버전입니다'."""
+
+    def test_a_check_that_found_something_names_the_version(self):
+        self.assertIn('0.4.0', recheck_text(NEW, OFFER))
+
+    def test_a_check_that_reached_github_is_the_only_one_that_says_최신(self):
+        self.assertEqual(recheck_text(CURRENT), '최신 버전입니다.')
+        self.assertIn('연결하지 못했습니다', recheck_text(UNREACHABLE))
+        self.assertIn('꺼져 있습니다', recheck_text(DISABLED))
+
+    def test_never_checked_says_so_rather_than_showing_1970(self):
+        for stamp in (None, 0, '', 'nope'):
+            with self.subTest(stamp=stamp):
+                self.assertIn('없습니다', checked_text(stamp))
+
+    def test_a_stamp_reads_as_a_local_time(self):
+        text = checked_text(time.mktime((2026, 9, 14, 13, 20, 0, 0, 0, -1)))
+        self.assertIn('2026-09-14 13:20', text)
+
+
+class RecheckTests(unittest.TestCase):
+    """The stamp update.check() writes is what tells 'nothing new' from 'could not ask'."""
+
+    def make(self, folder, config=None):
+        path = Path(folder) / 'config.json'
+        config = dict(config or {})
+        path.write_text(json.dumps(config), encoding='utf-8')
+        return Updater(Path(folder), config, path)
+
+    def test_a_check_that_reached_github_and_found_nothing_is_current(self):
+        with tempfile.TemporaryDirectory() as folder:
+            worker = self.make(folder)
+
+            def check(config, config_path, force=False):
+                update.remember(config_path, {'update_checked': time.time()})
+                return None
+
+            with patch.object(update, 'check', side_effect=check):
+                self.assertEqual(worker.recheck(), CURRENT)
+            # ... and the screen's 마지막 확인 is the stamp that was just written.
+            self.assertGreater(worker.config['update_checked'], 0)
+
+    def test_a_check_that_never_reached_github_is_not_reported_as_current(self):
+        with tempfile.TemporaryDirectory() as folder:
+            worker = self.make(folder)
+            with patch.object(update, 'check', return_value=None):
+                self.assertEqual(worker.recheck(), UNREACHABLE)
+
+    def test_a_check_that_found_a_version_offers_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            worker = self.make(folder)
+            with patch.object(update, 'check', return_value=OFFER):
+                self.assertEqual(worker.recheck(), NEW)
+            self.assertTrue(worker.waiting())
+
+    def test_updates_turned_off_say_so_instead_of_blaming_the_network(self):
+        with tempfile.TemporaryDirectory() as folder:
+            worker = self.make(folder, {'update': False})
+            with patch.object(update, 'check') as check:
+                self.assertEqual(worker.recheck(), DISABLED)
+            check.assert_not_called()
+
+    def test_the_stamp_survives_a_config_file_that_cannot_be_read(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.assertEqual(update.stamp(Path(folder) / 'missing.json'), 0.0)
+            broken = Path(folder) / 'broken.json'
+            broken.write_text('{', encoding='utf-8')
+            self.assertEqual(update.stamp(broken), 0.0)
 
 
 class UpdaterTests(unittest.TestCase):

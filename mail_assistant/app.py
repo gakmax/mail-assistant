@@ -22,8 +22,11 @@ from .excel import mailto
 from .hub import line_text
 from .overview import overview
 from .report import remember_secret, report
-from .settings import FIELDS, normalize
+from .settings import CUSTOM, FIELDS, model_rows, model_value, normalize, read_models
 from .style import ACCENT, CALM, DASH_BLUE, DASH_GREEN, DASH_RED, SOON, TODAY_FILL, tk_color
+# Size only: webui imports no toolkit at module level, and both windows should
+# open at the same size rather than each picking its own.
+from .webui import WINDOW_MIN, window_size
 
 ICONS = {'start': '▶', 'stop': '■', 'now': '⟳', 'excel': '▤', 'test': '⇄', 'settings': '⚙',
          'login': '⌨', 'folder': '📁', 'mail': '✉', 'retry': '↻', 'save': '💾', 'update': '⬆'}
@@ -101,8 +104,10 @@ class App:
 
     def build(self):
         self.root.title(f'메일 도우미 {__version__}')
-        self.root.geometry('960x700')
-        self.root.minsize(820, 600)
+        width, height = window_size((self.root.winfo_screenwidth(),
+                                     self.root.winfo_screenheight()))
+        self.root.geometry(f'{width}x{height}')
+        self.root.minsize(min(WINDOW_MIN[0], width), min(WINDOW_MIN[1], height))
         style = ttk.Style()
         style.configure('Action.TButton', font=('맑은 고딕', 10), padding=(10, 7))
         style.configure('Card.TLabel', font=('맑은 고딕', 9), foreground=tk_color(CALM))
@@ -535,12 +540,16 @@ class App:
         self.fields = {}
         self.field_rows = {}
         for index, (key, label) in enumerate(FIELDS):
-            ttk.Label(parent, text=label).grid(row=index, column=0, sticky='w', pady=5, padx=(0, 12))
+            ttk.Label(parent, text=label).grid(row=index, column=0, pady=5, padx=(0, 12),
+                                               sticky='nw' if key == 'model' else 'w')
             variable = tk.StringVar(value='' if key == 'password' else str(self.config.get(key, '')))
-            entry = ttk.Entry(parent, textvariable=variable, width=56, show='*' if key == 'password' else '')
-            entry.grid(row=index, column=1, sticky='ew', pady=5)
             self.fields[key] = variable
             self.field_rows[key] = index
+            if key == 'model':
+                self.build_models(parent, index, variable)
+                continue
+            entry = ttk.Entry(parent, textvariable=variable, width=56, show='*' if key == 'password' else '')
+            entry.grid(row=index, column=1, sticky='ew', pady=5)
         parent.columnconfigure(1, weight=1)
         ttk.Button(parent, text='찾기', command=self.pick_workbook).grid(
             row=self.field_rows['workbook'], column=2, padx=(6, 0))
@@ -553,6 +562,29 @@ class App:
                    command=self.save_settings).pack(side='left')
         ttk.Button(row, text=f"{ICONS['test']} 연결 테스트", style='Action.TButton',
                    command=self.test_typed).pack(side='left', padx=8)
+
+    def build_models(self, parent, index, variable):
+        """Radio buttons over the models Codex itself says this account can use.
+
+        `variable` stays the one the rest of the form reads, so typed() and
+        save_settings() never learn that this field stopped being an entry box.
+        """
+        box = ttk.Frame(parent)
+        box.grid(row=index, column=1, sticky='ew', pady=5)
+        self.model_choice = tk.StringVar(value=variable.get())
+        self.model_typed = tk.StringVar(value='')
+
+        def apply(*_):
+            variable.set(model_value(self.model_choice.get(), self.model_typed.get()))
+            entry.configure(state='normal' if self.model_choice.get() == CUSTOM else 'disabled')
+
+        for value, label, _ in model_rows(read_models(), variable.get()):
+            ttk.Radiobutton(box, text=label, value=value, variable=self.model_choice,
+                            command=apply).pack(anchor='w')
+        entry = ttk.Entry(box, textvariable=self.model_typed, width=36)
+        entry.pack(anchor='w', pady=(3, 0))
+        self.model_typed.trace_add('write', apply)
+        apply()
 
     def pick_workbook(self):
         path = filedialog.asksaveasfilename(defaultextension='.xlsx', filetypes=[('Excel', '*.xlsx')],

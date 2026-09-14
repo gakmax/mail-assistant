@@ -17,13 +17,14 @@ from pathlib import Path
 from . import __version__
 from .calendar_sheet import COLORS
 from .core import (FAILED, HANDLED, LIST_LIMIT, PROGRESS, SORTS, STATES, Store, account_key,
-                   local_text, parse_mail, row_view, state_of)
+                   local_text, now, parse_mail, row_view, state_of)
 from .dashboard import CATEGORIES, PRIORITIES, describe
 from .excel import mailto
 from .hub import line_text
 from .overview import (DUE_DAYS, RECENT_DAYS, UPCOMING, overview, past_due, results,
                        review_queue, trend)
-from .settings import DEFAULTS, FIELDS, field_errors, normalize
+from .settings import (CUSTOM, DEFAULTS, FIELDS, NO_MODELS, field_errors, model_rows,
+                       model_value, normalize, read_models)
 from .style import CALM, DASH_GREEN, LINK, NEUTRAL, SOON, URGENT, css_color
 
 SERIES = css_color(LINK)      # one hue: every count bar measures the same thing
@@ -51,17 +52,28 @@ CARD_TONES = {'긴급·높음': css_color(URGENT), f'{DUE_DAYS}일 내 마감': 
               '검토 전 초안': SERIES, FAILED_CARD: css_color(URGENT)}
 REFRESH_SECONDS = 5.0
 RUN_LINES = 8
+# The frame opens at this size, not at pywebview's 800x600: 현황 is a two-column
+# layout and 메일 is a table with six columns, and both start inside a scrollbar at
+# the default. WINDOW_MIN is as small as the layout still reads at.
+WINDOW = (1440, 940)
+WINDOW_MIN = (1080, 720)
+WINDOW_MARGIN = 80          # taskbar, title bar, and room to grab an edge
+WINDOW_FLOOR = (640, 480)   # no desktop is smaller; a floor stops a silly screen value
 # (path, label, Material icon). The icons ship with Quasar, so nothing is fetched.
 PAGES = (('/', '현황', 'dashboard'), ('/mail', '메일', 'mail'), ('/calendar', '일정', 'event'),
          ('/todo', '할 일', 'checklist'), ('/drafts', '초안', 'drafts'),
          ('/chat', '상담', 'forum'), ('/stats', '통계', 'insights'),
-         ('/run', '실행', 'play_circle'), ('/diagnose', '진단', 'troubleshoot'),
-         ('/settings', '설정', 'settings'))
+         ('/run', '실행', 'play_circle'), ('/settings', '설정', 'settings'))
 # The 현황 cards. '…일 내 마감' carries the window in its name, so it is matched by suffix.
 CARD_ICONS = {'미처리 메일': 'inbox', '긴급·높음': 'priority_high', '검토 전 초안': 'edit_note',
               FAILED_CARD: 'error_outline'}
-SORT_LABELS = (('received', '수신'), ('subject', '제목'), ('sender', '발신자'),
+# The 메일 list's columns, in the order the table draws them. Every key is also a key
+# of core.SORTS, which is what lets the header itself be the sort control — a test
+# holds the two together, because a header with no SQL behind it would sort nothing.
+LIST_FIELDS = (('received', '수신'), ('sender', '발신자'), ('subject', '제목'),
                ('category', '종류'), ('priority', '우선순위'), ('state', '상태'))
+# Columns a first click should sort from ㄱ. The rest read newest or most urgent first.
+TEXT_SORTS = ('subject', 'sender', 'category')
 DEFAULT_LIST = {'query': '', 'state': '', 'sort': 'received', 'desc': True,
                 'page': 0, 'per': LIST_LIMIT, 'selected': None}
 WINDOWS = (7, 14, 30)           # the 마감 windows the 현황 card offers
@@ -223,12 +235,17 @@ a.ma-kpi:hover {{
   background:var(--sunken); color:var(--muted); font-size:11.5px; font-weight:600;
   border-bottom:1px solid var(--line); position:sticky; top:0; z-index:1;
 }}
+/* A sortable header. q-table's own sort would only reorder the page it was handed,
+   so the click goes back to sqlite and the arrow here is what that query decided. */
+.ma-table thead tr th.ma-th {{ cursor:pointer; user-select:none; white-space:nowrap; }}
+.ma-table thead tr th.ma-th:hover {{ color:var(--ink); background:#eef0f3; }}
+.ma-table thead tr th.ma-th.is-live {{ color:var(--brand); }}
+.ma-th__arrow {{ font-size:14px; margin-left:3px; vertical-align:-2px; opacity:0; }}
+.ma-th:hover .ma-th__arrow {{ opacity:.45; }}
+.ma-th.is-live .ma-th__arrow {{ opacity:1; }}
 .ma-table tbody td {{ font-size:12.5px; border-bottom:1px solid var(--hair); }}
 .ma-table tbody tr {{ cursor:pointer; }}
 .ma-table tbody tr:hover {{ background:var(--sunken); }}
-/* :has() rather than a row class: q-table hands slots the cells, not the row,
-   and Edge — the only browser this ships against — has supported it since 105. */
-.ma-table tbody tr:has(.ma-open) {{ background:var(--brand-soft); }}
 .ma-tag {{
   display:inline-flex; align-items:center; border-radius:6px; padding:1px 7px;
   font-size:11px; font-weight:600; line-height:1.75; white-space:nowrap;
@@ -242,6 +259,8 @@ a.ma-kpi:hover {{
   margin:12px 0 3px; letter-spacing:.01em;
 }}
 .ma-field:first-child {{ margin-top:0; }}
+.ma-radio {{ display:block; margin:0 0 2px -6px; }}
+.ma-radio .q-radio__label {{ font-size:13px; color:var(--ink); }}
 .ma-alert {{
   display:flex; gap:7px; align-items:flex-start; border-radius:9px; padding:9px 11px;
   color:var(--urgent); background:rgba(192,0,0,.06); border:1px solid rgba(192,0,0,.14);
@@ -406,6 +425,16 @@ a.ma-kpi:hover {{
 .fc-theme-standard td, .fc-theme-standard th {{ border-color:{HAIR}; }}
 .q-field--outlined .q-field__control {{ border-radius:9px; }}
 .q-btn {{ border-radius:9px; }}
+/* Quasar sizes a dense button at 14px type in a 2.5em box, which stands a head taller
+   than the 12.5px text it sits beside — a row of four of them read as the loudest
+   thing on the page. Specificity is deliberately one class, so the segmented control
+   (.ma-seg .q-btn) and the round icon buttons below keep their own sizes. */
+.q-btn--dense {{ font-size:12.5px; min-height:27px; padding:1px 10px; font-weight:600; }}
+.q-btn--dense .q-icon {{ font-size:15px; }}
+.q-btn--dense.q-btn--round {{ min-height:26px; min-width:26px; padding:0; }}
+/* The 메일 detail, opened over the list rather than under it: wide enough for the two
+   columns and the draft, short enough that the page behind it still frames it. */
+.ma-modal {{ width:min(1060px, 95vw); max-width:95vw; max-height:86vh; overflow-y:auto; }}
 </style>
 '''
 
@@ -598,6 +627,32 @@ def list_state(saved=None):
     except (TypeError, ValueError):
         values['page'], values['per'] = 0, LIST_LIMIT
     return values
+
+
+def clicked_key(args):
+    """The column name a header click carried.
+
+    A slot template reaches the server through $parent.$emit, and Element.on hands the
+    handler the client's argument *list* — ['received'], not 'received'. A bare string
+    is taken too, so the caller never has to know which shape arrived.
+    """
+    if isinstance(args, (list, tuple)):
+        return str(args[0]) if args else ''
+    return str(args or '')
+
+
+def next_sort(sort, desc, key):
+    """(sort, desc) after a click on the `key` column's header.
+
+    The same column flips; a new one opens in the direction that column is read —
+    제목·발신자·종류 from ㄱ, 수신·우선순위·상태 newest and most urgent first. Starting
+    every column descending made a click on 제목 look broken.
+    """
+    if key not in SORTS:
+        return sort, desc
+    if key == sort:
+        return key, not desc
+    return key, key not in TEXT_SORTS
 
 
 def listing(directory, config, state):
@@ -816,6 +871,19 @@ def countdown_text(last_fetch, interval, now=None):
     return f'다음 확인까지 {left // 60}분 {left % 60}초'
 
 
+def collect_text(message, running):
+    """What 지금 가져오기 reports. Collecting is not analysing.
+
+    A one-off fetch stores what arrived and stops there — analysis is the worker's,
+    and it can take minutes per mail. A screen that did not say so looked as though
+    the mail had arrived broken.
+    """
+    message = str(message or '').strip() or '가져올 새 메일이 없습니다.'
+    if running:
+        return message
+    return message + ' · 분석은 수집을 시작하면 진행됩니다.'
+
+
 def run_view(hub, directory, config, services=None, limit=RUN_LINES * 3):
     """Everything the 실행 page shows. Read-only: the hub owns the worker."""
     summary = run_summary(hub, directory, config, limit=limit)
@@ -905,6 +973,29 @@ def open_port(host='127.0.0.1'):
         return sock.getsockname()[1]
 
 
+def screen_size():
+    """The primary desktop in pixels, or None where there is nothing to ask."""
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32          # Windows only; anything else raises
+        return int(user32.GetSystemMetrics(0)), int(user32.GetSystemMetrics(1))
+    except Exception:
+        return None
+
+
+def window_size(screen=None, margin=WINDOW_MARGIN):
+    """The frame's opening size, shrunk to whatever screen this PC actually has.
+
+    pywebview opens where it is told and a title bar below the desktop cannot be
+    dragged back, so a 1366x768 laptop must never be handed the full WINDOW.
+    """
+    size = []
+    for wanted, floor, room in zip(WINDOW, WINDOW_FLOOR, tuple(screen or ()) + (0, 0)):
+        room = int(room or 0)
+        size.append(wanted if room <= 0 else max(min(wanted, room - margin), floor))
+    return tuple(size)
+
+
 # ---------------------------------------------------------------- page
 
 def section(title, *, top=True):
@@ -972,6 +1063,26 @@ def tag_cell(tones, default=SUBTLE, failure=None):
     return ('<q-td :props="props">'
             f'<span v-if="props.value" class="ma-tag" :style="{pick}">'
             '{{ props.value }}</span></q-td>')
+
+
+def header_cell(key, sort, desc):
+    """A q-th slot that sorts the list by its own column.
+
+    The list is paged in sqlite, so q-table's built-in `sortable` would only reorder
+    the fifty rows it happens to be holding. The click comes back here instead, by the
+    one route a slot template has: $parent.$emit, which Element.on() is listening for.
+    Single quotes inside, for the reason tag_cell() gives.
+    """
+    live = key == sort
+    icon = ('arrow_downward' if desc else 'arrow_upward') if live else 'unfold_more'
+    # headerStyle carries the column widths, and a custom header cell is the one place
+    # q-table stops applying them for you: without this 수신 loses its fixed width and
+    # the date wraps onto two lines.
+    return ('<q-th :props="props" :style="props.col.headerStyle" class="ma-th%s" '
+            "@click=\"() => $parent.$emit('sortby', '%s')\">"
+            '{{ props.col.label }}'
+            '<q-icon name="%s" class="ma-th__arrow"></q-icon></q-th>'
+            % (' is-live' if live else '', key, icon))
 
 
 def chart(option, height=200, cap=None):
@@ -1277,7 +1388,9 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
 
     from . import services as helpers, update
     from .report import remember_secret
-    from .updater import FAILED, READY, WORKING, consequence, offer_line, progress_text
+    from .updater import (FAILED, READY, WORKING, checked_text, consequence, offer_line,
+                          progress_text, recheck_text)
+    from .worker import connect_detail
 
     config_path = config_path or (directory / 'config.json')
 
@@ -1332,7 +1445,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 ui.button('취소', on_click=updater.stop).props('flat dense no-caps')
             return
         if updater.offer is None:
-            empty(f'최신 버전을 쓰고 있습니다. (현재 {__version__})')
+            empty(f'최신 버전입니다. (현재 {__version__})')
             return
         ui.label(f"새 버전 {updater.offer['version']}이(가) 나왔습니다.") \
             .style(f'color:{INK};font-size:16px;font-weight:700;letter-spacing:-.01em')
@@ -1382,6 +1495,58 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             ui.space()
             ui.button('이 버전 건너뛰기', on_click=skip) \
                 .props('flat dense no-caps text-color=grey-7')
+
+    def update_panel():
+        """The 업데이트 card's body — the same one on 실행 and 설정, so they cannot drift.
+
+        Whatever state the updater is in, then when it was last asked, then the way to
+        ask again. 지금 확인 says which of the four things happened rather than going
+        quiet: '새 버전이 없습니다' and '물어보지 못했습니다' are not the same sentence.
+        """
+        said = {'line': ''}
+
+        def unskip():
+            update.remember(config_path, {'update_skip': ''})
+            config['update_skip'] = ''
+            said['line'] = '건너뛴 버전을 초기화했습니다. 지금 확인을 누르면 다시 알려 드립니다.'
+            block.refresh()
+
+        async def recheck():
+            said['line'] = '확인하는 중입니다…'
+            block.refresh()
+            result = await nicerun.io_bound(updater.recheck)
+            said['line'] = recheck_text(result, updater.offer)
+            ui.notify(said['line'])
+            block.refresh()
+
+        @ui.refreshable
+        def block():
+            update_body(block.refresh)
+            if updater is None:
+                return
+            with ui.element('div').classes('ma-row').style('border:none;padding:10px 0 0'):
+                ui.label(checked_text(config.get('update_checked'))).classes('ma-meta__item')
+                ui.space()
+                if updater.state not in (WORKING, READY):
+                    ui.button('지금 확인', icon='refresh', on_click=recheck) \
+                        .props('flat dense no-caps text-color=secondary')
+            if said['line']:
+                ui.label(said['line']).classes('ma-meta__item').style('margin-top:2px')
+            skipped = config.get('update_skip') or ''
+            if skipped:
+                with ui.element('div').classes('ma-row') \
+                        .style('border:none;padding:6px 0 0'):
+                    ui.label(f'건너뛴 버전: {skipped}').classes('ma-meta__item')
+                    ui.space()
+                    ui.button('다시 알림 받기', icon='notifications_active', on_click=unskip) \
+                        .props('flat dense no-caps')
+
+        block()
+        if updater is not None:
+            # Built here rather than inside a handler: refresh() deletes the slot a
+            # timer would take its client from, and the RuntimeError kills the handler.
+            ui.timer(0.4, lambda: block.refresh() if updater.state == WORKING else None)
+        return block
 
     # 현황 -------------------------------------------------------------
 
@@ -1540,19 +1705,112 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
         opened = request.query_params.get('id')
         if opened:
             state['selected'] = opened
+        wanted = {'ids': []}        # what the 삭제 confirmation is standing over
+        touched = {'now': False}    # did the open mail change anything the list shows
 
         def remember(**changes):
             state.update(changes)
             app.storage.user['list'] = dict(state)
 
         def choose(ident):
+            """Open the mail over the list.
+
+            The table is deliberately left alone: rebuilding fifty rows behind a dialog
+            that covers them costs a query and shows nobody anything. What the detail
+            changed is painted when it closes.
+            """
             remember(selected=ident)
-            rows.refresh()
             panel.refresh()
+            detail.open()
 
         def edit(**changes):
             remember(page=0, **changes)
             rows.refresh()
+
+        def sort_by(key):
+            """A header click. The list is paged in sqlite, so this is a new query."""
+            order, desc = next_sort(state['sort'], state['desc'], key)
+            remember(sort=order, desc=desc, page=0)
+            rows.refresh()
+
+        def ask_delete(ids):
+            if not ids:
+                ui.notify('선택된 메일이 없습니다.')
+                return
+            wanted['ids'] = list(ids)
+            warn.set_text(f'메일 {len(ids)}건을 지웁니다. 분석 결과와 답변 초안, 이 메일에 대한 '
+                          '상담 기록도 함께 사라지며 되돌릴 수 없습니다. 이미 엑셀에 반영된 행은 '
+                          '그대로 남고, 서버에서 같은 메일을 다시 가져오지도 않습니다.')
+            confirm.open()
+
+        def erase():
+            ids, wanted['ids'] = list(wanted['ids']), []
+            confirm.close()
+            if not ids:
+                return
+            store(directory).delete(ids)
+            if state['selected'] in ids:
+                remember(selected=None)
+                detail.close()
+            rows.refresh()
+            ui.notify(f'{len(ids)}건을 삭제했습니다.')
+
+        def fetch_once():
+            """One POP3 round, right now, on whichever thread io_bound gave us.
+
+            A Store of its own because a sqlite connection cannot cross threads, and
+            connect_detail() because the server's refusal can echo what was sent to it.
+            """
+            password = services['read_password'](config['email'])
+            remember_secret(password)
+            opened_store = Store(directory / 'mail.db')
+            try:
+                message = helpers.fetch_mail(config, opened_store, password)
+            except Exception as exc:
+                raise RuntimeError(connect_detail(exc, password)) from None
+            else:
+                opened_store.set_meta('last_fetch:' + account_of(config), now())
+                return message
+            finally:
+                opened_store.db.close()
+
+        async def collect():
+            """'지금 가져오기' — connect now instead of waiting out 확인 간격.
+
+            A running collector is woken rather than raced: one POP3 session per
+            account, and the worker is the one that also analyses and exports.
+            """
+            if hub is not None and hub.running():
+                hub.wake()
+                ui.notify('지금 확인을 요청했습니다. 수집이 끝나면 목록에 나타납니다.')
+                return
+            if not services or not services.get('read_password'):
+                ui.notify('이 환경에서는 메일을 가져올 수 없습니다. Windows에서 실행하세요.')
+                return
+            # Only what a fetch needs: this button never opens the workbook, so an
+            # unset 엑셀 파일 must not stand between the user and their mail.
+            errors = [text for key, text in field_errors(config).items()
+                      if key in ('email', 'host', 'port')]
+            if errors:
+                ui.notify('설정을 먼저 확인하세요: ' + ' '.join(errors))
+                return
+            fetch.props(add='loading')
+            try:
+                message = await nicerun.io_bound(fetch_once)
+            except LookupError:
+                ui.notify('메일 전용 비밀번호가 없습니다. 설정에서 입력하세요.')
+            except Exception as exc:
+                ui.notify(f'가져오지 못했습니다: {exc}')
+                if hub is not None:
+                    hub.log(f'지금 가져오기 실패: {exc}')
+            else:
+                said = collect_text(message, hub is not None and hub.running())
+                if hub is not None:
+                    hub.log('지금 가져오기: ' + said)
+                ui.notify(said)
+                rows.refresh()
+            finally:
+                fetch.props(remove='loading')
 
         @ui.refreshable
         def rows():
@@ -1561,31 +1819,39 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 remember(page=data['page'])
             # Widths are fixed except 제목, which takes the rest; max-width:0 is the
             # trick that makes a flexible table cell ellipsize instead of overflowing.
-            widths = {'received': 'width:104px', 'sender': 'width:200px',
+            # 수신 is wide enough for '09-14 13:39' on one line: at 104px it wrapped,
+            # and a wrapped date made every row in the list two lines tall.
+            widths = {'received': 'width:118px', 'sender': 'width:200px',
                       'subject': 'max-width:0;overflow:hidden;text-overflow:ellipsis;'
                                  'white-space:nowrap',
                       'category': 'width:96px', 'priority': 'width:90px', 'state': 'width:96px'}
             columns = [{'name': key, 'label': label, 'field': key, 'align': 'left',
                         'style': widths[key], 'headerStyle': widths[key].split(';')[0]}
-                       for key, label in (('received', '수신'), ('sender', '발신자'),
-                                          ('subject', '제목'), ('category', '종류'),
-                                          ('priority', '우선순위'), ('state', '상태'))]
+                       for key, label in LIST_FIELDS]
             with card(flush=True):
                 with ui.element('div').style('width:100%;overflow-x:auto'):
                     table = ui.table(columns=columns, rows=data['rows'], row_key='id',
                                      selection='multiple').classes('w-full ma-table')
-                    table.props('flat wrap-cells=false')
+                    # selected-rows-label is a function, and Quasar's default writes
+                    # '1 record selected.' in English under a Korean table. A ':' prop
+                    # is evaluated in the browser, which is the only way to pass one.
+                    table.props('flat wrap-cells=false '
+                                ''':selected-rows-label="n => n + '건 선택됨'"''')
+                    for key, _ in LIST_FIELDS:
+                        table.add_slot(f'header-cell-{key}',
+                                       header_cell(key, state['sort'], state['desc']))
+                    table.on('sortby', lambda event: sort_by(clicked_key(event.args)))
+                    # Quasar's own selection checkbox lets the click reach the row, and
+                    # ticking a box would open the mail. .stop is the whole of the slot.
+                    table.add_slot('body-selection',
+                                   '<q-checkbox v-model="props.selected" dense'
+                                   ' @click.stop></q-checkbox>')
                     table.add_slot('body-cell-received',
                                    '<q-td :props="props"><span style="color:%s">'
                                    '{{ props.value }}</span></q-td>' % SUBTLE)
-                    # The open row is worth marking: the panel below belongs to it.
                     table.add_slot('body-cell-subject',
-                                   '<q-td :props="props">'
-                                   '<i v-if="props.row.id === \'%s\'" class="ma-open"></i>'
-                                   '<span :style="props.row.id === \'%s\''
-                                   " ? 'font-weight:600;color:%s' : ''\">{{ props.value }}"
-                                   '</span></q-td>'
-                                   % (state['selected'] or '', state['selected'] or '', INK))
+                                   '<q-td :props="props"><span style="color:%s">'
+                                   '{{ props.value }}</span></q-td>' % INK)
                     table.add_slot('body-cell-category', tag_cell({}))
                     table.add_slot('body-cell-priority', tag_cell(STATUS))
                     table.add_slot('body-cell-state',
@@ -1603,7 +1869,6 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     store(directory).set_handled_many(ids, value)
                     table.selected.clear()
                     rows.refresh()
-                    panel.refresh()
                     ui.notify(f"{len(ids)}건을 {'처리 완료' if value else '미처리'}로 바꿨습니다.")
 
                 def again():
@@ -1616,7 +1881,6 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                         hub.wake()
                     table.selected.clear()
                     rows.refresh()
-                    panel.refresh()
                     ui.notify(f'{len(ids)}건을 다시 분석하도록 요청했습니다.')
 
                 def step(delta):
@@ -1633,6 +1897,9 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                         .props('flat dense no-caps text-color=secondary')
                     ui.button('다시 분석', icon='refresh', on_click=again) \
                         .props('flat dense no-caps text-color=secondary')
+                    ui.button('삭제', icon='delete_outline',
+                              on_click=lambda: ask_delete(picked())) \
+                        .props('flat dense no-caps text-color=negative')
                     ui.space()
                     ui.button(icon='chevron_left', on_click=lambda: step(-1)) \
                         .props('flat dense round').set_enabled(data['page'] > 0)
@@ -1642,11 +1909,16 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
 
         @ui.refreshable
         def panel():
+            """The mail itself, as the dialog's contents.
+
+            Whatever it changes — 처리 상태, a re-analysis, a deletion — is painted into
+            the list when the dialog closes, not while it is covering the list.
+            """
             ident = state['selected']
             row = store(directory).detail(ident) if ident else None
             if row is None:
-                with card():
-                    empty('목록에서 메일을 선택하면 분석 결과와 답변 초안이 여기에 열립니다.')
+                with card().classes('ma-modal'):
+                    empty('메일을 찾을 수 없습니다. 목록에서 다시 선택하세요.')
                 return
             view = detail_view(row)
 
@@ -1656,18 +1928,18 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
 
             def toggle():
                 store(directory).set_handled(view['id'], '' if view['handled'] else HANDLED)
-                rows.refresh()
+                touched['now'] = True
                 panel.refresh()
 
             def retry():
                 store(directory).reset([view['id']], reanalyze=view['analysed'])
                 if hub is not None:
                     hub.wake()
-                rows.refresh()
+                touched['now'] = True
                 panel.refresh()
                 ui.notify('다시 분석하도록 요청했습니다.')
 
-            with card():
+            with card().classes('ma-modal ma-scroll'):
                 with ui.element('div').style('display:flex;gap:14px;align-items:flex-start;'
                                              'flex-wrap:wrap'):
                     with ui.element('div').style('flex:1 1 320px;min-width:0'):
@@ -1682,7 +1954,8 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                                 soft_of(STATUS.get(view['priority'])))
                             tag(view['state'], STATE_TONES.get(view['state'], SUBTLE),
                                 soft_of(STATE_TONES.get(view['state'], SUBTLE)))
-                    with ui.element('div').style('display:flex;gap:6px;flex-wrap:wrap'):
+                    with ui.element('div').style('display:flex;gap:5px;flex-wrap:wrap;'
+                                                 'align-items:center'):
                         ui.button('미처리로' if view['handled'] else '처리 완료',
                                   icon='undo' if view['handled'] else 'done',
                                   on_click=toggle).props('unelevated dense no-caps')
@@ -1697,6 +1970,11 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                             .props('flat dense no-caps')
                         ui.button('다시 분석', icon='refresh', on_click=retry) \
                             .props('flat dense no-caps')
+                        ui.button(icon='delete_outline',
+                                  on_click=lambda: ask_delete([view['id']])) \
+                            .props('flat dense round text-color=negative').tooltip('삭제')
+                        ui.button(icon='close', on_click=detail.close) \
+                            .props('flat dense round').tooltip('닫기')
                 if view['error']:
                     with ui.element('div').classes('ma-alert').style('margin-top:12px'):
                         ui.icon('error_outline').style('font-size:16px')
@@ -1773,16 +2051,41 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                                        value=state['state'])
                     picker.props('dense outlined options-dense').style('min-width:140px')
                     picker.on_value_change(lambda event: edit(state=event.value or ''))
-                    sorter = ui.select(dict(SORT_LABELS), value=state['sort'])
-                    sorter.props('dense outlined options-dense').style('min-width:130px')
-                    sorter.on_value_change(lambda event: edit(sort=event.value))
-                    ui.button(icon='arrow_downward' if state['desc'] else 'arrow_upward',
-                              on_click=lambda: edit(desc=not state['desc'])) \
-                        .props('flat dense round') \
-                        .tooltip('내림차순' if state['desc'] else '오름차순')
-            rows()
-            with ui.element('div').style('margin-top:14px'):
+                    ui.space()
+                    fetch = ui.button('지금 가져오기', icon='cloud_download', on_click=collect) \
+                        .props('unelevated dense no-caps') \
+                        .tooltip('확인 간격을 기다리지 않고 지금 한 번 연결합니다')
+                    ui.button(icon='sync', on_click=lambda: rows.refresh()) \
+                        .props('flat dense round').tooltip('목록 새로 고침')
+            confirm = ui.dialog()
+            with confirm, card().style('max-width:440px'):
+                ui.label('메일을 삭제할까요?') \
+                    .style(f'color:{INK};font-size:15px;font-weight:700')
+                warn = ui.label('').classes('ma-lede').style('margin:8px 0 14px')
+                with ui.element('div').style('display:flex;gap:6px;justify-content:flex-end'):
+                    ui.button('취소', on_click=confirm.close).props('flat dense no-caps')
+                    ui.button('삭제', icon='delete_outline', on_click=erase) \
+                        .props('unelevated dense no-caps color=negative')
+            detail = ui.dialog()
+            with detail:
                 panel()
+
+            def left(event):
+                """Repaint the list when the detail closes, and only if it changed it.
+
+                Rebuilding the table is also what clears the checkboxes, so a mail
+                opened to be *read* must not cost the user the selection they made.
+                """
+                if event.value or not touched['now']:
+                    return
+                touched['now'] = False
+                rows.refresh()
+
+            detail.on_value_change(left)
+            rows()
+            if opened:
+                # A link from 현황·일정·할 일·초안 points at one mail; open that mail.
+                detail.open()
 
     # 일정 -------------------------------------------------------------
 
@@ -2035,71 +2338,6 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             ui.label('답변이 필요한데 아직 손대지 않은 초안입니다. 입력을 멈추면 자동 저장되고, '
                      '저장하면 검토 완료로 간주해 목록에서 빠집니다.').classes('ma-lede')
             queue()
-
-    # 진단 -----------------------------------------------------------
-
-    @ui.page('/diagnose')
-    def diagnose_page(request: Request):
-        if not allowed(request):
-            refused()
-            return
-        found = {'steps': [], 'codex': None}
-
-        @ui.refreshable
-        def report_block():
-            with card('점검 결과', 'fact_check'):
-                if not found['steps'] and not found['codex']:
-                    empty('위 버튼으로 점검을 실행하세요.')
-                    return
-                for label, ok, detail in found['steps']:
-                    with ui.element('div').classes('ma-row'):
-                        ui.icon('check_circle' if ok else 'cancel') \
-                            .style(f"color:{OK if ok else css_color(URGENT)};font-size:17px")
-                        ui.label(label).style(f'color:{INK};font-size:13px;font-weight:600;'
-                                              'min-width:118px')
-                        ui.label(detail).classes('ma-meta__item') \
-                            .style('overflow-wrap:anywhere')
-                if found['codex']:
-                    state, detail = found['codex']
-                    with ui.element('div').classes('ma-row'):
-                        ui.icon('terminal').style(f'color:{MUTED};font-size:17px')
-                        ui.label('Codex').style(f'color:{INK};font-size:13px;font-weight:600;'
-                                                'min-width:118px')
-                        ui.label(f'{state} — {detail}').classes('ma-meta__item') \
-                            .style('overflow-wrap:anywhere')
-
-        async def check_mail():
-            if not services:
-                ui.notify('이 환경에서는 점검할 수 없습니다.')
-                return
-            try:
-                password = services['read_password'](config['email'])
-            except Exception as exc:
-                found['steps'] = [('비밀번호 읽기', False, f'{type(exc).__name__}: {exc}')]
-                report_block.refresh()
-                return
-            ui.notify('메일 연결을 점검합니다…')
-            found['steps'] = await nicerun.io_bound(helpers.connection_steps, config, password)
-            report_block.refresh()
-
-        async def check_codex():
-            if not services:
-                ui.notify('이 환경에서는 점검할 수 없습니다.')
-                return
-            ui.notify('Codex 상태를 확인합니다…')
-            found['codex'] = await nicerun.io_bound(services['login_state'])
-            report_block.refresh()
-
-        with shell('/diagnose', token):
-            ui.label('연결 실패와 분석 실패의 원인을 단계별로 확인합니다. '
-                     '아무것도 수정하지 않고 읽기만 합니다.').classes('ma-lede')
-            with card().style('padding:12px 14px;margin-bottom:14px'):
-                with ui.element('div').style('display:flex;gap:8px;flex-wrap:wrap'):
-                    ui.button('메일 연결 점검', icon='lan', on_click=check_mail) \
-                        .props('unelevated dense no-caps')
-                    ui.button('Codex 상태 점검', icon='terminal', on_click=check_codex) \
-                        .props('outline dense no-caps')
-            report_block()
 
     # 상담 -----------------------------------------------------------
 
@@ -2414,26 +2652,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             body()
             with ui.element('div').style('margin-top:14px'):
                 with card('업데이트', 'system_update_alt'):
-                    @ui.refreshable
-                    def update_block():
-                        update_body(update_block.refresh)
-
-                    update_block()
-                    if updater is not None:
-                        ui.timer(0.4, lambda: update_block.refresh()
-                                 if updater.state == WORKING else None)
-
-                        async def relook():
-                            if await nicerun.io_bound(updater.look, True):
-                                update_block.refresh()
-                            else:
-                                ui.notify('새 버전이 없습니다.')
-                                update_block.refresh()
-
-                        if not updater.waiting() and updater.state != WORKING:
-                            ui.button('지금 확인', icon='refresh', on_click=relook) \
-                                .props('flat dense no-caps text-color=secondary') \
-                                .style('margin-top:10px')
+                    update_panel()
             ui.timer(REFRESH_SECONDS, body.refresh)
 
     # 설정 -------------------------------------------------------------
@@ -2445,14 +2664,23 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             return
         values = {key: str(config.get(key, '')) for key, _ in FIELDS if key != 'password'}
         inputs, notes = {}, {}
+        # 진단 used to be a page of its own. It is two buttons and a result list that
+        # nobody opens until something is already wrong, and everything it asks about —
+        # the account, the password, the Codex login — is set on this page.
+        found = {'steps': [], 'codex': None}
+        # Codex's own list, read fresh: the slugs an account may use turn over, and a
+        # radio button naming a retired one fails every analysis.
+        models = read_models()
+        rows = model_rows(models, values['model'])
+        picked = {'choice': values['model'], 'typed': ''}
 
         def validate():
             errors = field_errors(values)
-            for key, box in inputs.items():
+            for key, note in notes.items():
                 message = errors.get(key, '')
-                notes[key].set_text(message)
-                notes[key].style(f"color:{css_color(URGENT)};font-size:11px"
-                                 if message else f'color:{MUTED};font-size:11px')
+                note.set_text(message)
+                note.style(f"color:{css_color(URGENT)};font-size:11px"
+                           if message else f'color:{MUTED};font-size:11px')
             return errors
 
         def save():
@@ -2507,17 +2735,65 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             hub.log('저장된 메일 전용 비밀번호를 삭제했습니다.')
             ui.notify('삭제했습니다.')
 
-        def unskip():
-            update.remember(config_path, {'update_skip': ''})
-            config['update_skip'] = ''
-            ui.notify('건너뛴 버전을 초기화했습니다. 다음 확인에서 다시 알려 드립니다.')
-            skip_row.refresh()
+        @ui.refreshable
+        def report_block():
+            if not found['steps'] and not found['codex']:
+                empty('위 버튼으로 점검을 실행하세요.')
+                return
+            for label, ok, detail in found['steps']:
+                with ui.element('div').classes('ma-row'):
+                    ui.icon('check_circle' if ok else 'cancel') \
+                        .style(f"color:{OK if ok else css_color(URGENT)};font-size:17px")
+                    ui.label(label).style(f'color:{INK};font-size:13px;font-weight:600;'
+                                          'min-width:118px')
+                    ui.label(detail).classes('ma-meta__item').style('overflow-wrap:anywhere')
+            if found['codex']:
+                state, detail = found['codex']
+                with ui.element('div').classes('ma-row'):
+                    ui.icon('terminal').style(f'color:{MUTED};font-size:17px')
+                    ui.label('Codex').style(f'color:{INK};font-size:13px;font-weight:600;'
+                                            'min-width:118px')
+                    ui.label(f'{state} — {detail}').classes('ma-meta__item') \
+                        .style('overflow-wrap:anywhere')
+
+        async def check_mail():
+            if not services:
+                ui.notify('이 환경에서는 점검할 수 없습니다.')
+                return
+            try:
+                password = services['read_password'](config['email'])
+            except Exception as exc:
+                found['steps'] = [('비밀번호 읽기', False, f'{type(exc).__name__}: {exc}')]
+                report_block.refresh()
+                return
+            ui.notify('메일 연결을 점검합니다…')
+            found['steps'] = await nicerun.io_bound(helpers.connection_steps, config, password)
+            report_block.refresh()
+
+        async def check_codex():
+            if not services:
+                ui.notify('이 환경에서는 점검할 수 없습니다.')
+                return
+            ui.notify('Codex 상태를 확인합니다…')
+            found['codex'] = await nicerun.io_bound(services['login_state'])
+            report_block.refresh()
+
+        def choose(value):
+            picked['choice'] = value
+            values['model'] = model_value(value, picked['typed'])
+            model_note.refresh()
+            validate()
+
+        def typed(text):
+            picked['typed'] = text or ''
+            values['model'] = model_value(picked['choice'], picked['typed'])
+            validate()
 
         with shell('/settings', token):
             with ui.element('div').style('max-width:660px;display:grid;gap:14px'):
                 with card('메일과 엑셀', 'tune'):
                     for key, label in FIELDS:
-                        if key == 'password':
+                        if key in ('password', 'model'):
                             continue
                         box = ui.input(label=label, value=values[key]).classes('w-full')
                         box.props('dense outlined stack-label').style('margin-bottom:2px')
@@ -2529,6 +2805,37 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                             .style('margin:0 0 8px 2px')
                     ui.button('저장', icon='save', on_click=save) \
                         .props('unelevated dense no-caps').style('margin-top:4px')
+
+                with card('Codex 모델', 'smart_toy'):
+                    ui.label('메일 분석과 상담에 쓸 모델입니다. 목록은 Codex CLI가 이 PC에 '
+                             '저장해 둔, 지금 계정으로 쓸 수 있는 모델입니다.') \
+                        .classes('ma-lede').style('margin-bottom:10px')
+                    if not models:
+                        with ui.element('div').classes('ma-alert').style('margin-bottom:10px'):
+                            ui.icon('info_outline').style('font-size:16px')
+                            ui.label(NO_MODELS).style('font-size:12px')
+                    ui.radio({value: label for value, label, _ in rows},
+                             value=picked['choice'],
+                             on_change=lambda event: choose(event.value)) \
+                        .props('dense').classes('ma-radio')
+
+                    @ui.refreshable
+                    def model_note():
+                        hint = next((text for value, _, text in rows
+                                     if value == picked['choice']), '')
+                        if hint:
+                            ui.label(hint).classes('ma-meta__item').style('margin:0 0 2px 2px')
+                        if picked['choice'] == CUSTOM:
+                            box = ui.input(label='모델 이름', value=picked['typed'],
+                                           placeholder='예: gpt-5.6-luna').classes('w-full')
+                            box.props('dense outlined stack-label').style('margin-top:6px')
+                            box.on_value_change(lambda event: typed(event.value))
+
+                    model_note()
+                    notes['model'] = ui.label('').classes('ma-meta__item') \
+                        .style('margin:2px 0 0 2px')
+                    ui.button('저장', icon='save', on_click=save) \
+                        .props('unelevated dense no-caps').style('margin-top:10px')
 
                 with card('메일 전용 비밀번호', 'key'):
                     ui.label('Windows 자격 증명에 저장됩니다. 설정 파일에는 기록되지 않습니다.') \
@@ -2542,19 +2849,20 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                         ui.button('저장된 비밀번호 삭제', icon='delete_outline',
                                   on_click=drop_password).props('outline dense no-caps')
 
-                with card('업데이트', 'system_update_alt'):
-                    @ui.refreshable
-                    def skip_row():
-                        with ui.element('div').classes('ma-row').style('padding:0'):
-                            skipped = config.get('update_skip') or ''
-                            ui.label(f'건너뛴 버전: {skipped}' if skipped
-                                     else '건너뛴 버전이 없습니다.').classes('ma-meta__item')
-                            if skipped:
-                                ui.space()
-                                ui.button('다시 알림 받기', icon='notifications_active',
-                                          on_click=unskip).props('flat dense no-caps')
+                with card('점검', 'troubleshoot'):
+                    ui.label('연결 실패와 분석 실패의 원인을 단계별로 확인합니다. '
+                             '아무것도 수정하지 않고 읽기만 합니다.') \
+                        .classes('ma-lede').style('margin-bottom:10px')
+                    with ui.element('div').style('display:flex;gap:6px;flex-wrap:wrap;'
+                                                 'margin-bottom:4px'):
+                        ui.button('메일 연결 점검', icon='lan', on_click=check_mail) \
+                            .props('unelevated dense no-caps')
+                        ui.button('Codex 상태 점검', icon='terminal', on_click=check_codex) \
+                            .props('outline dense no-caps')
+                    report_block()
 
-                    skip_row()
+                with card('업데이트', 'system_update_alt'):
+                    update_panel()
 
                 with card('이 컴퓨터', 'computer'):
                     for label, value in (('버전', __version__), ('데이터 폴더', str(directory)),
@@ -2582,7 +2890,13 @@ def serve(directory, config, token=None, host='127.0.0.1', port=None, native=Fal
     # window's URL comes from window_args, which it merges over its own.
     target = f'/?t={token}' if token else '/'
     if native:
+        width, height = window_size(screen_size())
         app.native.window_args['url'] = f'http://{host}:{port}{target}'
+        # min_size is clamped too: on a small screen a minimum larger than the window
+        # is what pywebview obeys, and the frame opens off the bottom of the desktop.
+        app.native.window_args.update(width=width, height=height,
+                                      min_size=(min(WINDOW_MIN[0], width),
+                                                min(WINDOW_MIN[1], height)))
     # flush: a redirected stdout is block-buffered, and spike.ps1 reads this line
     # out of the log to know the server is up.
     print(f'메일 도우미 현황: http://{host}:{port}{target}', flush=True)

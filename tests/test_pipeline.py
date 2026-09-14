@@ -25,7 +25,8 @@ from mail_assistant.dashboard import (PRIORITIES, SHEET as DASHBOARD, UPCOMING_R
                                       UPCOMING_TOP, blocks, describe, update_dashboard, upcoming)
 from mail_assistant.excel import address_of, link_to_draft, link_to_mail, mail_rows, mailto
 from mail_assistant.overview import overview, past_due
-from mail_assistant.settings import field_errors, normalize
+from mail_assistant.settings import (CUSTOM, field_errors, model_choices, model_rows,
+                                     model_value, normalize, read_models)
 from mail_assistant.services import check_connection, connection_steps, login_state
 from mail_assistant.style import STYLE_VERSION, URGENT, apply_style
 from mail_assistant.services import (analyze, chat_reply, chat_schema, fetch_mail,
@@ -453,6 +454,27 @@ class SearchTests(unittest.TestCase):
             self.assertEqual(store.search(self.ACCOUNT, state=HANDLED)[1], 3)
             store.set_handled_many([self.ids['uid-1']], '')
             self.assertEqual(store.search(self.ACCOUNT, state=HANDLED)[1], 2)
+            store.db.close()
+
+    def test_deleting_mail_takes_its_chat_and_leaves_the_rest(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            store.add_chat(self.ACCOUNT, 'user', '이 건 어떻게 할까요', self.ids['uid-1'])
+            store.add_chat(self.ACCOUNT, 'user', '일반 상담')
+            store.delete([self.ids['uid-1'], self.ids['uid-4']])
+            self.assertEqual(self.subjects(store), ['분석 실패한 메일', '회의 일정 조정',
+                                                    'Weekly report'])
+            self.assertEqual(store.chat(self.ACCOUNT, self.ids['uid-1']), [])
+            self.assertEqual(len(store.chat(self.ACCOUNT)), 1)
+            store.db.close()
+
+    def test_deleted_mail_is_not_collected_again(self):
+        """`seen` keeps the uid: the mail is still on the server, and the user threw
+        away the copy on purpose."""
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            store.delete([self.ids['uid-1']])
+            self.assertIn('uid-1', store.seen(self.ACCOUNT))
             store.db.close()
 
     def test_the_priority_order_matches_the_dashboard(self):
@@ -910,6 +932,8 @@ class FieldErrorTests(unittest.TestCase):
                  {**self.VALID, 'interval': ''},
                  {**self.VALID, 'workbook': ''},
                  {**self.VALID, 'workbook': 'C:\\a\\b.xls'},
+                 {**self.VALID, 'model': 'gpt-5.6-luna'},
+                 {**self.VALID, 'model': '두 단어'},
                  {}]
         for values in cases:
             with self.subTest(values=values):
@@ -920,6 +944,65 @@ class FieldErrorTests(unittest.TestCase):
                 else:
                     refused = False
                 self.assertEqual(refused, bool(field_errors(values)))
+
+
+class ModelChoiceTests(unittest.TestCase):
+    """The radio is built from Codex's own cache, so a retired slug cannot linger."""
+
+    CACHE = {'models': [
+        {'slug': 'gpt-6-astra', 'display_name': 'GPT-6-Astra', 'visibility': 'list',
+         'description': '가장 뛰어난 모델'},
+        {'slug': 'gpt-reserve', 'display_name': 'GPT-Reserve', 'visibility': 'hide',
+         'description': '숨김'},
+        {'slug': 'gpt-5.6-luna', 'display_name': 'GPT-5.6-Luna', 'visibility': 'list'},
+    ]}
+
+    def test_only_the_models_the_account_may_pick_are_offered(self):
+        self.assertEqual([slug for slug, _, _ in model_choices(self.CACHE)],
+                         ['gpt-6-astra', 'gpt-5.6-luna'])
+
+    def test_the_hint_leads_with_the_slug_that_goes_on_the_command_line(self):
+        self.assertEqual(model_choices(self.CACHE)[0][2], 'gpt-6-astra · 가장 뛰어난 모델')
+
+    def test_a_model_with_no_description_is_still_named_by_its_slug(self):
+        self.assertEqual(model_choices(self.CACHE)[1][1:], ('GPT-5.6-Luna', 'gpt-5.6-luna'))
+
+    def test_a_cache_of_another_shape_is_no_models_rather_than_a_crash(self):
+        for data in (None, {}, {'models': None}, {'models': ['gpt-6-astra']}, 'text'):
+            with self.subTest(data=data):
+                self.assertEqual(model_choices(data), [])
+
+    def test_the_rows_open_with_the_default_and_close_with_the_custom_box(self):
+        rows = model_rows(model_choices(self.CACHE))
+        self.assertEqual(rows[0][0], '')
+        self.assertEqual(rows[-1][0], CUSTOM)
+
+    def test_a_saved_model_codex_no_longer_lists_keeps_its_own_row(self):
+        rows = model_rows(model_choices(self.CACHE), 'gpt-5.1-codex')
+        self.assertIn('gpt-5.1-codex', [value for value, _, _ in rows])
+
+    def test_a_saved_model_codex_still_lists_is_not_repeated(self):
+        rows = model_rows(model_choices(self.CACHE), 'gpt-6-astra')
+        self.assertEqual([value for value, _, _ in rows].count('gpt-6-astra'), 1)
+
+    def test_the_custom_row_saves_the_box_and_the_others_save_themselves(self):
+        self.assertEqual(model_value(CUSTOM, ' gpt-9 '), 'gpt-9')
+        self.assertEqual(model_value('gpt-6-astra', 'ignored'), 'gpt-6-astra')
+        self.assertEqual(model_value('', ''), '')
+
+    def test_a_missing_cache_is_an_empty_list_and_never_an_exception(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.assertEqual(read_models(Path(folder) / 'models_cache.json'), [])
+            broken = Path(folder) / 'broken.json'
+            broken.write_text('{not json', encoding='utf-8')
+            self.assertEqual(read_models(broken), [])
+
+    def test_a_real_cache_is_read_from_disk(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'models_cache.json'
+            path.write_text(json.dumps(self.CACHE, ensure_ascii=False), encoding='utf-8')
+            self.assertEqual([slug for slug, _, _ in read_models(path)],
+                             ['gpt-6-astra', 'gpt-5.6-luna'])
 
 
 class TestClient:

@@ -7,10 +7,19 @@ inside whichever screen happens to be showing it. Nothing here imports a toolkit
 is what lets the tests cover it off Windows.
 """
 import threading
+import time
 
 from . import update
 
 IDLE, WORKING, READY, FAILED = 'idle', 'working', 'ready', 'failed'
+# What a 지금 확인 turned out to mean. 'current' is only claimed when the check really
+# reached GitHub, so a proxy that swallowed the request never reads as '최신 버전입니다'.
+NEW, CURRENT, UNREACHABLE, DISABLED = 'new', 'current', 'unreachable', 'disabled'
+RECHECK_TEXT = {
+    CURRENT: '최신 버전입니다.',
+    UNREACHABLE: '업데이트 서버에 연결하지 못했습니다. 네트워크를 확인하고 다시 시도하세요.',
+    DISABLED: '업데이트 확인이 꺼져 있습니다. 설정 파일의 update 값을 확인하세요.',
+}
 
 
 def failure_text(exc):
@@ -25,6 +34,21 @@ def failure_text(exc):
                 f'약 {update.describe(exc.needed)}의 여유 공간이 필요합니다.')
     return (f'업데이트를 내려받지 못했습니다. {type(exc).__name__}: {exc} — '
             '지금 버전은 그대로 사용할 수 있습니다.')
+
+
+def checked_text(stamp):
+    """'마지막 확인: 2026-09-14 13:20', or that nothing has been checked here yet."""
+    value = float(stamp) if isinstance(stamp, (int, float)) else 0.0
+    if value <= 0:
+        return '아직 업데이트를 확인한 적이 없습니다.'
+    return time.strftime('마지막 확인: %Y-%m-%d %H:%M', time.localtime(value))
+
+
+def recheck_text(result, offer=None):
+    """The one line a 지금 확인 leaves on the screen."""
+    if result == NEW:
+        return f"새 버전 {(offer or {}).get('version', '')}이(가) 있습니다."
+    return RECHECK_TEXT.get(result, '')
 
 
 def progress_text(progress):
@@ -79,6 +103,24 @@ class Updater:
             self.state = IDLE
             self.message = ''
         return found
+
+    def recheck(self):
+        """A 지금 확인: force a check and say which of the four things happened.
+
+        update.check() returns None for 'nothing new' and for 'could not ask', which
+        are not the same sentence to show a user. remember() writes update_checked only
+        when the manifest was really fetched, so the stamp moving is what tells them
+        apart — and re-reading it is also what keeps 마지막 확인 honest.
+        """
+        if not update.settings(self.config)['enabled']:
+            return DISABLED
+        before = update.stamp(self.config_path)
+        found = self.look(force=True)
+        after = update.stamp(self.config_path)
+        self.config['update_checked'] = after or before
+        if found:
+            return NEW
+        return CURRENT if after > before else UNREACHABLE
 
     def take(self, running=False):
         """Blocking download. True once main() has everything it needs to install.
