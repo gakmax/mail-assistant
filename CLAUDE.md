@@ -206,6 +206,39 @@ apart. Two of those rules exist because nicegui's own defaults fight the page:
 header band and stops a long log line wrapping, and every surface that stacks text
 (`.ma-card`, `.ma-sunken`, `.ma-note`) therefore declares `display:block`.
 
+**The nine destinations live in `PAGES`; `NAV_GROUPS` holds nothing but paths.**
+`nav_rows()` takes the name and icon from the first and the order and grouping from the
+second, so a page added to `PAGES` and forgotten in `NAV_GROUPS` is reachable by URL and
+by nothing on screen — a test holds the two sets equal, the way `core.STATES` is held
+against `STATE_SQL`. They were one horizontal list in the header band until 0.6.0, with
+`overflow-x:auto` and `scrollbar-width:none`: nine Korean labels already spent ~670px of
+a 1240px band, so anything else put beside them pushed 설정 off the end with no scrollbar
+and nothing on screen saying so. That is the arithmetic the sidebar exists for, not
+taste.
+
+**A sidebar badge is `nav_counts()`, never a `COUNT(*)`.** It calls `overview()` and
+`board_counts()` — the same functions the 대시보드 cards and the kanban tally read — so
+the number beside 메일 and the card called 미처리 메일 cannot disagree, and a mail whose
+analysis produced no `next_action` is not counted as a 할 일 card by either. `badge_text()`
+draws nothing for a zero, for the reason the 분석 실패 card is absent rather than 0.
+
+**`.ma-main` is a block, never a flex column.** `.ma-page` centres itself with
+`margin:0 auto`, and an auto cross-axis margin on a *flex item* beats `align-self:stretch`
+— the page then shrink-wraps to its content, which on the 대시보드 wrapped the four KPI
+cards 3+1 and left a 220px gutter down both sides. Nothing errors and no test sees it;
+it simply looks like a window someone forgot to fill. `min-width:0` on the same rule is
+the other half: a flex child's default minimum is its content, so without it the 메일
+table pushes the sidebar off the screen instead of scrolling.
+
+**`shell()` repaints; it never rebuilds.** One `chrome()` call per `REFRESH_SECONDS` beat
+feeds the badges, the 수집 중 chip and the 새 버전 pill together, and the tick then uses
+`set_text`/`style`/`classes` only — every page in the app is drawn inside this shell, so a
+`@ui.refreshable` here would take the 메일 목록's ticked checkboxes, the search box being
+typed into and the open dialog with it. The counts are re-read only when `Hub.revision`
+moves *or* the cache is older than one beat, because the worker collects without touching
+that integer; and `home()`'s `read()` calls `note_counts()` with the rows it has already
+fetched, so the 대시보드 does not read the whole mailbox twice on the same tick.
+
 **A `q-table` cell slot is coloured by an expression, never by a JSON blob.**
 `tag_cell()` builds the `:style` lookup with single quotes throughout, because the
 whole expression sits inside a double-quoted Vue attribute and `json.dumps` would

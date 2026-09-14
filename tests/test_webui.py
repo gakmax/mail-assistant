@@ -17,6 +17,9 @@ from mail_assistant.hub import Hub
 from mail_assistant.overview import DUE_DAYS, due_window, failures, oldest_open, overview
 from mail_assistant.webui import (CARD_TONES, DEFAULT_LIST, FONT_FILE, STATE_TONES, STATUS,
                                   THEME, TREND_LABELS,
+                                  NAV_BADGE_MAX, NAV_GROUPS, PAGES, SIDE_BREAK, SIDE_RAIL,
+                                  SIDE_WIDE, badge_text, bar_status, nav_counts, nav_rows,
+                                  update_pill,
                                   bar_option, bar_rows, card_icon, deadline_rows,
                                   detail_view, href, list_state, listing, new_token, open_port,
                                   release_store, run_summary, snapshot,
@@ -1651,6 +1654,162 @@ class ServerTests(unittest.TestCase):
         first, second = new_token(), new_token()
         self.assertNotEqual(first, second)
         self.assertGreaterEqual(len(first), 20)
+
+
+class SidebarTests(unittest.TestCase):
+    """The nine destinations left the header band for a sidebar, and grew badges."""
+
+    def test_every_page_is_in_exactly_one_group(self):
+        listed = [path for _, paths in NAV_GROUPS for path in paths]
+        self.assertEqual(sorted(listed), sorted(path for path, _, _ in PAGES))
+        self.assertEqual(len(listed), len(set(listed)))
+
+    def test_the_open_page_is_the_only_one_drawn_live(self):
+        live = [path for _, items in nav_rows('/todo') for path, _, _, on, _ in items if on]
+        self.assertEqual(live, ['/todo'])
+
+    def test_a_page_that_is_not_a_destination_lights_nothing(self):
+        live = [path for _, items in nav_rows('/nowhere') for path, _, _, on, _ in items if on]
+        self.assertEqual(live, [])
+
+    def test_every_row_carries_the_name_and_icon_pages_gave_it(self):
+        drawn = {path: (name, icon)
+                 for _, items in nav_rows('/') for path, name, icon, _, _ in items}
+        self.assertEqual(drawn, {path: (name, icon) for path, name, icon in PAGES})
+
+    def test_the_first_group_has_no_heading_and_the_rest_do(self):
+        headings = [heading for heading, _ in NAV_GROUPS]
+        self.assertEqual(headings[0], '')
+        self.assertTrue(all(headings[1:]))
+
+    def test_the_rail_is_narrower_than_the_labelled_sidebar(self):
+        self.assertLess(SIDE_RAIL, SIDE_WIDE)
+
+    def test_the_rail_takes_over_before_the_window_reaches_its_minimum(self):
+        from mail_assistant.webui import WINDOW_MIN
+        self.assertGreaterEqual(SIDE_BREAK, WINDOW_MIN[0])
+
+    def test_the_stylesheet_carries_both_widths_and_the_breakpoint(self):
+        self.assertIn(f'width:{SIDE_WIDE}px', THEME)
+        self.assertIn(f'width:{SIDE_RAIL}px', THEME)
+        self.assertIn(f'@media (max-width:{SIDE_BREAK - 1}px)', THEME)
+
+
+class BadgeTests(unittest.TestCase):
+    def test_nothing_to_say_draws_no_badge(self):
+        for value in (0, None, '', -3):
+            self.assertEqual(badge_text(value), '')
+
+    def test_a_count_reads_as_itself(self):
+        self.assertEqual(badge_text(7), '7')
+
+    def test_past_the_cap_a_badge_stops_being_a_number(self):
+        self.assertEqual(badge_text(NAV_BADGE_MAX), str(NAV_BADGE_MAX))
+        self.assertEqual(badge_text(NAV_BADGE_MAX + 1), f'{NAV_BADGE_MAX}+')
+
+    def test_a_value_that_is_not_a_number_says_nothing_rather_than_raising(self):
+        self.assertEqual(badge_text('여덟'), '')
+
+
+class NavCountTests(unittest.TestCase):
+    """The badges must be the numbers the 대시보드 already shows, not a second count."""
+
+    def rows(self, directory, **kinds):
+        store = Store(directory / 'mail.db')
+        account = account_key(CONFIG)
+        for index, (subject, answer) in enumerate(kinds.items()):
+            ident = store.add(account, f'uid-{index}', mail(subject))
+            if answer is not None:
+                store.analyzed(ident, {'sender': 'a@b.c', 'subject': subject,
+                                       'attachments': []}, answer)
+        rows = list(store.page(account))
+        todos = list(store.todos(account))
+        store.db.close()
+        return rows, todos
+
+    def test_the_mail_badge_is_the_unhandled_card(self):
+        with workspace() as directory:
+            rows, todos = self.rows(directory, 하나=result(), 둘=result('긴급'))
+            counts = nav_counts(rows, todos, TODAY)
+            self.assertEqual(counts['/mail'], overview(rows, TODAY)['cards']['미처리 메일'])
+            self.assertEqual(counts['/mail'], 2)
+
+    def test_the_draft_badge_is_the_review_card(self):
+        with workspace() as directory:
+            rows, todos = self.rows(directory, 하나=result(reply=True), 둘=result())
+            counts = nav_counts(rows, todos, TODAY)
+            self.assertEqual(counts['/drafts'], overview(rows, TODAY)['cards']['검토 전 초안'])
+
+    def test_the_todo_badge_counts_what_the_board_still_holds_open(self):
+        with workspace() as directory:
+            rows, todos = self.rows(directory, 하나=result(), 둘=result())
+            lanes = board_counts(rows, todos)
+            self.assertEqual(nav_counts(rows, todos, TODAY)['/todo'],
+                             lanes['total'] - lanes[HANDLED])
+
+    def test_a_mail_with_no_next_action_is_not_a_todo_badge(self):
+        with workspace() as directory:
+            answer = result()
+            answer['next_action'] = ''
+            rows, todos = self.rows(directory, 하나=answer)
+            self.assertEqual(nav_counts(rows, todos, TODAY)['/todo'], 0)
+            self.assertEqual(nav_counts(rows, todos, TODAY)['/mail'], 1)
+
+    def test_a_mail_still_waiting_for_codex_is_not_counted_anywhere(self):
+        with workspace() as directory:
+            rows, todos = self.rows(directory, 하나=None)
+            counts = nav_counts(rows, todos, TODAY)
+            self.assertEqual(set(counts.values()), {0})
+
+    def test_an_empty_mailbox_draws_no_badges(self):
+        counts = nav_counts([], [], TODAY)
+        self.assertEqual([badge_text(value) for value in counts.values()], ['', '', ''])
+
+    def test_every_counted_path_is_a_real_destination(self):
+        paths = {path for path, _, _ in PAGES}
+        self.assertLessEqual(set(nav_counts([], [], TODAY)), paths)
+
+
+class BarStatusTests(unittest.TestCase):
+    """The header chip says what 실행 says, in the same three words."""
+
+    def test_no_hub_says_nothing_rather_than_stopped(self):
+        self.assertEqual(bar_status(None)['text'], '')
+
+    def test_a_running_worker_beats(self):
+        state = bar_status({'running': True, 'stopping': False})
+        self.assertEqual(state['text'], '수집 중')
+        self.assertTrue(state['beat'])
+
+    def test_a_stopped_worker_is_still_and_says_so(self):
+        state = bar_status({'running': False, 'stopping': False})
+        self.assertEqual(state['text'], '수집 멈춤')
+        self.assertFalse(state['beat'])
+
+    def test_stopping_is_neither_of_the_two(self):
+        state = bar_status({'running': True, 'stopping': True})
+        self.assertEqual(state['text'], '중지 중…')
+
+    def test_the_words_are_the_ones_the_run_strip_uses(self):
+        with workspace() as folder:
+            hub = Hub(Path(folder), dict(CONFIG), lambda *a, **k: None,
+                      report=lambda *a, **k: None)
+            self.assertEqual(bar_status(hub.state())['text'], '수집 멈춤')
+            hub.close()
+
+    def test_every_tone_is_css_hex(self):
+        for state in (None, {'running': True}, {'running': False}, {'stopping': True}):
+            self.assertRegex(bar_status(state)['tone'], r'^#[0-9a-fA-F]{6}$')
+
+
+class UpdatePillTests(unittest.TestCase):
+    def test_nothing_offered_says_nothing(self):
+        for offer in (None, {}, '0.5.1'):
+            self.assertEqual(update_pill(offer), '')
+
+    def test_an_offer_names_the_version_and_nothing_else(self):
+        self.assertEqual(update_pill({'version': '0.5.1', 'size': 42_000_000}),
+                         '새 버전 0.5.1')
 
 
 if __name__ == '__main__':

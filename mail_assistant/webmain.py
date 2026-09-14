@@ -82,8 +82,9 @@ def main(argv=()):
         print('메일 도우미 창이 이미 실행 중입니다. 화면은 열지만 여기서 수집을 시작할 수는 '
               '없습니다. 창을 닫고 다시 실행하세요.', flush=True)
     try:
-        # --native needs pywebview, which requirements.txt does not install and the
-        # spec excludes; it stays a spike flag rather than a shipped one.
+        # --native opens the pywebview frame from a source checkout, which is the
+        # cheapest way to see the real window: pywebview has been in requirements.txt
+        # and in both specs since 0.4.0, when the screens became the window.
         webui.serve(directory, config, native='--native' in argv, show='--browser' in argv,
                     hub=Hub(directory, config, run), services=services,
                     config_path=config_path, can_start=can_start)

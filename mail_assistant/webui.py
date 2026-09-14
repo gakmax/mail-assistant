@@ -70,6 +70,26 @@ PAGES = (('/', '대시보드', 'dashboard'), ('/mail', '메일', 'mail'), ('/cal
          ('/todo', '할 일', 'checklist'), ('/drafts', '초안', 'drafts'),
          ('/chat', '상담', 'forum'), ('/stats', '통계', 'insights'),
          ('/run', '실행', 'play_circle'), ('/settings', '설정', 'settings'))
+# The sidebar's groups, in the order they are drawn. Nine destinations in one flat
+# row read as nine; grouped they read as four questions. 대시보드 keeps no heading —
+# it is where the window opens, and a label over a single item is noise. Only paths
+# live here, so PAGES stays the one list of destinations; a test holds the two equal,
+# because a page added there and forgotten here would be reachable by URL and by
+# nothing else on screen.
+NAV_GROUPS = (('', ('/',)),
+              ('업무', ('/mail', '/calendar', '/todo', '/drafts')),
+              ('도움', ('/chat', '/stats')),
+              ('시스템', ('/run', '/settings')))
+# The sidebar with labels, and the same sidebar as icons only. The nine links used to
+# sit in the header with overflow-x:auto and scrollbar-width:none, so anything else
+# put in that band pushed 설정 off the end with nothing on screen saying so.
+SIDE_WIDE = 216
+SIDE_RAIL = 64
+# WINDOW_MIN is 1080 wide and the 메일 table has six columns: below this the labels go
+# back to the content, which is what shoot.ps1 caught them being squeezed out of.
+SIDE_BREAK = 1200
+# Past this a badge is a shape rather than a number, and the sidebar has one width.
+NAV_BADGE_MAX = 99
 # Monday first, and never through strftime: Windows encodes a format string with the
 # locale codec, so a Korean pattern raises UnicodeEncodeError off a Korean PC.
 WEEKDAYS = ('월', '화', '수', '목', '금', '토', '일')
@@ -148,7 +168,74 @@ body {{
 .nicegui-content {{
   padding:0 !important; gap:0 !important; align-items:stretch !important; width:100%;
 }}
-.ma-shell {{ min-height:100vh; width:100%; }}
+.ma-shell {{ min-height:100vh; width:100%; display:flex; align-items:stretch; }}
+
+/* The sidebar is the navigation; the header band above the page is state. Keeping
+   them apart is what let the header grow a logo, a status chip and an offer. */
+.ma-side {{
+  flex:none; width:{SIDE_WIDE}px; background:var(--card);
+  border-right:1px solid var(--line);
+  position:sticky; top:0; height:100vh; overflow-y:auto;
+  display:flex; flex-direction:column; padding:14px 10px 18px;
+}}
+.ma-side__brand {{
+  display:flex; align-items:center; gap:9px; padding:4px 8px 8px;
+  text-decoration:none; color:inherit;
+}}
+.ma-side__mark {{
+  display:grid; place-items:center; width:28px; height:28px; border-radius:8px;
+  background:var(--brand); color:#fff; flex:none;
+}}
+.ma-side__mark svg {{ width:16px; height:16px; display:block; }}
+.ma-side__words {{ display:flex; flex-direction:column; min-width:0; }}
+.ma-side__name {{
+  font-size:13.5px; font-weight:700; letter-spacing:-.01em; white-space:nowrap;
+}}
+.ma-side__ver {{ font-size:10.5px; color:var(--muted); }}
+.ma-side__group {{
+  font-size:10.5px; font-weight:700; letter-spacing:.06em;
+  color:var(--muted); padding:13px 10px 5px;
+}}
+.ma-side__item {{
+  position:relative; display:flex; align-items:center; gap:9px;
+  padding:7px 10px; border-radius:9px; text-decoration:none;
+  color:var(--subtle); font-size:13px; font-weight:500;
+  transition:background .12s ease, color .12s ease;
+}}
+.ma-side__item:hover {{ background:var(--sunken); color:var(--ink); }}
+.ma-side__item.is-live {{
+  background:var(--brand-soft); color:var(--brand); font-weight:600;
+}}
+.ma-side__item .q-icon {{ font-size:18px; flex:none; }}
+.ma-side__label {{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+.ma-badge {{
+  margin-left:auto; flex:none; min-width:19px; height:19px; padding:0 6px;
+  border-radius:999px; background:var(--sunken); border:1px solid var(--line);
+  color:var(--muted); font-size:10.5px; font-weight:700; line-height:17px;
+  text-align:center;
+}}
+.ma-side__item.is-live .ma-badge {{
+  background:var(--brand); border-color:var(--brand); color:#fff;
+}}
+@media (max-width:{SIDE_BREAK - 1}px) {{
+  .ma-side {{ width:{SIDE_RAIL}px; padding:14px 8px 18px; }}
+  .ma-side__words, .ma-side__label, .ma-side__group {{ display:none; }}
+  .ma-side__brand {{ justify-content:center; padding:4px 0 10px; }}
+  .ma-side__item {{ justify-content:center; padding:8px 0; }}
+  /* No room for the count, so the badge becomes the fact that there is one. */
+  .ma-badge {{
+    position:absolute; top:5px; right:11px; margin:0; padding:0;
+    width:8px; height:8px; min-width:0; font-size:0; line-height:0;
+    border-radius:50%; background:var(--brand); border-color:var(--card);
+  }}
+}}
+
+/* min-width:0 and not flex:1 alone: a flex child's default minimum is its content,
+   and the 메일 table would push the sidebar off the screen rather than scroll. And a
+   block, never a flex column: .ma-page centres itself with margin:0 auto, and an auto
+   cross-axis margin on a flex item overrides the stretch and shrink-wraps the page —
+   which reads as a window that is half empty on both sides. */
+.ma-main {{ flex:1; min-width:0; }}
 .ma-bar {{
   position:sticky; top:0; z-index:20;
   background:rgba(255,255,255,.86); backdrop-filter:blur(10px);
@@ -156,25 +243,24 @@ body {{
 }}
 .ma-bar__inner {{
   max-width:1240px; margin:0 auto; padding:0 20px;
-  display:flex; align-items:center; gap:18px; height:56px;
+  display:flex; align-items:center; gap:10px; height:56px;
 }}
-.ma-brand {{ display:flex; align-items:baseline; gap:8px; flex:none; }}
-.ma-brand__name {{ font-size:15px; font-weight:700; letter-spacing:-.01em; }}
-.ma-brand__ver {{
-  font-size:11px; color:var(--muted); background:var(--sunken);
-  border:1px solid var(--line); border-radius:999px; padding:1px 7px;
+.ma-bar__title {{ font-size:14px; font-weight:700; letter-spacing:-.01em; }}
+.ma-chip {{
+  display:flex; align-items:center; gap:6px; flex:none;
+  border:1px solid var(--line); border-radius:999px; padding:3px 11px 3px 9px;
+  background:var(--card); font-size:11.5px; color:var(--muted);
 }}
-.ma-nav {{ display:flex; align-items:center; gap:2px; overflow-x:auto; scrollbar-width:none; }}
-.ma-nav::-webkit-scrollbar {{ display:none; }}
-.ma-nav a {{
-  display:flex; align-items:center; gap:5px; white-space:nowrap;
-  padding:6px 11px; border-radius:8px; text-decoration:none;
-  color:var(--subtle); font-size:13px; font-weight:500;
-  transition:background .12s ease, color .12s ease;
+.ma-chip__dot {{ width:7px; height:7px; border-radius:50%; flex:none; }}
+.ma-chip.is-live .ma-chip__dot {{ animation:ma-beat 1.7s ease-in-out infinite; }}
+@keyframes ma-beat {{ 0%,100% {{ opacity:1; }} 50% {{ opacity:.3; }} }}
+.ma-pill {{
+  display:flex; align-items:center; gap:5px; flex:none; text-decoration:none;
+  border-radius:999px; padding:4px 11px; font-size:11.5px; font-weight:600;
+  background:var(--brand-soft); color:var(--brand);
 }}
-.ma-nav a:hover {{ background:var(--sunken); color:var(--ink); }}
-.ma-nav a.is-live {{ background:var(--brand-soft); color:var(--brand); font-weight:600; }}
-.ma-nav .q-icon {{ font-size:16px; }}
+.ma-pill:hover {{ background:#dce7fb; }}
+.ma-pill .q-icon {{ font-size:14px; }}
 .ma-page {{ max-width:1240px; margin:0 auto; padding:20px 20px 56px; }}
 .ma-lede {{ color:var(--muted); font-size:12.5px; line-height:1.6; margin-bottom:14px; }}
 
@@ -879,6 +965,21 @@ def board_counts(rows, todos):
     return counts
 
 
+def nav_counts(rows, todos, today=None):
+    """What is left, beside 메일, 할 일 and 초안 in the sidebar.
+
+    Through overview() and board_counts(), never through SQL of its own. A badge that
+    counted `handled` itself would disagree with the 대시보드 card beside it, and no
+    COUNT(*) knows that a mail whose analysis produced no next_action is not a 할 일
+    card — which is the same reason board_counts() exists at all.
+    """
+    data = overview(rows, today or date.today())
+    lanes = board_counts(rows, todos)
+    return {'/mail': data['cards']['미처리 메일'],
+            '/todo': lanes['total'] - lanes[HANDLED],
+            '/drafts': data['cards']['검토 전 초안']}
+
+
 def drag_payload(state, card_row):
     """What a dragged card carries. The id goes last, so one holding a colon survives."""
     return f"{card_row['kind']}:{state}:{card_row['key']}"
@@ -1549,10 +1650,75 @@ def run_strip(summary, token=None):
                     ui.label(text).style('white-space:pre-wrap;overflow-wrap:anywhere')
 
 
-def shell(current, token):
-    """Header and navigation, identical on every page."""
+# Drawn, not fetched: the mark has to be there on a PC with no network and behind a
+# proxy, and one <svg> costs less than an asset the spec would have to carry.
+BRAND_MARK = (
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" '
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    '<rect x="2.75" y="5.25" width="18.5" height="13.5" rx="2.25"/>'
+    '<path d="m3.4 7 8.6 6 8.6-6"/></svg>')
+
+
+def badge_text(count):
+    """The number beside a destination, or '' when there is nothing to say.
+
+    Nothing is drawn for a zero: a badge reading 0 every day is how a reader learns to
+    stop looking at that corner, which is the rule the 분석 실패 card already follows.
+    """
+    try:
+        number = int(count or 0)
+    except (TypeError, ValueError):
+        return ''
+    if number <= 0:
+        return ''
+    return f'{NAV_BADGE_MAX}+' if number > NAV_BADGE_MAX else str(number)
+
+
+def nav_rows(current, counts=None):
+    """The sidebar as it is drawn: [(heading, [(path, name, icon, live, badge)])]."""
+    known = {path: (name, icon) for path, name, icon in PAGES}
+    counts = counts or {}
+    return [(heading, [(path, known[path][0], known[path][1], path == current,
+                        badge_text(counts.get(path)))
+                       for path in paths])
+            for heading, paths in NAV_GROUPS]
+
+
+def bar_status(state):
+    """The header's answer to '지금 수집이 돌고 있나'. `state` is hub.state(), or None.
+
+    It says the same three words 실행 says, because a chip that invented its own
+    vocabulary would be a second thing to learn for the same fact.
+    """
+    if not state:
+        return {'text': '', 'tone': MUTED, 'beat': False}
+    if state.get('stopping'):
+        return {'text': '중지 중…', 'tone': css_color(SOON), 'beat': True}
+    if state.get('running'):
+        return {'text': '수집 중', 'tone': OK, 'beat': True}
+    return {'text': '수집 멈춤', 'tone': MUTED, 'beat': False}
+
+
+def update_pill(offer):
+    """'새 버전 0.5.1', or ''. The header only ever says there is one; 실행 says what
+    it costs and is where the button lives."""
+    version = (offer or {}).get('version') if isinstance(offer, dict) else None
+    return f'새 버전 {version}' if version else ''
+
+
+def shell(current, token, chrome=None):
+    """The sidebar, the header band and the page area, identical on every page.
+
+    `chrome` is one callable returning {'counts', 'state', 'offer'} — one call per tick
+    for all three, because the badges, the status chip and the update pill move on the
+    same beat and re-reading the mailbox once per element is what it is there to avoid.
+    It is passed in rather than taken from a hub, so this module keeps importing without
+    nicegui and nav_rows()/bar_status() stay coverable on Linux.
+    """
     from contextlib import contextmanager
     from nicegui import ui
+
+    titles = {path: name for path, name, _ in PAGES}
 
     @contextmanager
     def frame():
@@ -1561,20 +1727,86 @@ def shell(current, token):
         ui.colors(primary=BRAND, secondary=SUBTLE, positive=OK, negative=css_color(URGENT),
                   warning=css_color(SOON))
         ui.add_head_html(THEME)
+        latest = chrome() if chrome is not None else {}
+        marks = {}
+
+        def paint(state, line):
+            """Everything about the chip and the pill that is not their text. Bound
+            late on purpose: the elements below do not exist yet when this is read."""
+            dot.style(f"background:{state['tone']}")
+            if state['beat']:
+                chip.classes(add='is-live')
+            else:
+                chip.classes(remove='is-live')
+            chip.set_visibility(bool(state['text']))
+            pill.set_visibility(bool(line))
+
         with ui.element('div').classes('ma-shell'):
-            with ui.element('header').classes('ma-bar'):
-                with ui.element('div').classes('ma-bar__inner'):
-                    with ui.element('div').classes('ma-brand'):
-                        ui.label('메일 업무 도우미').classes('ma-brand__name')
-                        ui.label(__version__).classes('ma-brand__ver')
-                    with ui.element('nav').classes('ma-nav'):
-                        for path, name, icon in PAGES:
-                            with ui.link(target=href(path, token)) \
-                                    .classes('is-live' if path == current else ''):
+            with ui.element('aside').classes('ma-side'):
+                with ui.link(target=href('/', token)).classes('ma-side__brand'):
+                    with ui.element('div').classes('ma-side__mark'):
+                        ui.html(BRAND_MARK)
+                    with ui.element('div').classes('ma-side__words'):
+                        ui.label('메일 업무 도우미').classes('ma-side__name')
+                        ui.label(__version__).classes('ma-side__ver')
+                with ui.element('nav'):
+                    for heading, items in nav_rows(current, latest.get('counts')):
+                        if heading:
+                            ui.label(heading).classes('ma-side__group')
+                        for path, name, icon, live, badge in items:
+                            classes = 'ma-side__item' + (' is-live' if live else '')
+                            with ui.link(target=href(path, token)).classes(classes):
                                 ui.icon(icon)
-                                ui.label(name)
-            with ui.element('main').classes('ma-page') as page:
-                yield page
+                                ui.label(name).classes('ma-side__label')
+                                mark = ui.label(badge).classes('ma-badge')
+                                mark.set_visibility(bool(badge))
+                                marks[path] = mark
+            with ui.element('div').classes('ma-main'):
+                with ui.element('header').classes('ma-bar'):
+                    with ui.element('div').classes('ma-bar__inner'):
+                        # The frame has no browser chrome, so this is the only way back
+                        # from a page somebody reached by following a card.
+                        ui.button(icon='arrow_back', on_click=lambda: ui.navigate.back()) \
+                            .props('flat dense round size=sm').style(f'color:{SUBTLE}') \
+                            .tooltip('뒤로')
+                        ui.label(titles.get(current, '')).classes('ma-bar__title')
+                        ui.space()
+                        shown = bar_status(latest.get('state'))
+                        chip = ui.element('div').classes('ma-chip')
+                        with chip:
+                            dot = ui.element('div').classes('ma-chip__dot') \
+                                .style(f"background:{shown['tone']}")
+                            word = ui.label(shown['text'])
+                        line = update_pill(latest.get('offer'))
+                        with ui.link(target=href('/run', token)).classes('ma-pill') as pill:
+                            ui.icon('system_update_alt')
+                            offer = ui.label(line)
+                        paint(shown, line)
+                with ui.element('main').classes('ma-page') as page:
+                    yield page
+
+        def tick():
+            """Plain element methods only — no ui.* here. A tick that resolved a client
+            would be the 지금 확인 failure again, and nothing on screen would say so."""
+            data = chrome() or {}
+            counts = data.get('counts') or {}
+            for path, label in marks.items():
+                text = badge_text(counts.get(path))
+                if text != label.text:
+                    label.set_text(text)
+                    label.set_visibility(bool(text))
+            state = bar_status(data.get('state'))
+            found = update_pill(data.get('offer'))
+            if state['text'] != word.text or found != offer.text:
+                word.set_text(state['text'])
+                offer.set_text(found)
+                paint(state, found)
+
+        if chrome is not None:
+            # Built while the page is, never inside a handler that has refreshed:
+            # a timer takes its client from the current slot.
+            ui.timer(REFRESH_SECONDS, tick)
+
     return frame()
 
 
@@ -1846,6 +2078,42 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
     def revision():
         return hub.revision if hub is not None else 0
 
+    # 사이드바 ---------------------------------------------------------
+
+    chrome_cache = {'counts': {}, 'revision': None, 'at': 0.0}
+
+    def note_counts(rows, todos):
+        """Feed the sidebar from rows a page has already read.
+
+        The 대시보드 reads the whole mailbox every REFRESH_SECONDS for its own cards, and
+        the badges want exactly those rows — letting chrome() query again would be the
+        second page() per tick that home()'s read() was inlined to avoid.
+        """
+        chrome_cache.update(counts=nav_counts(rows, todos), revision=revision(),
+                            at=time.monotonic())
+
+    def chrome():
+        """The three things the shell repaints, on one call: badges, chip, offer.
+
+        Every page draws the sidebar, so the counts are re-read only when a screen says
+        something moved (Hub.revision, the same integer 대시보드 follows) or when they
+        are older than one beat — the worker collects without touching that integer, so
+        a revision that has not moved is not by itself proof that nothing has.
+        """
+        if (chrome_cache['revision'] != revision()
+                or time.monotonic() - chrome_cache['at'] >= REFRESH_SECONDS):
+            account = account_of(config)
+            opened = store(directory)
+            note_counts(list(opened.page(account)) if account else [],
+                        list(opened.todos(account)) if account else [])
+        return {'counts': chrome_cache['counts'],
+                'state': hub.state() if hub is not None else None,
+                'offer': updater.offer if updater is not None else None}
+
+    def page_shell(current):
+        """The shell every page opens with, wired to this build's hub and updater."""
+        return shell(current, token, chrome)
+
     async def install():
         """Stop collecting, then bring the server down so main() can run Setup.
 
@@ -2025,6 +2293,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             latest['today'] = today_rows(latest['data']['events'], today,
                                          latest['data']['handled'])
             latest['trend'] = trend(store(directory), account, today)
+            note_counts(rows, todos)
             return latest['data']
 
         @ui.refreshable
@@ -2079,7 +2348,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 dialog.open()
 
         read()
-        with shell('/', token):
+        with page_shell('/'):
             dialog = ui.dialog()
             with dialog, card().style('max-width:620px'):
                 offer_body()
@@ -2555,7 +2824,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
 
                 draft.on_value_change(lambda event: save(event.value))
 
-        with shell('/mail', token):
+        with page_shell('/mail'):
             with card().style('padding:12px 14px;margin-bottom:14px'):
                 with ui.element('div').style('display:flex;gap:8px;align-items:center;'
                                              'flex-wrap:wrap'):
@@ -2638,7 +2907,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
         # load has nothing to gain from the round trip.
         ui.add_body_html(CALENDAR_SETUP + '<script>window.mailCalendar('
                          + json.dumps(payload, ensure_ascii=False) + ');</script>')
-        with shell('/calendar', token):
+        with page_shell('/calendar'):
             with card():
                 with ui.element('div').classes('ma-head'):
                     ui.label('').props('id=calendar-title') \
@@ -2802,7 +3071,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                                             .tooltip('할 일 판에서 치우기 (메일은 남습니다)'
                                                      if item['kind'] == 'mail' else '삭제')
 
-        with shell('/todo', token):
+        with page_shell('/todo'):
             ui.label('메일에서 나온 다음 행동과, 직접 적은 할 일을 한 판에 둡니다. '
                      '카드를 끌어다 옮기거나 화살표 버튼을 눌러 옮길 수 있고, '
                      '메일 카드를 옮기면 그 메일의 처리 상태가 함께 바뀝니다. '
@@ -2906,7 +3175,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     ui.link('메일에서 보기', href('/mail', token, id=view['id'])) \
                         .classes('ma-meta__item').style('text-decoration:none')
 
-        with shell('/drafts', token):
+        with page_shell('/drafts'):
             ui.label('답변이 필요한데 아직 손대지 않은 초안입니다. 입력을 멈추면 자동 저장되고, '
                      '저장하면 검토 완료로 간주해 목록에서 빠집니다.').classes('ma-lede')
             with ui.element('div').classes('ma-alert ma-alert--warn') \
@@ -3149,7 +3418,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             state['query'] = value or ''
             rooms.refresh()
 
-        with shell('/chat', token):
+        with page_shell('/chat'):
             with ui.element('div').classes('ma-chatwrap'):
                 with card(flush=True).classes('ma-rooms'):
                     with ui.element('div').classes('ma-rooms__head'):
@@ -3226,7 +3495,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             span['days'] = days
             body.refresh()
 
-        with shell('/stats', token):
+        with page_shell('/stats'):
             with ui.element('div').style('display:flex;margin-bottom:14px'):
                 ui.toggle({days: f'{days}일' for days in (7, 30, 90)}, value=span['days'],
                           on_change=lambda event: pick(event.value)) \
@@ -3365,7 +3634,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             except Exception as exc:
                 ui.notify(f'Codex 로그인을 열지 못했습니다: {exc}')
 
-        with shell('/run', token):
+        with page_shell('/run'):
             with card().style('padding:12px 14px;margin-bottom:14px'):
                 with ui.element('div').style('display:flex;gap:6px;flex-wrap:wrap;'
                                              'align-items:center'):
@@ -3526,7 +3795,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             values['model'] = model_value(picked['choice'], picked['typed'])
             validate()
 
-        with shell('/settings', token):
+        with page_shell('/settings'):
             with ui.element('div').style('max-width:660px;display:grid;gap:14px'):
                 with card('메일과 엑셀', 'tune'):
                     for key, label in FIELDS:
