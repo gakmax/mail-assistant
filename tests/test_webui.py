@@ -47,8 +47,11 @@ from mail_assistant.webui import (CARD_TONES, DEFAULT_LIST, FONT_FILE, STATE_TON
                                   ANALYSIS_PARTS, EVENT_HINT, PART_TONES, analysis_blocks,
                                   detail_events, event_error, event_kind, event_text,
                                   manual_rows,
-                                  BRIEF_LINES, BRIEF_SECTIONS, BRIEF_WATCH, briefing_empty,
-                                  briefing_text, briefing_view, stale_text,
+                                  BRIEF_LINES, BRIEF_MARKS, BRIEF_SECTIONS, BRIEF_TONES,
+                                  BRIEF_WATCH, briefing_card, briefing_empty,
+                                  briefing_text, briefing_view, stale_text, watch_pins,
+                                  PIN_TITLE_MAX, TIP_COLUMN, TIP_TEXT, clip, mail_tip,
+                                  tip_cell,
                                   DEFAULT_NOTE_COLOR, NOTE_COLORS, NOTE_FILTERS,
                                   PINNED_ON_HOME, keep_note, note_signature,
                                   note_tally, note_tone, note_views, note_wall,
@@ -631,8 +634,9 @@ class ListingTests(unittest.TestCase):
         with workspace() as folder:
             self.build(folder, count=1)
             row = listing(folder, CONFIG, list_state())['rows'][0]
+            # 'tip' is the web list's own column: the window has no hover to draw.
             self.assertEqual(set(row), {'id', 'received', 'sender', 'subject', 'category',
-                                        'priority', 'state', 'error'})
+                                        'priority', 'state', 'error', 'tip'})
 
 
 class BodyBlockTests(unittest.TestCase):
@@ -1791,6 +1795,20 @@ class RailTests(unittest.TestCase):
     def test_pressing_it_never_reaches_the_server(self):
         self.assertNotIn('emit(', RAIL_TOGGLE)
 
+    def test_the_fold_button_rides_on_the_sidebar_it_folds(self):
+        """And not in the header band, which is state rather than navigation."""
+        self.assertIn('.ma-side__top', THEME)
+        self.assertIn('.ma-side__fold', THEME)
+        self.assertNotIn('.ma-bar__toggle', THEME)
+
+    def test_the_rail_puts_the_button_where_the_mark_was(self):
+        """A rail has one square at the top, and the hover is what swaps the two."""
+        rules = self.rules()
+        self.assertIn('position:absolute', rules['html.ma-rail .ma-side__fold'])
+        self.assertIn('opacity:0', rules['html.ma-rail .ma-side__fold'])
+        self.assertIn('opacity:1', rules['html.ma-rail .ma-side__top:hover .ma-side__fold'])
+        self.assertIn('opacity:0', rules['html.ma-rail .ma-side__top:hover .ma-side__brand'])
+
 
 class BadgeTests(unittest.TestCase):
     def test_nothing_to_say_draws_no_badge(self):
@@ -2303,6 +2321,183 @@ class BriefingViewTests(unittest.TestCase):
             kept = store.db.execute('SELECT COUNT(*) FROM briefing WHERE account=?',
                                     (account,)).fetchone()[0]
             self.assertEqual(kept, Store.BRIEF_KEEP)
+            store.db.close()
+
+
+class MailTipTests(unittest.TestCase):
+    """The hover card's own shape, drawn in two places and read from one function."""
+
+    def row(self, folder, analysed=True, subject='견적 요청'):
+        store = Store(Path(folder) / 'mail.db')
+        account = account_key(CONFIG)
+        ident = store.add(account, 'uid-1', mail(subject, 'kim@buyer.example'))
+        if analysed:
+            store.analyzed(ident, {'sender': 'kim@buyer.example', 'subject': subject,
+                                   'attachments': []}, result('긴급'))
+        return store, account, ident
+
+    def tip(self, folder, **kwargs):
+        store, account, ident = self.row(folder, **kwargs)
+        found = mail_tip(store.mail_cards([ident])[ident])
+        store.db.close()
+        return found
+
+    def test_an_analysed_mail_says_who_what_and_what_next(self):
+        with tempfile.TemporaryDirectory() as folder:
+            tip = self.tip(folder)
+            self.assertEqual(tip['subject'], '견적 요청')
+            self.assertEqual(tip['sender'], 'kim@buyer.example')
+            self.assertEqual(tip['priority'], '긴급')
+            self.assertEqual(tip['action'], '확인')
+            self.assertEqual(tip['state'], '미처리')
+
+    def test_a_mail_nobody_has_analysed_still_has_a_card(self):
+        with tempfile.TemporaryDirectory() as folder:
+            tip = self.tip(folder, analysed=False)
+            self.assertEqual(tip['state'], '분석 대기')
+            self.assertEqual((tip['summary'], tip['action'], tip['priority']), ('', '', ''))
+
+    def test_a_mail_with_no_subject_is_named_rather_than_blank(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.assertEqual(self.tip(folder, subject='')['subject'], '(제목 없음)')
+
+    def test_a_paragraph_is_cut_to_something_a_hover_can_hold(self):
+        self.assertEqual(clip('가' * 400, TIP_TEXT)[-1], '…')
+        self.assertEqual(len(clip('가' * 400, TIP_TEXT)), TIP_TEXT)
+        self.assertEqual(clip('한 줄\n  두 줄', 40), '한 줄 두 줄')
+        self.assertEqual(clip(None, 40), '')
+
+    def test_the_list_carries_the_card_with_the_row(self):
+        with workspace() as folder:
+            store, _, _ = self.row(folder)
+            store.db.close()
+            row = listing(folder, CONFIG, list_state())['rows'][0]
+            self.assertEqual(row['tip']['subject'], row['subject'])
+
+    def test_a_rewritten_summary_repaints_the_list(self):
+        """Its two texts are in list_signature, or a stale tooltip survives the beat."""
+        with workspace() as folder:
+            store, _, ident = self.row(folder)
+            before = list_signature(listing(folder, CONFIG, list_state()))
+            store.analyzed(ident, {'sender': 'kim@buyer.example', 'subject': '견적 요청',
+                                   'attachments': []},
+                           {**result('긴급'), 'summary': '다시 쓴 요약'})
+            store.db.close()
+            self.assertNotEqual(list_signature(listing(folder, CONFIG, list_state())),
+                                before)
+
+
+class TipCellTests(unittest.TestCase):
+    """The list's hover button is a slot template: it is drawn in the browser."""
+
+    def test_every_line_comes_off_the_row_the_table_is_holding(self):
+        template = tip_cell()
+        self.assertIn('props.row.tip.subject', template)
+        self.assertIn('props.row.tip.action', template)
+        self.assertNotIn('emit(', template)
+
+    def test_the_quotes_inside_an_expression_are_single(self):
+        """Every expression sits inside a double-quoted attribute or a {{ }}."""
+        for part in re.findall(r'\{\{(.*?)\}\}', tip_cell()):
+            self.assertNotIn('"', part)
+        for part in re.findall(r'(?:v-if|:offset)="(.*?)"', tip_cell()):
+            self.assertNotIn('"', part)
+
+    def test_the_press_never_reaches_the_row_underneath(self):
+        """Quasar lets a cell's click through, and the row click opens the mail."""
+        self.assertIn('@click.stop', tip_cell())
+
+    def test_the_column_is_not_one_of_the_sortable_ones(self):
+        self.assertNotIn(TIP_COLUMN, [key for key, _ in LIST_FIELDS])
+        self.assertNotIn(TIP_COLUMN, SORTS)
+
+
+class WatchPinTests(unittest.TestCase):
+    """먼저 볼 메일 is named after the mail, and points at one that is still there."""
+
+    STORED = {'headline': '오늘은 긴급 1건입니다.',
+              'sections': [{'title': '우선 확인', 'lines': ['A사 견적 회신이 6일 지났습니다.']}],
+              'watch': []}
+
+    def built(self, folder):
+        store = Store(Path(folder) / 'mail.db')
+        account = account_key(CONFIG)
+        ident = store.add(account, 'uid-1', mail('A사 견적 회신 요청', 'kim@buyer.example'))
+        store.analyzed(ident, {'sender': 'kim@buyer.example', 'subject': 'A사 견적 회신 요청',
+                               'attachments': []}, result('긴급'))
+        return store, account, ident
+
+    def test_the_pin_reads_the_subject_and_keeps_the_reason_for_the_hover(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store, _, ident = self.built(folder)
+            pins = watch_pins([{'mail_id': ident, 'reason': '6일째 미처리입니다'}],
+                              store.mail_cards([ident]))
+            self.assertEqual(pins[0]['title'], 'A사 견적 회신 요청')
+            self.assertEqual(pins[0]['reason'], '6일째 미처리입니다')
+            self.assertEqual(pins[0]['tip']['priority'], '긴급')
+            store.db.close()
+
+    def test_a_long_subject_is_a_chip_and_not_a_line(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            account = account_key(CONFIG)
+            ident = store.add(account, 'uid-1', mail('가' * 90, 'kim@buyer.example'))
+            pins = watch_pins([{'mail_id': ident, 'reason': 'r'}], store.mail_cards([ident]))
+            self.assertEqual(len(pins[0]['title']), PIN_TITLE_MAX)
+            store.db.close()
+
+    def test_a_pin_on_a_deleted_mail_is_not_drawn(self):
+        self.assertEqual(watch_pins([{'mail_id': 'f' * 24, 'reason': 'r'}], {}), [])
+
+    def test_the_card_reads_the_briefing_and_the_mail_in_one_go(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store, account, ident = self.built(folder)
+            store.save_briefing(account, TODAY.isoformat(),
+                                {**self.STORED,
+                                 'watch': [{'mail_id': ident, 'reason': '6일째'},
+                                           {'mail_id': 'f' * 24, 'reason': '지워짐'}]})
+            view = briefing_card(store, account, TODAY)
+            self.assertEqual([pin['title'] for pin in view['watch']], ['A사 견적 회신 요청'])
+            self.assertTrue(view['has'])
+            store.db.close()
+
+    def test_no_account_is_an_empty_card_rather_than_a_query(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            self.assertFalse(briefing_card(store, '', TODAY)['has'])
+            store.db.close()
+
+
+class BriefingMarkTests(unittest.TestCase):
+    """Four headings in one blue read as one list; the card's own order says which."""
+
+    def test_there_is_a_mark_for_every_section_the_card_can_hold(self):
+        self.assertEqual(len(BRIEF_MARKS), BRIEF_SECTIONS)
+
+    def test_every_accent_is_one_the_card_can_draw(self):
+        for _, accent in BRIEF_MARKS:
+            self.assertIn(accent, BRIEF_TONES)
+
+    def test_the_marks_are_told_apart_by_both_icon_and_hue(self):
+        icons = [icon for icon, _ in BRIEF_MARKS]
+        self.assertEqual(len(set(icons)), len(icons))
+        tones = [BRIEF_TONES[accent] for _, accent in BRIEF_MARKS]
+        self.assertEqual(len(set(tones)), len(tones))
+
+    def test_a_section_takes_the_mark_of_the_place_it_is_drawn_in(self):
+        """By position, not by title: Codex names its own sections."""
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            account = account_key(CONFIG)
+            store.save_briefing(account, TODAY.isoformat(), {
+                'headline': 'x', 'watch': [],
+                'sections': [{'title': '비어 있음', 'lines': ['']},
+                             {'title': '무엇이든', 'lines': ['한 줄']},
+                             {'title': '그 다음', 'lines': ['한 줄']}]})
+            sections = briefing_view(store.briefing(account), TODAY)['sections']
+            # The empty one is dropped, so the survivors take the first two marks.
+            self.assertEqual([(part['icon'], part['accent']) for part in sections],
+                             [BRIEF_MARKS[0], BRIEF_MARKS[1]])
             store.db.close()
 
 

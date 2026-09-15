@@ -656,6 +656,21 @@ class Store:
         return {row['id']: row['subject'] for row in self.db.execute(
             f'SELECT id, subject FROM mail WHERE id IN ({marks})', wanted).fetchall()}
 
+    def mail_cards(self, ids):
+        """The list columns of several mail at once, for the places that only hover.
+
+        mail_subjects() answers 'what is this called'; the 브리핑's 먼저 볼 메일 has to
+        say who sent it and how urgent it is without opening it, and a mail deleted
+        since the briefing was written is simply absent — which is what lets the pin
+        be left undrawn rather than opening an empty 메일 화면.
+        """
+        wanted = [ident for ident in dict.fromkeys(ids) if ident]
+        if not wanted:
+            return {}
+        marks = ','.join('?' * len(wanted))
+        return {row['id']: row for row in self.db.execute(
+            f'SELECT {self.LIST_COLUMNS} FROM mail WHERE id IN ({marks})', wanted).fetchall()}
+
     def set_handled_many(self, ids, state):
         with self.db:
             self.db.executemany('UPDATE mail SET handled=? WHERE id=?',

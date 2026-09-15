@@ -849,6 +849,16 @@ class NoteStoreTests(unittest.TestCase):
                              {ident: '견적 요청'})
             self.assertEqual(store.mail_subjects([]), {})
 
+    def test_hover_cards_arrive_the_same_way_and_carry_the_analysis(self):
+        with self.opened() as store:
+            ident = store.add('acct', 'uid-1', mail())
+            found = store.mail_cards([ident, 'gone', '', ident])
+            self.assertEqual(list(found), [ident])
+            self.assertEqual(found[ident]['subject'], '견적 요청')
+            # The columns the list itself reads, so a card needs no second query.
+            self.assertIn('result', found[ident].keys())
+            self.assertEqual(store.mail_cards([]), {})
+
 
 class DayWindowTests(unittest.TestCase):
     def test_day_bounds_are_korean_midnight_in_utc(self):

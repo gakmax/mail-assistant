@@ -17,7 +17,7 @@ that break silently if you don't know them.
 ## Commands
 
 ```bash
-python -m unittest discover -s tests -v    # from the repo root; 569 tests, all platforms
+python -m unittest discover -s tests -v    # from the repo root; 591 tests, all platforms
 ```
 
 ```powershell
@@ -237,6 +237,16 @@ comes back as `::after` on the row's own `data-name` — the page's own tooltip,
 calendar, rather than a native `title` — and that one line is why `.ma-side` turns
 `overflow:visible` in the rail.
 
+**The fold button lives on the sidebar, and in the rail it is the mark's own square.**
+It sat in the header band until 0.8.2, which put the control a page away from the thing
+it moves and spent band width on navigation. `.ma-side__top` holds the brand link and
+the button; in the rail there is one square at the top and both want it, so the button
+is absolutely positioned over the mark and `.ma-side__top:hover` swaps their opacity —
+the collapsed sidebar's only press has to be a press, not a 12px corner. The rotate rule
+followed the class, so `rail_css()` names `.ma-side__fold` and a test holds the header
+band's old class out of `THEME`. Its tooltip is anchored `center right` by hand rather
+than left to Quasar's default, which drops it onto the first nav row the fold just hid.
+
 **`.ma-main` is a block, never a flex column.** `.ma-page` centres itself with
 `margin:0 auto`, and an auto cross-axis margin on a *flex item* beats `align-self:stretch`
 — the page then shrink-wraps to its content, which on the 대시보드 wrapped the four KPI
@@ -261,6 +271,17 @@ close it on the first key. `'3회 실패'` carries its count, so the 실패 tone
 with `props.value.includes('실패')` rather than a table key. There is no longer a mark
 for the open row: the mail opens in a dialog over the list, and a highlight that only
 moves when the table is rebuilt pointed at the wrong row more often than the right one.
+
+**A mail's hover card is `mail_tip()`, and it rides on the row.** One shape for the
+브리핑's 먼저 볼 메일 and for the 메일 목록's own ⓘ button, so the same mail cannot
+describe itself two ways on one screen. It is built in `listing()` from the row the
+list already fetched — `Store.LIST_COLUMNS` carries `result`, so there is no second
+query — and the q-table slot reads `props.row.tip.*` in the browser: a hover that asked
+the server would be a round trip per pointer. Two consequences. Its `summary` and
+`action` are in `list_signature()`, because a re-analysis can rewrite them while
+우선순위 and 상태 stay where they were, and a repaint is the only thing that refreshes
+a tooltip drawn from a row. And the `ⓘ` carries `@click.stop`, for the reason
+`body-selection` does: Quasar lets a cell's click reach the row, which opens the mail.
 
 **The 메일 list is sorted by its own header, and that costs three slots.** The page is
 sorted and paged in sqlite, so q-table's own `sortable` would only reorder the fifty
@@ -464,6 +485,18 @@ is skipped — with a notice instead — when the open room has changed, or the 
 would be painted into somebody else's thread. Switching rooms redraws `thread`,
 `rooms` and `head` rather than navigating, so a half-typed question survives it.
 
+**A mail's thread has a name before it has a turn.** `Store.rooms()` groups `chat`,
+so a thread opened from 메일 is in no list until the first question is stored — and the
+head read (제목 없음) for the whole of the first answer. `current()` falls back to the
+mail's own subject and puts the shaped row at the top of the list as well, so the thread
+being read is not the one row the list does not have.
+
+**`ui.clipboard.write()` is not awaitable.** nicegui 3 returns None from it, and the
+`await` that used to sit in front of it raised inside the handler — which killed the
+`ui.notify` after it, so 복사 copied and said nothing, with the error only in the log.
+The 상담's 답변 복사 copies `text`, never `rich_text(text)`: what is on the clipboard
+should be what Codex wrote, not the HTML the bubble was drawn from.
+
 **Never build a `ui.timer` inside a handler that has just called `refresh()`.** The
 timer takes its client from whatever slot is current, `refresh()` has deleted that
 slot, and the `RuntimeError` it raises kills the rest of the handler — in 상담 that
@@ -584,6 +617,23 @@ claimed 최신 버전입니다 behind a dead proxy was. `briefing_empty()` is th
 three reasons (no mail, no collector, before `BRIEF_HOUR`) and never blank space.
 `local_text` gives the clock and `day_title()` builds the Korean date by hand, because
 Korean in a `strftime` format is the Windows crash above.
+
+**먼저 볼 메일 is the mail's subject; the reason is what the hover is for.** The pin
+drew Codex's `reason` until 0.8.2 — four chips, each a sentence about a mail, none of
+them saying *which*. `watch_pins()` names it from `mail_tip()` and `briefing_card()` is
+the one impure line that joins the two: the ids are not known until the stored JSON has
+been read, which is why they cannot be a parameter of `briefing_view()`, and it is one
+`Store.mail_cards()` for the whole card rather than a `detail()` per pin per beat. A pin
+whose mail has been deleted since is dropped rather than drawn, exactly as a pin on a
+manual 일정 is: a chip that opens an empty 메일 화면 is worse than one that is absent.
+
+**The 브리핑's sections are marked by position, never by title.** `BRIEF_MARKS` gives
+the first section 우선(red), the second 할 일(brand) and the third 일정(amber), and
+`briefing_view()` attaches them *after* the empty ones are dropped — the mark belongs to
+the place the reader sees, not to the index in the JSON. By position because Codex names
+its own sections: the schema constrains shape, not wording, so a title match would turn
+back into four identical blue headings the first time it reworded one. The fourth carries
+no colour, for the reason 분석 결과 spends its accent on two blocks of four.
 
 **The 대시보드 charts are updated, not rebuilt.** `home()` creates its four `ui.echart`
 elements once and `paint()` writes new options into them every `REFRESH_SECONDS`; only

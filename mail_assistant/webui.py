@@ -199,8 +199,18 @@ def rail_css(scope):
     return """
 {scope} .ma-side {{ width:{rail}px; padding:14px 8px 18px; overflow:visible; }}
 {scope} .ma-side__words, {scope} .ma-side__label {{ display:none; }}
-{scope} .ma-side__brand {{ justify-content:center; padding:4px 0 10px; }}
+{scope} .ma-side__brand {{ justify-content:center; }}
 {scope} .ma-side__item {{ justify-content:center; padding:8px 0; }}
+/* The mark and the 펼치기 button take the same square, and the hover swaps them: a
+   rail has one row's width at the top and the logo and the way out of the rail both
+   want it. Anything narrower than a press is a press people miss. */
+{scope} .ma-side__top {{ justify-content:center; position:relative; padding:4px 0 10px; }}
+{scope} .ma-side__fold {{
+  position:absolute; left:50%; top:1px; transform:translateX(-50%);
+  opacity:0; pointer-events:none;
+}}
+{scope} .ma-side__top:hover .ma-side__brand {{ opacity:0; }}
+{scope} .ma-side__top:hover .ma-side__fold {{ opacity:1; pointer-events:auto; }}
 /* The heading has no room for its word, but the grouping it marks is still worth a
    line: four questions read as four, where nine bare icons read as nine. */
 {scope} .ma-side__group {{
@@ -226,7 +236,7 @@ def rail_css(scope):
   transition:opacity .12s ease;
 }}
 {scope} .ma-side__item:hover::after {{ opacity:1; }}
-{scope} .ma-bar__toggle .q-icon {{ transform:rotate(180deg); }}
+{scope} .ma-side__fold .q-icon {{ transform:rotate(180deg); }}
 """.format(scope=scope, rail=SIDE_RAIL)
 
 
@@ -272,10 +282,17 @@ body {{
   position:sticky; top:0; height:100vh; overflow-y:auto;
   display:flex; flex-direction:column; padding:14px 10px 18px;
 }}
-.ma-side__brand {{
-  display:flex; align-items:center; gap:9px; padding:4px 8px 8px;
-  text-decoration:none; color:inherit;
+/* 접기 sits on the sidebar it folds, not in the header band across the page: the
+   button and the thing it moves are then one gesture, and the band keeps its width
+   for what is actually state. */
+.ma-side__top {{
+  display:flex; align-items:center; gap:4px; padding:4px 4px 8px;
 }}
+.ma-side__brand {{
+  display:flex; align-items:center; gap:9px; flex:1; min-width:0;
+  text-decoration:none; color:inherit; transition:opacity .12s ease;
+}}
+.ma-side__fold {{ flex:none; transition:opacity .12s ease; }}
 .ma-side__mark {{
   display:grid; place-items:center; width:28px; height:28px; border-radius:8px;
   background:var(--brand); color:#fff; flex:none;
@@ -442,9 +459,12 @@ a.ma-kpi:hover {{
   display:block; background:var(--card); border:1px solid var(--hair);
   border-radius:10px; padding:10px 13px;
 }}
-.ma-brief__title {{
-  font-size:11.5px; font-weight:700; color:var(--brand); margin-bottom:5px;
-}}
+/* Four headings in one blue read as one list broken into columns. The icon and the
+   hue are the section's own, taken by position (BRIEF_MARKS) because Codex names its
+   own sections — 우선 확인 beside 오늘 할 일 beside 다가오는 일정 is three questions,
+   and they should not have to be read to be told apart. */
+.ma-brief__head {{ display:flex; align-items:center; gap:5px; margin-bottom:5px; }}
+.ma-brief__title {{ font-size:11.5px; font-weight:700; color:var(--sec,var(--brand)); }}
 .ma-brief__line {{
   display:flex; gap:7px; align-items:baseline;
   font-size:12.5px; line-height:1.68; color:var(--ink);
@@ -465,7 +485,24 @@ a.ma-kpi:hover {{
 }}
 .ma-brief__pin:hover {{ border-color:var(--brand); color:var(--brand); }}
 .ma-brief__pin .q-icon {{ font-size:13px; flex:none; }}
-.ma-brief__pin span {{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
+/* ui.label is a div; the q-tooltip beside it is a q-tooltip, so > div is the text. */
+.ma-brief__pin > div {{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
+
+/* The hover card a mail carries, on the 브리핑's pins and on the 메일 목록's own
+   button. The same slate as the 일정 tooltip and the chart tooltips, so a hover is
+   recognisably one gesture across the app; .q-tooltip is in the selector because
+   Quasar's own grey would otherwise win on equal specificity. */
+.q-tooltip.ma-hint {{
+  background:#27272a; color:#fafafa; border-radius:9px; padding:9px 11px;
+  max-width:360px; font-size:12px; line-height:1.6; letter-spacing:-.005em;
+  box-shadow:0 8px 24px rgba(24,24,27,.24); font-family:{FONT_STACK};
+}}
+.ma-hint__title {{
+  font-weight:700; font-size:12.5px; margin-bottom:2px; overflow-wrap:anywhere;
+}}
+.ma-hint__row {{ color:#d4d4d8; overflow-wrap:anywhere; }}
+.ma-hint__bad {{ color:#fca5a5; }}
+.ma-hint__why {{ color:#a1a1aa; font-size:11.5px; margin-top:5px; overflow-wrap:anywhere; }}
 
 .ma-meta {{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; }}
 .ma-meta__item {{ font-size:12px; color:var(--muted); }}
@@ -737,6 +774,20 @@ a.ma-kpi:hover {{
 .ma-chat .q-message-text:last-child:before {{ display:none; }}
 .ma-chat .q-message-text-content {{ color:var(--ink); }}
 .ma-wait {{ display:flex; align-items:center; gap:8px; }}
+/* 답변 복사 rides under its own bubble rather than inside it: the bubble's content is
+   what gets copied, and a button in there would be part of what a hand-selection
+   takes. Quiet until the answer is hovered, because a thread of them is a column of
+   buttons otherwise. */
+/* width:100%, not display:block alone: nicegui's scroll content is a flex column
+   with align-items:start, so a wrapper left to itself shrink-wraps and takes the
+   bubble's own width down with it. */
+.ma-said {{ display:block; width:100%; }}
+.ma-said .q-message {{ margin-bottom:2px; }}
+.ma-said__copy {{
+  color:var(--muted); opacity:.4; margin:0 0 8px 2px;
+  transition:opacity .12s ease, color .12s ease;
+}}
+.ma-said:hover .ma-said__copy, .ma-said__copy:focus {{ opacity:1; color:var(--brand); }}
 
 /* 상담: the thread list beside the thread. One column on a narrow window, where a
    250px sidebar would leave the bubbles no room at all. */
@@ -1028,6 +1079,18 @@ def summary_line(data):
 BRIEF_SECTIONS = 4
 BRIEF_LINES = 6
 BRIEF_WATCH = 5
+# A pin is a chip in a row of chips: a subject longer than this is a line of its own.
+PIN_TITLE_MAX = 34
+# The card's own reading order, drawn as an icon and a hue. Codex names its own
+# sections — the schema constrains shape, not wording — so this rides on the position
+# the prompt asks for (지난 마감·긴급 first, then 오늘, then what is coming) rather than
+# on a title match, which a reworded heading would silently turn back into three
+# identical blue headings. Three accents and a plain fourth: the last block is whatever
+# was left over, and a colour on it would be a fourth priority nobody set.
+BRIEF_MARKS = (('priority_high', 'urgent'), ('bolt', 'brand'),
+               ('event', 'soon'), ('lightbulb', None))
+BRIEF_TONES = {'urgent': css_color(URGENT), 'brand': BRAND, 'soon': css_color(SOON),
+               None: MUTED}
 BRIEF_TIP = ('오늘의 브리핑을 다시 만들도록 예약합니다. '
              '분석 대기가 없을 때 수집 차례에 만들어집니다.')
 
@@ -1058,8 +1121,9 @@ def briefing_view(row, today):
     for part in (data.get('sections') or [])[:BRIEF_SECTIONS]:
         lines = [text.strip() for text in (part.get('lines') or []) if str(text).strip()]
         if lines:
+            icon, accent = BRIEF_MARKS[len(sections)]
             sections.append({'title': str(part.get('title') or '').strip() or '메모',
-                             'lines': lines[:BRIEF_LINES]})
+                             'icon': icon, 'accent': accent, 'lines': lines[:BRIEF_LINES]})
     watch = [{'mail_id': pin.get('mail_id', ''),
               'reason': str(pin.get('reason') or '').strip() or '메일 열기'}
              for pin in (data.get('watch') or [])
@@ -1071,6 +1135,39 @@ def briefing_view(row, today):
             'stamp': f'{day_title(written)} {clock} 기준'.strip(),
             'headline': str(data.get('headline') or '').strip(),
             'sections': sections, 'watch': watch}
+
+
+def watch_pins(watch, cards):
+    """먼저 볼 메일, named after the mail rather than after the sentence about it.
+
+    The pin used to draw Codex's `reason` — a line written about a mail, standing in
+    a row of other lines about other mail, with nothing saying which was which. The
+    name is the mail's own subject; the reason is what the hover is for. A mail that
+    has been deleted since the briefing was written is not in `cards` and is dropped:
+    a pin that opens an empty 메일 화면 is worse than one that is simply not drawn.
+    """
+    pins = []
+    for pin in watch:
+        row = cards.get(pin['mail_id'])
+        if row is None:
+            continue
+        tip = mail_tip(row)
+        pins.append({'mail_id': pin['mail_id'], 'title': clip(tip['subject'], PIN_TITLE_MAX),
+                     'reason': pin['reason'], 'tip': tip})
+    return pins
+
+
+def briefing_card(opened, account, today):
+    """The stored briefing with its pins named after the mail they point at.
+
+    The two halves are pure and tested; this is the one line that needs the database,
+    and it is one `IN (…)` for the whole card — the ids are not known until the stored
+    JSON has been read, which is why it cannot be a parameter of briefing_view().
+    """
+    view = briefing_view(opened.briefing(account) if account else None, today)
+    view['watch'] = watch_pins(view['watch'],
+                               opened.mail_cards(pin['mail_id'] for pin in view['watch']))
+    return view
 
 
 def briefing_empty(running, total, hour):
@@ -1199,6 +1296,37 @@ def next_sort(sort, desc, key):
     return key, key not in TEXT_SORTS
 
 
+# What a hover can hold before it stops being a hover. A 요약 runs to a paragraph and
+# the tooltip is read standing up, over the row it belongs to.
+TIP_TEXT = 180
+
+
+def clip(text, limit):
+    """One line, cut to `limit` with the ellipsis inside the count."""
+    line = ' '.join(str(text or '').split())
+    if len(line) <= limit:
+        return line
+    return line[:limit - 1].rstrip() + '…'
+
+
+def mail_tip(row):
+    """What a mail says on a hover: who sent it, how urgent, and what it asked for.
+
+    One shape for both places that draw it — the 브리핑's 먼저 볼 메일 and the 메일
+    목록's own button — so the same mail cannot describe itself two ways on one
+    screen. Pure, and takes the list row the caller is already holding: a detail()
+    per row per beat is exactly what this is instead of.
+    """
+    result = json.loads(row['result']) if row['result'] else {}
+    return {'id': row['id'], 'subject': row['subject'] or '(제목 없음)',
+            'sender': row['sender'] or '', 'received': local_text(row['received']),
+            'category': result.get('category', ''), 'priority': result.get('priority', ''),
+            'state': state_of(row),
+            'summary': clip(result.get('summary', ''), TIP_TEXT),
+            'action': clip(result.get('next_action', ''), TIP_TEXT),
+            'error': clip(row['error'], TIP_TEXT)}
+
+
 def listing(directory, config, state):
     """One page of the list, plus what the pager needs to describe it."""
     account = account_of(config)
@@ -1214,7 +1342,11 @@ def listing(directory, config, state):
         rows, total = store(directory).search(account, query=state['query'], state=state['state'],
                                               sort=state['sort'], desc=state['desc'],
                                               limit=per, offset=page * per)
-    return {'rows': [row_view(row) for row in rows], 'total': total, 'page': page,
+    # The tip rides on the row rather than being fetched when the button is hovered:
+    # a q-table row is drawn in the browser, and asking the server per hover would be
+    # a round trip for text the list already had in its hand.
+    return {'rows': [{**row_view(row), 'tip': mail_tip(row)} for row in rows],
+            'total': total, 'page': page,
             'pages': max(1, -(-total // per)), 'first': page * per + 1 if total else 0,
             'last': min(total, page * per + len(rows))}
 
@@ -1225,11 +1357,14 @@ def list_signature(data):
     The list polls every second and a rebuild is also what clears q-table's
     checkboxes, so it has to be able to tell 'the worker analysed something' from
     'nothing happened'. Every column the table draws is in here; `received` is not,
-    because it is fixed once the mail is stored.
+    because it is fixed once the mail is stored. The hover column is, through the two
+    fields of it an analysis can rewrite on its own: a second answer that changed the
+    요약 and left the 우선순위 where it was would otherwise leave a stale tooltip.
     """
     return (data['total'], data['page'],
             tuple((row['id'], row['state'], row['category'], row['priority'],
-                   row['subject'], row['sender']) for row in data['rows']))
+                   row['subject'], row['sender'],
+                   row['tip']['summary'], row['tip']['action']) for row in data['rows']))
 
 
 def tidy_body(text):
@@ -1978,6 +2113,33 @@ def empty(text):
     ui.label(text).classes('ma-empty')
 
 
+def hint(tip, why=''):
+    """A mail's hover card, inside whatever element it is called in.
+
+    Built from mail_tip(), which is also what the 메일 목록's own button draws in the
+    browser — one shape, so a mail hovered on the 브리핑 and the same mail hovered in
+    the list say the same thing. Labels rather than markup: every line here came out
+    of a mail, and the only place mail text is ever rendered is rich_text().
+    """
+    from nicegui import ui
+    with ui.tooltip().classes('ma-hint'):
+        ui.label(tip['subject']).classes('ma-hint__title')
+        ui.label(' · '.join(part for part in (tip['sender'], tip['received']) if part)) \
+            .classes('ma-hint__row')
+        marks = ' · '.join(part for part in
+                           (tip['category'], tip['priority'], tip['state']) if part)
+        if marks:
+            ui.label(marks).classes('ma-hint__row')
+        if tip['summary']:
+            ui.label(tip['summary']).classes('ma-hint__row')
+        if tip['action']:
+            ui.label('다음 행동: ' + tip['action']).classes('ma-hint__row')
+        if tip['error']:
+            ui.label(tip['error']).classes('ma-hint__row ma-hint__bad')
+        if why:
+            ui.label('브리핑이 고른 이유: ' + why).classes('ma-hint__why')
+
+
 def soft_of(color):
     """The 10% wash a tag sits on, from the tag's own colour."""
     return f'{color}1a'
@@ -2003,6 +2165,38 @@ def tag_cell(tones, default=SUBTLE, failure=None):
     return ('<q-td :props="props">'
             f'<span v-if="props.value" class="ma-tag" :style="{pick}">'
             '{{ props.value }}</span></q-td>')
+
+
+TIP_COLUMN = 'tip'
+
+
+def tip_cell():
+    """A q-td slot holding the mail's own hover card, drawn in the browser.
+
+    The row already carries mail_tip(), so a hover costs nothing: asking the server
+    for it would be a query per pointer, for text the list fetched with the row. Every
+    line is a Vue interpolation rather than markup — what a sender wrote is text here,
+    exactly as it is everywhere but rich_text(). Single quotes inside the attributes,
+    for the reason tag_cell() has them.
+    """
+    lines = [
+        '<div class="ma-hint__title">{{ props.row.tip.subject }}</div>',
+        '<div class="ma-hint__row">{{ [props.row.tip.sender, props.row.tip.received]'
+        ".filter(Boolean).join(' · ') }}</div>",
+        '<div class="ma-hint__row">{{ [props.row.tip.category, props.row.tip.priority,'
+        " props.row.tip.state].filter(Boolean).join(' · ') }}</div>",
+        '<div class="ma-hint__row" v-if="props.row.tip.summary">'
+        '{{ props.row.tip.summary }}</div>',
+        '<div class="ma-hint__row" v-if="props.row.tip.action">'
+        '다음 행동: {{ props.row.tip.action }}</div>',
+        '<div class="ma-hint__row ma-hint__bad" v-if="props.row.tip.error">'
+        '{{ props.row.tip.error }}</div>',
+    ]
+    return ('<q-td :props="props" style="width:46px;text-align:center">'
+            '<q-btn flat dense round size="sm" icon="info_outline" @click.stop '
+            f'style="color:{MUTED}">'
+            '<q-tooltip class="ma-hint" anchor="bottom right" self="top right" '
+            ':offset="[0,6]">' + ''.join(lines) + '</q-tooltip></q-btn></q-td>')
 
 
 def header_cell(key, sort, desc):
@@ -2171,8 +2365,12 @@ def briefing_body(view, today, token, reason, on_ask=None):
         ui.label(view['headline']).classes('ma-brief__lede')
     with ui.element('div').classes('ma-brief__grid'):
         for part in view['sections']:
-            with ui.element('div').classes('ma-brief__sec'):
-                ui.label(part['title']).classes('ma-brief__title')
+            tone = BRIEF_TONES[part['accent']]
+            with ui.element('div').classes('ma-brief__sec') \
+                    .style(f"--sec:{tone}"):
+                with ui.element('div').classes('ma-brief__head'):
+                    ui.icon(part['icon']).style(f'color:{tone};font-size:14px')
+                    ui.label(part['title']).classes('ma-brief__title')
                 for line in part['lines']:
                     with ui.element('div').classes('ma-brief__line'):
                         ui.label(line)
@@ -2183,7 +2381,11 @@ def briefing_body(view, today, token, reason, on_ask=None):
                 with ui.link(target=href('/mail', token, id=pin['mail_id'])) \
                         .classes('ma-brief__pin'):
                     ui.icon('arrow_outward')
-                    ui.label(pin['reason'])
+                    # The mail's own subject, and the sentence Codex wrote about it in
+                    # the hover: four chips all reading '…를 확인하세요' said which mail
+                    # only to whoever already knew.
+                    ui.label(pin['title'])
+                    hint(pin['tip'], pin['reason'])
 
 
 def today_panel(rows, today, token):
@@ -2526,12 +2728,24 @@ def shell(current, token, chrome=None):
 
         with ui.element('div').classes('ma-shell'):
             with ui.element('aside').classes('ma-side'):
-                with ui.link(target=href('/', token)).classes('ma-side__brand'):
-                    with ui.element('div').classes('ma-side__mark'):
-                        ui.html(BRAND_MARK)
-                    with ui.element('div').classes('ma-side__words'):
-                        ui.label('메일 업무 도우미').classes('ma-side__name')
-                        ui.label(__version__).classes('ma-side__ver')
+                with ui.element('div').classes('ma-side__top'):
+                    with ui.link(target=href('/', token)).classes('ma-side__brand'):
+                        with ui.element('div').classes('ma-side__mark'):
+                            ui.html(BRAND_MARK)
+                        with ui.element('div').classes('ma-side__words'):
+                            ui.label('메일 업무 도우미').classes('ma-side__name')
+                            ui.label(__version__).classes('ma-side__ver')
+                    # Nothing here reaches the server: the class it writes is read by
+                    # CSS, and the choice is kept in the browser. In the rail it takes
+                    # the mark's own square on hover, which is the only press left.
+                    fold = ui.button(icon='menu_open').classes('ma-side__fold') \
+                        .props('flat dense round size=sm').style(f'color:{SUBTLE}')
+                    fold.on('click', js_handler=RAIL_TOGGLE)
+                    with fold:
+                        # To the right, where the rail's own row tooltips are: below
+                        # the button it lands on the first nav row it just hid.
+                        ui.tooltip('사이드바 접기·펼치기') \
+                            .props('anchor="center right" self="center left"')
                 with ui.element('nav'):
                     for heading, items in nav_rows(current, latest.get('counts')):
                         if heading:
@@ -2551,12 +2765,6 @@ def shell(current, token, chrome=None):
             with ui.element('div').classes('ma-main'):
                 with ui.element('header').classes('ma-bar'):
                     with ui.element('div').classes('ma-bar__inner'):
-                        # Nothing here reaches the server: the class it writes is
-                        # read by CSS, and the choice is kept in the browser.
-                        rail = ui.button(icon='menu_open').classes('ma-bar__toggle') \
-                            .props('flat dense round size=sm').style(f'color:{SUBTLE}') \
-                            .tooltip('사이드바 접기·펼치기')
-                        rail.on('click', js_handler=RAIL_TOGGLE)
                         # The frame has no browser chrome, so this is the only way back
                         # from a page somebody reached by following a card.
                         ui.button(icon='arrow_back', on_click=lambda: ui.navigate.back()) \
@@ -3093,8 +3301,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             latest['today'] = today_rows(latest['data']['events'], today,
                                          latest['data']['handled'])
             latest['trend'] = trend(store(directory), account, today)
-            latest['brief'] = briefing_view(
-                store(directory).briefing(account) if account else None, today)
+            latest['brief'] = briefing_card(store(directory), account, today)
             memos = memo_views()
             latest['pinned'] = pinned_notes(memos)
             latest['memos'] = sum(1 for view in memos if view['pinned'])
@@ -3426,6 +3633,12 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             columns = [{'name': key, 'label': label, 'field': key, 'align': 'left',
                         'style': widths[key], 'headerStyle': widths[key].split(';')[0]}
                        for key, label in LIST_FIELDS]
+            # 무엇에 대한 메일인지: the analysis without opening the mail. Last, and
+            # nameless, because it is a button rather than a column of values — and it
+            # is not in LIST_FIELDS, which is the set of things the list sorts by.
+            columns.append({'name': TIP_COLUMN, 'label': '', 'field': TIP_COLUMN,
+                            'align': 'center', 'style': 'width:46px',
+                            'headerStyle': 'width:46px'})
             with card(flush=True):
                 with ui.element('div').style('width:100%;overflow-x:auto'):
                     table = ui.table(columns=columns, rows=data['rows'], row_key='id',
@@ -3454,6 +3667,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     table.add_slot('body-cell-priority', tag_cell(STATUS))
                     table.add_slot('body-cell-state',
                                    tag_cell(STATE_TONES, failure=css_color(URGENT)))
+                    table.add_slot(f'body-cell-{TIP_COLUMN}', tip_cell())
                     table.on('rowClick', lambda event: choose(event.args[1]['id']))
                     live['table'] = table
                     if kept:
@@ -3531,8 +3745,11 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 return
             view = detail_view(row)
 
-            async def copy():
-                await ui.clipboard.write(draft.value or '')
+            def copy():
+                # Not awaited: nicegui 3's clipboard.write() returns None, and
+                # `await None` raised inside the handler — which killed the ui.notify
+                # after it, so the button copied and said nothing.
+                ui.clipboard.write(draft.value or '')
                 ui.notify('답변 초안을 클립보드에 복사했습니다.')
 
             def toggle():
@@ -4037,8 +4254,9 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 chosen['id'] = ids[(data['index'] + delta) % len(ids)]
                 queue.refresh()
 
-            async def copy():
-                await ui.clipboard.write(draft.value or '')
+            def copy():
+                # See the 메일 detail's copy(): clipboard.write() is not awaitable.
+                ui.clipboard.write(draft.value or '')
                 ui.notify('초안을 복사했습니다.')
 
             def done():
@@ -4374,9 +4592,22 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             for row in rows:
                 if row['open']:
                     return rows, row
-            # A key nobody has written to yet is not in the list: shape it on its own.
-            return rows, room_rows([{'key': state['room'], 'at': '', 'turns': 0,
-                                     'name': ''}], state['room'])[0]
+            # A key nobody has written to yet is not in Store.rooms(), which reads the
+            # turns — and a thread opened from 메일 has none until the first question.
+            # Its name is the mail's own subject, or the title read 제목 없음 for the
+            # whole of the first answer.
+            mail = mail_of(state['room'])
+            entry = room_rows([{'key': state['room'], 'at': '', 'turns': 0,
+                                'name': mail['subject'] if mail is not None else ''}],
+                              state['room'])[0]
+            # And it goes into the list as well, or the thread being read is the one
+            # row the list does not have and nothing on screen looks selected.
+            return [entry] + rows, entry
+
+        def copy(text):
+            """The answer as Codex wrote it, not the HTML rich_text() made of it."""
+            ui.clipboard.write(text)
+            ui.notify('답변을 클립보드에 복사했습니다.')
 
         @ui.refreshable
         def thread():
@@ -4388,9 +4619,20 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 mine = role == 'user'
                 # The question goes in as text, which nicegui escapes; only the answer
                 # is rendered, and only through the subset rich_text() knows about.
-                ui.chat_message([text if mine else rich_text(text)],
-                                name='나' if mine else 'Codex', sent=mine,
-                                stamp=line_text(at, '')[:14], text_html=not mine)
+                if mine:
+                    ui.chat_message([text], name='나', sent=True,
+                                    stamp=line_text(at, '')[:14])
+                    continue
+                # The answer is the thing anyone wants out of this page — into a reply,
+                # a ticket, a memo — and selecting rendered HTML by hand takes the
+                # bullets and the code block with it.
+                with ui.element('div').classes('ma-said'):
+                    ui.chat_message([rich_text(text)], name='Codex', sent=False,
+                                    stamp=line_text(at, '')[:14], text_html=True)
+                    ui.button(icon='content_copy',
+                              on_click=lambda answer=text: copy(answer)) \
+                        .props('flat dense round size=sm') \
+                        .classes('ma-said__copy').tooltip('답변 복사')
             if busy['now']:
                 # The dots are the whole message: the composer is already disabled, and
                 # the page says out loud that an answer takes a while.
