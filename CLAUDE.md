@@ -440,6 +440,31 @@ is set by the things that change a list column (처리 상태, 다시 분석, �
 else. Refreshing while the dialog is open is the same work done where nobody can see
 it, behind a dialog that covers the rows.
 
+**A conversation's key is `References[0]`, and that is why nothing has to arrive in
+order.** The root mail's own `Message-ID` *is* the first entry of every reply's
+`References`, so `core.thread_key()` gives the original and its answers the same key
+with no lookup at all — which matters because POP3 promises no order and the baseline
+means a thread's opening mail may never have been collected. `thread` and `message_id`
+are columns written by `Store.add()` (headers only: there is nothing to wait for
+analysis for), and `backfill_threads()` re-parses `raw` for mail collected before them,
+which is one of the things keeping `raw` earns. Two details are load-bearing. A mail
+whose headers carry nothing keys on **its own mail id**, never `''` — `''` would make
+every header-less mail one conversation, and it is also the exact 'never filled' mark
+the backfill terminates on, as -1 is for `reply_needed`. And `In-Reply-To` without
+`References` is the one case that asks the database: a client that sends only the
+parent would otherwise split a three-deep chain, so `thread_key`'s `lookup` walks one
+step and falls back to the parent's id, which the parent will match when it arrives.
+
+**The thread's context goes to Codex as summaries, never as bodies.** `thread_before()`
+hands `services.thread_context()` the last `THREAD_TURNS` analysed mails before this
+one, and what is sent is `summary`/`requests` — answers `analyze()` has already paid
+for, exactly as the briefing's input is. Re-sending three bodies is the 240-second
+timeout, and it is also the whole `BODY_LIMIT` budget spent twice. `context_size()`
+exists because `group_mails()` budgets in characters: context that is not counted is a
+batch that quietly goes over `BATCH_CHARS`. `BATCH_PROMPT` gains one line for the same
+reason it says 독립적으로 — a thread belongs to *its* mail, and the failure this feature
+can cause is the fourth turn borrowing the first turn's deadline.
+
 **'답장 대기' is a filter, not a state, and the one thing it must never claim is that
 you did not reply.** This app cannot see sent mail — POP3 reports what arrived, and a
 `mailto:` reply never touches this process — so the honest sentence is '아직 완료로

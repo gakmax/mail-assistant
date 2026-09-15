@@ -46,6 +46,7 @@ from mail_assistant.webui import (CARD_TONES, COST_TONES, DEFAULT_LIST, FONT_FIL
                                   body_blocks,
                                   calendar_events, card_target, countdown_text, run_view,
                                   FAILED_CARD, WAITING, WAIT_LATE, WAIT_NOTE, wait_age,
+                                  THREAD_SHOWN, thread_view, thread_line, thread_clip,
                                   board, board_counts, card_hint, card_rows,
                                   chat_context, draft_view, label_step, stats_view,
                                   deadline_progress, drag_drop, drag_payload, drag_start,
@@ -265,6 +266,49 @@ class WaitingCardTests(unittest.TestCase):
         """POP3로는 보낸 메일을 볼 수 없다 — 그 사실이 화면에 있어야 한다."""
         self.assertIn('완료 표시', WAIT_NOTE)
         self.assertGreater(WAIT_LATE, 0)
+
+
+class ThreadStripTests(unittest.TestCase):
+    """이 대화 띠 — 무엇을 그리고, 길어지면 어디를 접는가."""
+
+    def rows(self, count, current=0):
+        return [{'id': f'm{n}', 'received': f'2026-09-{n + 1:02d}T00:00:00+00:00',
+                 'subject': f'제목 {n}', 'sender': 's', 'handled': '', 'result': '{}',
+                 'analyzing': '', 'attempts': 0}
+                for n in range(count)]
+
+    def view(self, count, current=0):
+        return thread_view(self.rows(count), f'm{current}')
+
+    def test_a_lone_mail_is_not_a_conversation(self):
+        """'1통 중 1번째'는 읽는 사람이 이미 보고 있는 것을 다시 말하는 것이다."""
+        self.assertEqual(self.view(1), [])
+
+    def test_the_line_says_where_you_are(self):
+        self.assertEqual(thread_line(self.view(4, current=2)),
+                         '전체 4통 · 지금 보는 것은 3번째')
+        self.assertEqual(thread_line([]), '')
+
+    def test_exactly_one_row_is_the_open_mail(self):
+        rows = self.view(4, current=2)
+        self.assertEqual([row['current'] for row in rows], [False, False, True, False])
+
+    def test_a_short_thread_is_not_clipped(self):
+        rows = self.view(3)
+        self.assertEqual(thread_clip(rows), (rows, 0))
+
+    def test_a_long_thread_keeps_the_newest_turns(self):
+        rows = self.view(12, current=11)
+        shown, hidden = thread_clip(rows, shown=4)
+        self.assertEqual(hidden, 8)
+        self.assertEqual([row['nth'] for row in shown], [9, 10, 11, 12])
+
+    def test_the_open_mail_is_never_clipped_away(self):
+        """띠가 '3번째'라고 해 놓고 그 줄이 없으면 위치를 틀리게 말하는 것이다."""
+        rows = self.view(12, current=0)
+        shown, _ = thread_clip(rows, shown=4)
+        self.assertTrue(any(row['current'] for row in shown))
+        self.assertEqual(shown[0]['nth'], 1)
 
 
 class CardIconTests(unittest.TestCase):

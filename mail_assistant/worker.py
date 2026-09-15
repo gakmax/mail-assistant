@@ -6,8 +6,9 @@ from .core import NO_RETRY, Store, account_key, now
 from .excel import Excel, error_detail
 from .overview import briefing_due, briefing_input, trend
 from .report import remember_secret, report
-from .services import (BODY_LIMIT, Unanalyzable, analyze_many, analyze_one, briefing,
-                       check_login, fetch_mail, group_mails, prepare, read_password)
+from .services import (BODY_LIMIT, THREAD_TURNS, Unanalyzable, analyze_many, analyze_one,
+                       briefing, check_login, context_size, fetch_mail, group_mails,
+                       prepare, read_password, thread_context)
 
 # A failed briefing waits this long, rather than retrying on every 180-second cycle.
 BRIEF_BACKOFF = 1800
@@ -83,9 +84,17 @@ def run(config, directory, stop, notify, wake=None):
                             store.failed(row['id'], str(exc), NO_RETRY)
                             messages.append(f'분석 제외: {subject_of(row)} — {exc}')
                             continue
+                        # 이 메일이 속한 대화의 앞선 요약. 본문이 아니라 analyze()가
+                        # 이미 값을 치른 답이고, 그래서 한 통에 700자 남짓이다.
+                        turns = thread_context(store.thread_before(
+                            account, row['thread'], row['received'], THREAD_TURNS))
+                        if turns:
+                            sent['thread'] = turns
                         ready[row['id']] = (row, parsed, sent)
                         entries.append({'id': row['id'], 'attempts': row['attempts'],
-                                        'size': len(sent['body'])})
+                                        # 대화 맥락도 한 번에 보내는 글자다. 예산에서
+                                        # 빼지 않으면 묶음이 조용히 BATCH_CHARS를 넘는다.
+                                        'size': len(sent['body']) + context_size(turns)})
                     seen = 0
                     for group in group_mails(entries):
                         if stop.is_set():

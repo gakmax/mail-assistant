@@ -2179,6 +2179,89 @@ def detail_view(row):
     }
 
 
+# 한 번에 그리는 대화의 줄 수. 대화는 길어져도 읽는 사람이 쫓는 것은 앞의 몇 통과
+# 지금 보는 것뿐이고, 스무 줄짜리 띠는 그 아래 분석 결과를 화면 밖으로 밀어낸다.
+THREAD_SHOWN = 8
+
+
+def thread_view(rows, current):
+    """이 대화의 메일, 오래된 것부터. 한 통뿐인 대화는 대화가 아니다.
+
+    Returns [] for a lone mail rather than a strip saying '1통 중 1번째', which is the
+    dialog telling the reader something they can already see. Everything else here is
+    the row the thread query already fetched — no second read per line.
+    """
+    if len(rows) < 2:
+        return []
+    shown = []
+    for index, row in enumerate(rows, 1):
+        shown.append({'id': row['id'], 'nth': index,
+                      'subject': row['subject'] or '(제목 없음)',
+                      'sender': row['sender'] or '',
+                      'day': local_text(row['received'], '%m-%d'),
+                      'state': state_of(row),
+                      'current': row['id'] == current})
+    return shown
+
+
+def thread_line(rows):
+    """'전체 4통 · 지금 보는 것은 3번째'. 세는 것과 위치가 이 띠의 전부다."""
+    if not rows:
+        return ''
+    here = next((row['nth'] for row in rows if row['current']), 0)
+    text = f'전체 {len(rows)}통'
+    return f'{text} · 지금 보는 것은 {here}번째' if here else text
+
+
+def thread_clip(rows, shown=THREAD_SHOWN):
+    """The lines to draw and how many were left out — the last ones, and the open mail.
+
+    A long thread is clipped from the *front*: the newest turns are what a reader
+    came for, and the mail they opened has to be on screen whatever its position,
+    or the strip says '3번째' about a row that is not there.
+    """
+    if len(rows) <= shown:
+        return rows, 0
+    tail = rows[-shown:]
+    if not any(row['current'] for row in tail):
+        here = next(row for row in rows if row['current'])
+        tail = [here] + tail[1:]
+    return tail, len(rows) - len(tail)
+
+
+def thread_strip(rows, token):
+    """이 대화 — 지금 보는 메일이 어디쯤인지, 그리고 나머지로 가는 길.
+
+    Above 분석 결과 rather than beside it: a mail's own analysis reads differently once
+    you know it is the fourth turn of a negotiation, so the context comes first.
+    """
+    from nicegui import ui
+    if not rows:
+        return
+    shown, hidden = thread_clip(rows)
+    with ui.element('div').classes('ma-sunken').style('margin-top:12px;padding:10px 12px'):
+        with ui.element('div').classes('ma-meta').style('margin-bottom:6px'):
+            ui.icon('forum').style(f'color:{MUTED};font-size:15px')
+            ui.label('이 대화').classes('ma-head__title').style('font-size:12.5px')
+            ui.label(thread_line(rows)).classes('ma-meta__item')
+        if hidden:
+            ui.label(f'앞선 {hidden}통은 접었습니다').classes('ma-meta__item')
+        with ui.element('div').classes('ma-today'):
+            for row in shown:
+                with ui.element('div').classes('ma-today__row'):
+                    ui.label(row['day']).classes('ma-due__day')
+                    if row['current']:
+                        # 지금 열려 있는 메일. 링크로 두면 자기 자신을 다시 여는
+                        # 버튼이 되고, 눌러도 아무 일이 없는 것처럼 보인다.
+                        ui.label(row['subject']).classes('ma-today__title') \
+                            .style(f'color:{INK};font-weight:650')
+                    else:
+                        ui.link(row['subject'], href('/mail', token, id=row['id'])) \
+                            .classes('ma-today__title')
+                    ui.space()
+                    ui.label(row['state']).classes('ma-today__kind')
+
+
 def vendor_path():
     """Where the bundled FullCalendar lives, frozen or not."""
     return Path(__file__).resolve().parent / 'vendor'
@@ -4537,6 +4620,12 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                             .style('margin-top:12px'):
                         ui.icon('content_cut').style('font-size:16px')
                         ui.label(clipped_note(view['clipped'])).style('font-size:12px')
+                # Context before content: a mail's analysis reads differently once you
+                # know it is the fourth turn of a negotiation. One query, and only for
+                # a mail whose conversation actually has another mail in it.
+                thread_strip(thread_view(
+                    store(directory).thread_rows(account_of(config), row['thread']),
+                    view['id']), token)
                 with grid(minimum=320, gap=22).style('margin-top:16px;align-items:start'):
                     with ui.element('div'):
                         with ui.element('div').classes('ma-head') \

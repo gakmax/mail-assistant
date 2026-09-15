@@ -477,6 +477,9 @@ priority는 명시된 기한과 업무 영향을 근거로 정하고 과장하�
 답변이 필요 없으면 reply_needed=false, reply_subject는 빈 문자열.
 reply_draft는 항상 빈 문자열로 두세요. 초안은 사용자가 말투와 방향을 골라 따로 만듭니다.
 요청사항이 없으면 requests는 빈 문자열. 스키마에 맞는 JSON만 반환하세요.
+thread가 있으면 그 메일 자신의 앞선 대화 요약입니다. 이 메일이 무엇의 후속인지 읽는
+데만 쓰고, 거기 적힌 일정이나 요청을 이 메일의 것으로 옮겨 적지 마세요. 앞선 요청이
+이 메일에서 처리되었으면 그렇게 요약하세요.
 '''
 SOLO_PROMPT = '메일을 한국어 업무 관리 데이터로 변환하세요. 도구를 사용하지 마세요.\n'
 # 한 통이 아니라 다섯 통이 들어간다는 것, 그리고 서로 섞지 말라는 것. 뒤쪽 세 줄이
@@ -485,6 +488,7 @@ SOLO_PROMPT = '메일을 한국어 업무 관리 데이터로 변환하세요. �
 BATCH_PROMPT = '''메일 여러 통을 한국어 업무 관리 데이터로 변환하세요. 도구를 사용하지 마세요.
 mails의 각 항목을 서로 독립적으로 분석하세요. 한 메일의 날짜, 금액, 요청, 우선순위를
 다른 메일의 근거로 쓰지 마세요. 상대 날짜는 그 메일 자신의 date 헤더로만 푸세요.
+각 항목의 thread는 그 항목 자신의 앞선 대화입니다. 다른 mail_id에 쓰지 마세요.
 results에는 mails에 있는 mail_id를 그대로 넣고, 받은 메일을 하나도 빠뜨리지 마세요.
 '''
 ANALYSIS_FAILED = 'Codex 분석 실패: 로그인·사용량 한도·네트워크를 확인하세요.'
@@ -504,6 +508,41 @@ def squeeze_body(text):
         if line or (kept and kept[-1]):
             kept.append(line)
     return '\n'.join(kept).strip()
+
+
+# 앞선 대화를 몇 통까지, 한 통에 몇 자까지 싣는가. 브리핑과 같은 규칙이다 — 실려
+# 가는 것은 analyze()가 이미 값을 치른 *요약*이지 본문이 아니다. 세 통 x 200자면 한
+# 메일에 700자 남짓이고, 다섯 통 묶음에서도 BATCH_CHARS 예산 안에 든다.
+THREAD_TURNS = 3
+THREAD_TEXT = 200
+
+
+def thread_context(rows):
+    """앞선 대화를 분석된 요약으로만. 본문은 절대 다시 보내지 않는다.
+
+    이것이 이 앱에서 한 메일이 혼자가 아니게 되는 유일한 자리다: '말씀하신 대로
+    진행하겠습니다'만 있는 답장은 그 자체로는 아무 요청도 일정도 없지만, 앞 통을 보면
+    무엇을 진행하는지가 있다.
+    """
+    turns = []
+    for row in rows:
+        try:
+            result = json.loads(row['result']) if row['result'] else {}
+        except ValueError:
+            continue
+        summary = ' '.join(str(result.get('summary', '')).split())[:THREAD_TEXT]
+        requests = ' '.join(str(result.get('requests', '')).split())[:THREAD_TEXT]
+        turns.append({'date': str(row['received'] or '')[:10],
+                      'sender': str(row['sender'] or '')[:80],
+                      'subject': str(row['subject'] or '')[:120],
+                      'summary': summary, 'requests': requests})
+    return turns
+
+
+def context_size(turns):
+    """대화 맥락이 한 번에 보내는 글자 수. group_mails()의 예산이 이것을 세어야 한다."""
+    return sum(len(turn['summary']) + len(turn['requests']) + len(turn['subject'])
+               for turn in turns)
 
 
 def prepare(row):

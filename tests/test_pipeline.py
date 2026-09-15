@@ -18,6 +18,7 @@ from mail_assistant.core import (ANALYZING, FAILED, HANDLED, HEADERS, NO_RETRY,
                                  account_key, STATES, STATE_SQL, state_where, wait_cutoff,
                                  WAITING, PROGRESS, day_bounds, filter_rows,
                                  local_text, parse_mail, row_view, sql_text, state_of,
+                                 thread_key, message_ids,
                                  table_text, text_of_html, workbook_rows)
 from mail_assistant.excel import (Excel, ExcelUpdateError, append_missing, ensure_table,
                                   error_detail, first_column, repair_generated_header,
@@ -36,7 +37,8 @@ from mail_assistant.style import STYLE_VERSION, URGENT, apply_style
 from mail_assistant.services import (BODY_LIMIT, DRAFT_BODY_LIMIT, DRAFT_TONES,
                                       DRAFT_WAYS, EFFORT_READ, EFFORT_THINK,
                                       Unanalyzable,
-                                      TRANSLATE_LIMIT, analyze, briefing, chat_reply,
+                                      TRANSLATE_LIMIT, THREAD_TURNS, analyze, briefing,
+                                      thread_context, context_size, chat_reply,
                                       chat_schema, draft, draft_schema, fetch_mail,
                                       read_password, save_password, translate,
                                       translate_schema, BATCH_CHARS, BATCH_MAILS,
@@ -322,6 +324,132 @@ class StoreViewTests(unittest.TestCase):
             store.mark_notified([first])
             self.assertEqual(store.unnotified('acct'), [])
             store.db.close()
+
+
+class ThreadKeyTests(unittest.TestCase):
+    """대화를 잇는 규칙. References의 첫 항목이 뿌리라는 것이 전부다."""
+
+    def test_the_root_of_the_references_chain_is_the_key(self):
+        parsed = {'message_id': '<c@x>', 'references': '<a@x> <b@x>', 'in_reply_to': '<b@x>'}
+        self.assertEqual(thread_key(parsed), '<a@x>')
+
+    def test_the_first_mail_of_a_thread_keys_itself(self):
+        """뿌리 메일의 Message-ID가 바로 자식들의 References[0]이다 — 그래서 만난다."""
+        root = {'message_id': '<a@x>', 'references': '', 'in_reply_to': ''}
+        child = {'message_id': '<b@x>', 'references': '<a@x>', 'in_reply_to': '<a@x>'}
+        self.assertEqual(thread_key(root), thread_key(child))
+
+    def test_order_does_not_matter(self):
+        """POP3는 순서를 약속하지 않고, 기준점 때문에 앞부분을 못 볼 수도 있다."""
+        child = {'message_id': '<b@x>', 'references': '<a@x>'}
+        grandchild = {'message_id': '<c@x>', 'references': '<a@x> <b@x>'}
+        self.assertEqual(thread_key(grandchild), thread_key(child))
+
+    def test_in_reply_to_alone_asks_what_we_already_know(self):
+        """References 없이 In-Reply-To만 보내는 클라이언트가 있다 — 그때만 조회한다."""
+        parsed = {'message_id': '<c@x>', 'references': '', 'in_reply_to': '<b@x>'}
+        self.assertEqual(thread_key(parsed, lookup=lambda ref: '<a@x>'), '<a@x>')
+        # 아는 부모가 없으면 부모의 id가 키다. 부모가 나중에 오면 그때 만난다.
+        self.assertEqual(thread_key(parsed, lookup=lambda ref: ''), '<b@x>')
+
+    def test_a_mail_with_no_headers_at_all_gets_nothing_here(self):
+        """add()가 제 메일 id를 준다. ''로 두면 헤더 없는 메일끼리 한 대화가 된다."""
+        self.assertEqual(thread_key({}), '')
+
+    def test_only_bracketed_ids_are_read(self):
+        self.assertEqual(message_ids('<a@x> junk <b@x>'), ['<a@x>', '<b@x>'])
+        self.assertEqual(message_ids(''), [])
+
+
+class ThreadStoreTests(unittest.TestCase):
+    """대화가 데이터베이스에서 실제로 묶이는가."""
+
+    ACCOUNT = 'acct'
+
+    def mail(self, subject, ident, refs='', parent=''):
+        message = EmailMessage()
+        message['From'] = 'kim@buyer.example'
+        message['Subject'] = subject
+        message['Message-ID'] = ident
+        if refs:
+            message['References'] = refs
+        if parent:
+            message['In-Reply-To'] = parent
+        message.set_content('본문')
+        return message.as_bytes()
+
+    def test_a_reply_lands_in_the_same_conversation_as_its_original(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            try:
+                root = store.add(self.ACCOUNT, 'u1', self.mail('견적 요청', '<a@x>'))
+                reply = store.add(self.ACCOUNT, 'u2',
+                                  self.mail('Re: 견적 요청', '<b@x>', refs='<a@x>', parent='<a@x>'))
+                other = store.add(self.ACCOUNT, 'u3', self.mail('무관한 메일', '<z@x>'))
+                rows = store.thread_rows(self.ACCOUNT, store.detail(reply)['thread'])
+                self.assertEqual([row['id'] for row in rows], [root, reply])
+                self.assertEqual(
+                    [row['id'] for row in store.thread_rows(
+                        self.ACCOUNT, store.detail(other)['thread'])], [other])
+            finally:
+                store.db.close()
+
+    def test_the_reply_may_arrive_first(self):
+        """POP3 순서를 믿지 않는다는 것이 References[0] 규칙을 고른 이유다."""
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            try:
+                reply = store.add(self.ACCOUNT, 'u2',
+                                  self.mail('Re: 견적', '<b@x>', refs='<a@x>'))
+                root = store.add(self.ACCOUNT, 'u1', self.mail('견적', '<a@x>'))
+                rows = store.thread_rows(self.ACCOUNT, store.detail(root)['thread'])
+                self.assertEqual({row['id'] for row in rows}, {root, reply})
+            finally:
+                store.db.close()
+
+    def test_older_mail_is_threaded_by_the_backfill(self):
+        """컬럼이 생기기 전에 수집된 메일도 같은 대화가 되어야 한다 — raw가 남아 있다."""
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            try:
+                root = store.add(self.ACCOUNT, 'u1', self.mail('견적', '<a@x>'))
+                reply = store.add(self.ACCOUNT, 'u2',
+                                  self.mail('Re: 견적', '<b@x>', refs='<a@x>'))
+                with store.db:
+                    store.db.execute("UPDATE mail SET thread='', message_id=''")
+                store.backfill_threads()
+                rows = store.thread_rows(self.ACCOUNT, store.detail(reply)['thread'])
+                self.assertEqual([row['id'] for row in rows], [root, reply])
+                left = store.db.execute("SELECT COUNT(*) FROM mail WHERE thread=''").fetchone()[0]
+                self.assertEqual(left, 0)
+            finally:
+                store.db.close()
+
+    def test_the_analysis_context_is_summaries_and_never_a_body(self):
+        """분석에 실려 가는 것은 analyze()가 이미 값을 치른 답이지 본문이 아니다."""
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            try:
+                root = store.add(self.ACCOUNT, 'u1', self.mail('견적 요청', '<a@x>'))
+                store.analyzed(root, {'sender': '', 'subject': '', 'body': '비밀 본문',
+                                      'attachments': []},
+                               {'category': '견적·계약', 'summary': '9월 견적 검토 요청',
+                                'requests': '단가 회신', 'events': [], 'priority': '높음',
+                                'priority_reason': '', 'next_action': '', 'reply_needed': True,
+                                'reply_subject': '', 'reply_draft': ''})
+                reply = store.add(self.ACCOUNT, 'u2',
+                                  self.mail('Re: 견적 요청', '<b@x>', refs='<a@x>'))
+                row = store.detail(reply)
+                turns = thread_context(store.thread_before(
+                    self.ACCOUNT, row['thread'], row['received']))
+                self.assertEqual(len(turns), 1)
+                self.assertEqual(turns[0]['summary'], '9월 견적 검토 요청')
+                self.assertNotIn('비밀 본문', json.dumps(turns, ensure_ascii=False))
+                # 자기 자신은 맥락이 아니다: received<? 가 그것을 자른다.
+                self.assertEqual(store.thread_before(self.ACCOUNT, row['thread'],
+                                                     store.detail(root)['received']), [])
+            finally:
+                store.db.close()
 
 
 class WaitingReplyTests(unittest.TestCase):

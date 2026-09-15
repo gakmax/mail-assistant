@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import json
 import secrets
 import sqlite3
@@ -301,6 +302,10 @@ def parse_mail(raw: bytes):
         'subject': str(message.get('Subject', NO_SUBJECT)),
         'date': str(message.get('Date', '')),
         'message_id': str(message.get('Message-ID', '')),
+        # 대화를 잇는 두 헤더. References의 첫 항목이 그 대화의 뿌리이고, 그것이
+        # thread_key()가 아무것도 찾아보지 않고도 답을 낼 수 있는 이유다.
+        'in_reply_to': str(message.get('In-Reply-To', '')),
+        'references': str(message.get('References', '')),
         'body': text,
         'attachments': [part.get_filename() or '(이름 없음)' for part in message.iter_attachments()],
     }
@@ -375,7 +380,13 @@ class Store:
                      # -1 아직 모름. 기본값이 0이 아니라 -1인 것이 backfill_replies()가
                      # 끝을 아는 유일한 방법이다 — 0은 '답장 필요 없음'이라는 진짜 답이라
                      # 아직 채우지 않은 행과 구별되지 않는다.
-                     ('reply_needed', 'INTEGER NOT NULL DEFAULT -1'))
+                     ('reply_needed', 'INTEGER NOT NULL DEFAULT -1'),
+                     # 이 메일의 Message-ID, 그리고 이 메일이 속한 대화의 키. 둘 다
+                     # 헤더에서만 나오므로 분석을 기다릴 것이 없다 — add()가 쓴다.
+                     # thread가 ''인 것은 헤더가 아예 없던 메일이고, 그런 메일은
+                     # 저 혼자 한 대화다(thread_rows()가 그렇게 답한다).
+                     ('message_id', "TEXT NOT NULL DEFAULT ''"),
+                     ('thread', "TEXT NOT NULL DEFAULT ''"))
         with self.db:
             for column, declaration in additions:
                 if column not in present:
@@ -383,6 +394,7 @@ class Store:
         self.backfill_headers()
         self.backfill_verdicts()
         self.backfill_replies()
+        self.backfill_threads()
 
     def backfill_headers(self):
         """Fill subject/sender for mail collected before those columns existed."""
@@ -412,6 +424,29 @@ class Store:
         if updates:
             with self.db:
                 self.db.executemany('UPDATE mail SET category=?, priority=? WHERE id=?', updates)
+
+    def backfill_threads(self):
+        """Fill message_id/thread for mail collected before those columns existed.
+
+        Re-parsed from `raw` rather than from `parsed`: the stored JSON of older mail
+        has no References at all, and raw is the whole point of keeping it. `thread=''`
+        is the exact 'never filled' mark, as -1 is for reply_needed — a mail whose
+        headers carry nothing lands on its own id, never back on ''.
+        """
+        rows = self.db.execute("SELECT id, raw FROM mail WHERE thread=''").fetchall()
+        updates = []
+        for row in rows:
+            try:
+                headers = parse_mail(row['raw'])
+            except Exception:
+                headers = {}
+            own = (message_ids(headers.get('message_id')) or [''])[0]
+            # 헤더가 없으면 제 메일 id가 키다. ''로 두면 이 쿼리가 매번 같은 행을
+            # 다시 집어 들고, 키 없는 메일끼리 한 대화가 되어 버린다.
+            updates.append((own, thread_key(headers) or row['id'], row['id']))
+        if updates:
+            with self.db:
+                self.db.executemany('UPDATE mail SET message_id=?, thread=? WHERE id=?', updates)
 
     def backfill_replies(self):
         """Fill reply_needed for mail analysed before the column existed.
@@ -476,11 +511,52 @@ class Store:
             # A malformed mail must still be stored; the subject can be filled in later.
             headers = {'subject': '', 'sender': ''}
         with self.db:
-            self.db.execute('INSERT OR IGNORE INTO mail(id,account,uid,raw,received,subject,sender) '
-                            'VALUES (?,?,?,?,?,?,?)',
-                            (ident, account, uid, raw, now(), headers.get('subject', ''), headers.get('sender', '')))
+            self.db.execute('INSERT OR IGNORE INTO mail(id,account,uid,raw,received,subject,sender,'
+                            'message_id,thread) VALUES (?,?,?,?,?,?,?,?,?)',
+                            (ident, account, uid, raw, now(), headers.get('subject', ''),
+                             headers.get('sender', ''),
+                             (message_ids(headers.get('message_id')) or [''])[0],
+                             # `or ident`: 헤더가 하나도 없는 메일도 키를 가져야 한다.
+                             # ''로 두면 키 없는 메일끼리 한 대화가 된다.
+                             thread_key(headers, lambda ref: self.thread_of(account, ref)) or ident))
             self.db.execute('INSERT OR IGNORE INTO seen VALUES (?,?)', (account, uid))
         return ident
+
+    def thread_of(self, account, message_id):
+        """The conversation a Message-ID we already hold belongs to, or ''."""
+        row = self.db.execute('SELECT thread FROM mail WHERE account=? AND message_id=?',
+                              (account, message_id)).fetchone()
+        return row['thread'] if row else ''
+
+    def thread_before(self, account, thread, received, limit=3):
+        """같은 대화에서 이 메일보다 먼저 온, 이미 분석된 메일. 오래된 것부터.
+
+        Newest `limit` turns, handed back in reading order: an old thread's opening
+        mail matters less to the turn being analysed than the two before it. Only
+        analysed ones, because what is sent is the summary — analyze() already paid
+        for that, and re-sending the bodies is the 240-second timeout.
+        """
+        if not thread:
+            return []
+        rows = self.db.execute(
+            'SELECT subject, sender, received, result FROM mail '
+            'WHERE account=? AND thread=? AND received<? AND result IS NOT NULL '
+            'ORDER BY received DESC, rowid DESC LIMIT ?',
+            (account, thread, received, limit)).fetchall()
+        return list(reversed(rows))
+
+    def thread_rows(self, account, thread, limit=50):
+        """한 대화의 메일, 오래된 것부터. 키가 없는 메일은 저 혼자 한 대화다.
+
+        rowid ends the sort for the reason every other list query does: one poll gives
+        every mail it collected the same `received` string.
+        """
+        if not thread:
+            return []
+        return self.db.execute(
+            f'SELECT {self.LIST_COLUMNS} FROM mail WHERE account=? AND thread=? '
+            'ORDER BY received ASC, rowid ASC LIMIT ?',
+            (account, thread, limit)).fetchall()
 
     def pending(self, account, timestamp):
         """분석을 기다리는 메일. 묶을지 한 통씩 갈지는 worker가 group_mails()로 정한다.
@@ -536,7 +612,7 @@ class Store:
     # the result JSON cannot disagree with the query that found the row.
     LIST_COLUMNS = ('id, received, subject, sender, parsed, result, handled, draft_edit, '
                     'attempts, retry_at, error, exported, notified, analyzing, todo_hidden, '
-                    'category, priority, reply_needed')
+                    'category, priority, reply_needed, thread')
 
     def page(self, account, limit=2000):
         """Newest first, without the raw blob. Filtering happens in filter_rows().
@@ -1028,6 +1104,42 @@ def row_view(row):
             'category': result.get('category', ''), 'priority': result.get('priority', ''),
             'state': state_of(row), 'error': row['error'],
             'waiting': days is not None and days >= WAIT_DAYS}
+
+
+MESSAGE_IDS = re.compile(r'<[^<>\s]+>')
+
+
+def message_ids(value):
+    """A References/In-Reply-To header as a list of ids, in the order it wrote them.
+
+    Angle brackets only: the headers are allowed comments and whitespace between the
+    ids, and a bare token that is not in brackets is not an id any sender will match.
+    """
+    return MESSAGE_IDS.findall(str(value or ''))
+
+
+def thread_key(parsed, lookup=None):
+    """이 메일이 속한 대화의 키.
+
+    References의 **첫** 항목이 그 대화의 뿌리이고, 뿌리 메일 자신의 Message-ID가 바로
+    그 값이다 — 그래서 원본과 답장이 아무 조회 없이, 어느 쪽이 먼저 수집되든 같은 키를
+    갖는다. 그것이 이 규칙을 고른 이유다: POP3는 순서를 약속하지 않고, 기준점 때문에
+    대화의 앞부분을 아예 못 본 채 시작할 수도 있다.
+
+    References 없이 In-Reply-To만 보내는 클라이언트가 있고, 그때는 답장의 답장이 뿌리
+    대신 제 부모를 키로 삼아 한 대화가 둘로 갈린다. `lookup`은 그 한 경우를 위한 것이다
+    — 아는 부모가 있으면 그 대화에 붙는다. 없으면 부모의 id가 키가 되고, 부모가 나중에
+    수집되면 그때 같은 키로 만나게 된다.
+    """
+    refs = message_ids(parsed.get('references'))
+    if refs:
+        return refs[0]
+    parent = message_ids(parsed.get('in_reply_to'))
+    if parent:
+        known = lookup(parent[0]) if lookup else ''
+        return known or parent[0]
+    own = message_ids(parsed.get('message_id'))
+    return own[0] if own else ''
 
 
 def waiting_days(row, today):
