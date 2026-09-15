@@ -17,7 +17,7 @@ that break silently if you don't know them.
 ## Commands
 
 ```bash
-python -m unittest discover -s tests -v    # from the repo root; 701 tests, all platforms
+python -m unittest discover -s tests -v    # from the repo root; 711 tests, all platforms
 ```
 
 ```powershell
@@ -704,6 +704,28 @@ the place the reader sees, not to the index in the JSON. By position because Cod
 its own sections: the schema constrains shape, not wording, so a title match would turn
 back into four identical blue headings the first time it reworded one. The fourth carries
 no colour, for the reason 분석 결과 spends its accent on two blocks of four.
+
+**A 분포 막대 is a link, and `triggerEvent` is the half of it that is easy to lose.**
+The counts were the one thing on the 대시보드 a reader could not act on — the cards have
+been links since D2 — so `bar_link()` wires `componentClick` to `/mail?category=…` /
+`?priority=…`. Four things hold it up. The filter is `Store.search()`'s own
+`category`/`priority` **columns**, which `analyzed()` writes out of the same result
+`counts_by()` counts, so the bar and the list it opens cannot be counting different
+mail; a filter re-read out of the `result` JSON would drift the first time one of them
+was backfilled. `bar_option`'s `yAxis.triggerEvent` is what makes the axis label
+clickable, and it is not decoration: the `showBackground` track is zrender's own and
+carries no event, so a 0 — 긴급 0 is exactly the row a reader wants to open — and the
+empty part of any short bar are reachable through the label alone. `BAR_EVENT` names
+the three fields the click carries, and nicegui sends **only** what a handler asks for:
+with no args list the whole ECharts params object is stringified and throws on its own
+circular reference, in the browser, where nothing on the server hears it. And
+`BAR_FILTERS` is held against the charts' own names and against `DEFAULT_LIST` by a
+test, the way `core.STATES` is held against `STATE_SQL`. The 메일 화면 draws the two as
+dropdowns rather than letting the link be the only way in: a filter that can only
+arrive and never be seen is a list quietly missing mail. What the link sets lasts for
+that visit only — `remember()` is not called for a query parameter, exactly as the
+cards' `state=미처리` has always worked — and only a dropdown the reader touched is
+kept in `app.storage.user`.
 
 **The 대시보드 charts are updated, not rebuilt.** `home()` creates its four `ui.echart`
 elements once and `paint()` writes new options into them every `REFRESH_SECONDS`; only

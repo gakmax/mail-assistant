@@ -13,7 +13,7 @@ from pathlib import Path
 from mail_assistant.core import (ANALYZING, EVENT_MARK, FAILED, HANDLED, PROGRESS, SORTS,
                                  Store, account_key, event_key, event_row_id, is_event_key,
                                  korean_ratio, looks_foreign, text_of_html)
-from mail_assistant.dashboard import PRIORITIES
+from mail_assistant.dashboard import CATEGORIES, PRIORITIES
 from mail_assistant.settings import (GRADES, model_choices, model_rows,
                                      recommended_slug)
 from mail_assistant.style import URGENT, css_color
@@ -37,6 +37,8 @@ from mail_assistant.webui import (CARD_TONES, COST_TONES, DEFAULT_LIST, FONT_FIL
                                   SIDE_WIDE, badge_text, bar_status, nav_counts, nav_rows,
                                   rail_css,
                                   update_pill,
+                                  BAR_EVENT, BAR_FILTERS, BAR_NOTE, PRIORITY_NAMES,
+                                  bar_link, clicked_bar,
                                   bar_option, bar_rows, card_icon, deadline_rows,
                                   detail_view, href, list_state, listing, new_token, open_port,
                                   release_store, run_summary, snapshot,
@@ -530,6 +532,13 @@ class ListStateTests(unittest.TestCase):
         self.assertEqual(state['state'], '')
         self.assertEqual(state['query'], '')
 
+    def test_a_filter_that_is_not_a_bar_on_the_page_falls_back(self):
+        state = list_state({'category': '없는 종류', 'priority': 'DROP TABLE'})
+        self.assertEqual((state['category'], state['priority']), ('', ''))
+        kept = list_state({'category': CATEGORIES[0], 'priority': PRIORITY_NAMES[0]})
+        self.assertEqual((kept['category'], kept['priority']),
+                         (CATEGORIES[0], PRIORITY_NAMES[0]))
+
     def test_paging_numbers_are_clamped(self):
         self.assertEqual(list_state({'page': -5, 'per': 1})['page'], 0)
         self.assertEqual(list_state({'per': 1})['per'], 10)
@@ -648,6 +657,91 @@ class ListingTests(unittest.TestCase):
             # 'tip' is the web list's own column: the window has no hover to draw.
             self.assertEqual(set(row), {'id', 'received', 'sender', 'subject', 'category',
                                         'priority', 'state', 'error', 'tip'})
+
+
+class BarFilterTests(unittest.TestCase):
+    """A 대시보드 bar is the way into the mail it counted, and counts the same mail."""
+
+    ROWS = (('공지', '낮음'), ('공지', '긴급'), ('문의', '낮음'), ('문의', '보통'))
+
+    def build(self, folder, rows=ROWS):
+        store = Store(Path(folder) / 'mail.db')
+        account = account_key(CONFIG)
+        for index, (category, priority) in enumerate(rows):
+            ident = store.add(account, f'uid-{index}', mail(f'메일 {index}'))
+            store.analyzed(ident, {'sender': 'a@b.c', 'subject': f'메일 {index}',
+                                   'attachments': []},
+                           dict(result(priority), category=category))
+        store.db.close()
+
+    def listed(self, folder, **filters):
+        return listing(folder, CONFIG, list_state(filters))
+
+    def test_every_filter_the_charts_offer_is_one_the_list_keeps(self):
+        """BAR_FILTERS against the charts and against DEFAULT_LIST, the way STATES is
+        held against STATE_SQL: a value offered with no filter behind it lists
+        everything and says it is listing one kind.
+        """
+        self.assertEqual([names for _, _, names in BAR_FILTERS],
+                         [CATEGORIES, PRIORITY_NAMES])
+        self.assertEqual(PRIORITY_NAMES, tuple(name for name, _ in PRIORITIES))
+        for key, _, _ in BAR_FILTERS:
+            self.assertIn(key, DEFAULT_LIST)
+
+    def test_a_bar_lists_only_what_it_counted(self):
+        with workspace() as folder:
+            self.build(folder)
+            data = self.listed(folder, category='공지')
+            self.assertEqual(data['total'], 2)
+            self.assertTrue(all(row['category'] == '공지' for row in data['rows']))
+            self.assertEqual(self.listed(folder, priority='낮음')['total'], 2)
+
+    def test_the_list_counts_exactly_what_the_bar_drew(self):
+        """The bar and the list it opens read the same columns, so they cannot disagree."""
+        with workspace() as folder:
+            self.build(folder)
+            data = snapshot(folder, CONFIG, TODAY)
+            for name in CATEGORIES:
+                self.assertEqual(self.listed(folder, category=name)['total'],
+                                 data['categories'][name], name)
+            for name in PRIORITY_NAMES:
+                self.assertEqual(self.listed(folder, priority=name)['total'],
+                                 data['priorities'][name], name)
+
+    def test_a_bar_filter_narrows_what_is_already_filtered(self):
+        """The link names one filter; whatever else the reader chose here is still on."""
+        with workspace() as folder:
+            self.build(folder)
+            self.assertEqual(self.listed(folder, category='공지',
+                                         priority='긴급')['total'], 1)
+            self.assertEqual(self.listed(folder, category='공지',
+                                         state=HANDLED)['total'], 0)
+            self.assertEqual(self.listed(folder, category='공지',
+                                         query='메일 1')['total'], 1)
+
+    def test_a_click_is_read_from_the_bar_or_from_its_axis_label(self):
+        # A bar carries the name; an axis label carries it as the value, and the count
+        # sits in the other field of both.
+        self.assertEqual(clicked_bar({'componentType': 'series', 'name': '공지',
+                                      'value': 6}, CATEGORIES), '공지')
+        self.assertEqual(clicked_bar({'componentType': 'yAxis', 'value': '공지'},
+                                     CATEGORIES), '공지')
+        # The client may hand a value back inside a list, as a header click does.
+        self.assertEqual(clicked_bar({'value': ['낮음']}, PRIORITY_NAMES), '낮음')
+
+    def test_a_click_on_anything_else_filters_nothing(self):
+        self.assertEqual(clicked_bar({'componentType': 'grid'}, CATEGORIES), '')
+        self.assertEqual(clicked_bar({'name': '없는 종류'}, CATEGORIES), '')
+        self.assertEqual(clicked_bar({'name': None, 'value': None}, CATEGORIES), '')
+        self.assertEqual(clicked_bar('공지', CATEGORIES), '')
+        self.assertEqual(clicked_bar({'value': []}, CATEGORIES), '')
+
+    def test_the_axis_label_is_clickable_because_a_zero_draws_no_bar(self):
+        option = bar_option([('공지', 0)])
+        self.assertTrue(option['yAxis']['triggerEvent'])
+
+    def test_the_click_carries_back_only_the_fields_it_reads(self):
+        self.assertEqual(set(BAR_EVENT), {'componentType', 'name', 'value'})
 
 
 class BodyBlockTests(unittest.TestCase):

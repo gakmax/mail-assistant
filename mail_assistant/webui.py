@@ -139,7 +139,14 @@ LIST_FIELDS = (('received', '수신'), ('sender', '발신자'), ('subject', '제
                ('category', '종류'), ('priority', '우선순위'), ('state', '상태'))
 # Columns a first click should sort from ㄱ. The rest read newest or most urgent first.
 TEXT_SORTS = ('subject', 'sender', 'category')
-DEFAULT_LIST = {'query': '', 'state': '', 'sort': 'received', 'desc': True,
+# The 우선순위 names on their own. PRIORITIES carries a colour for Excel's chart, and
+# the list filter wants only the words — the same set the bars beside it are drawn from.
+PRIORITY_NAMES = tuple(name for name, _ in PRIORITIES)
+# The 메일 목록's own filters, and what a 대시보드 bar sets when it is clicked. The value
+# is the column, so a link arriving with ?category=공지 needs no translation.
+BAR_FILTERS = (('category', '종류', CATEGORIES), ('priority', '우선순위', PRIORITY_NAMES))
+DEFAULT_LIST = {'query': '', 'state': '', 'category': '', 'priority': '',
+                'sort': 'received', 'desc': True,
                 'page': 0, 'per': LIST_LIMIT, 'selected': None}
 WINDOWS = (7, 14, 30)           # the 마감 windows the 대시보드 card offers
 TREND_LABELS = (('collected', '수집'), ('analyzed', '분석'), ('exported', '반영'))
@@ -1092,7 +1099,13 @@ def chart_base(left=8, right=16, top=16, bottom=8):
 
 
 def bar_option(pairs, tones=None):
-    """Horizontal count bars. showBackground draws the empty track a 0 could not."""
+    """Horizontal count bars. showBackground draws the empty track a 0 could not.
+
+    triggerEvent is what makes the axis label clickable beside the bar: a 0 draws no
+    bar at all, and 긴급 0 is exactly the row a reader wants to open — to see that it
+    really is empty rather than to wonder whether the chart is stale. The background
+    track is zrender's own and carries no event, so the label is the whole of it.
+    """
     names = [name for name, _ in pairs]
     data = [{'value': value,
              'itemStyle': {'color': (tones or {}).get(name, SERIES), 'borderRadius': 4}}
@@ -1102,7 +1115,7 @@ def bar_option(pairs, tones=None):
         'xAxis': dict(axis_style(), type='value', show=False),
         # ECharts draws a category axis bottom-up, so reverse to read top-down.
         'yAxis': dict(axis_style(INK), type='category', data=list(reversed(names)),
-                      axisLabel={'color': INK, 'fontSize': 12}),
+                      axisLabel={'color': INK, 'fontSize': 12}, triggerEvent=True),
         'series': [{'type': 'bar', 'data': list(reversed(data)), 'barWidth': 11,
                     'showBackground': True,
                     'backgroundStyle': {'color': HAIR, 'borderRadius': 4},
@@ -1376,6 +1389,10 @@ def list_state(saved=None):
         values['sort'] = DEFAULT_LIST['sort']
     if values['state'] not in STATES:
         values['state'] = ''
+    # '' is in neither set, which is the answer for anything else that arrives too.
+    for key, _, names in BAR_FILTERS:
+        if values[key] not in names:
+            values[key] = ''
     values['query'] = str(values['query'] or '')
     values['desc'] = bool(values['desc'])
     try:
@@ -1396,6 +1413,30 @@ def clicked_key(args):
     if isinstance(args, (list, tuple)):
         return str(args[0]) if args else ''
     return str(args or '')
+
+
+# What a click on a count bar sends back. nicegui transmits only the fields the
+# handler names, so this list is also what never leaves the browser.
+BAR_EVENT = ('componentType', 'name', 'value')
+
+
+def clicked_bar(args, names):
+    """The row a 메일 종류·우선순위 chart click landed on, or '' for anything else.
+
+    Two shapes arrive: a bar carries its category in `name`, an axis label carries it
+    in `value` — and the *count* is in whichever field is left, so the answer is the
+    one of the two that is a name this chart was drawn from. That test is the filter's
+    validation as well: nothing that is not already a row on this page can come back.
+    """
+    if not isinstance(args, dict):
+        return ''
+    for key in ('name', 'value'):
+        value = args.get(key)
+        if isinstance(value, (list, tuple)):
+            value = value[0] if value else ''
+        if str(value) in names:
+            return str(value)
+    return ''
 
 
 def next_sort(sort, desc, key):
@@ -1449,15 +1490,14 @@ def listing(directory, config, state):
     if not account:
         return {'rows': [], 'total': 0, 'page': 0, 'pages': 0, 'first': 0, 'last': 0}
     page, per = state['page'], state['per']
-    rows, total = store(directory).search(account, query=state['query'], state=state['state'],
-                                          sort=state['sort'], desc=state['desc'],
-                                          limit=per, offset=page * per)
+    narrow = {'query': state['query'], 'state': state['state'],
+              'category': state['category'], 'priority': state['priority'],
+              'sort': state['sort'], 'desc': state['desc'], 'limit': per}
+    rows, total = store(directory).search(account, offset=page * per, **narrow)
     if not rows and total and page:
         # The page fell off the end, which a filter change does all the time.
         page = max(0, (total - 1) // per)
-        rows, total = store(directory).search(account, query=state['query'], state=state['state'],
-                                              sort=state['sort'], desc=state['desc'],
-                                              limit=per, offset=page * per)
+        rows, total = store(directory).search(account, offset=page * per, **narrow)
     # The tip rides on the row rather than being fetched when the button is hovered:
     # a q-table row is drawn in the browser, and asking the server per hover would be
     # a round trip for text the list already had in its hand.
@@ -2274,8 +2314,12 @@ def body_panel(text):
                                     'overflow-wrap:anywhere')
 
 
-def card(title=None, icon=None, flush=False):
-    """The one surface everything sits on. Returns the element, so callers can `with` it."""
+def card(title=None, icon=None, flush=False, note=''):
+    """The one surface everything sits on. Returns the element, so callers can `with` it.
+
+    `note` is the quiet half of the head: what this card does that looking at it does
+    not say — a canvas cannot show a cursor the way a link can.
+    """
     from nicegui import ui
     box = ui.element('div').classes('ma-card' + (' ma-card--flush' if flush else ''))
     if title:
@@ -2283,6 +2327,9 @@ def card(title=None, icon=None, flush=False):
             if icon:
                 ui.icon(icon).style(f'color:{MUTED};font-size:17px')
             ui.label(title).classes('ma-head__title')
+            if note:
+                ui.space()
+                ui.label(note).classes('ma-meta__item')
     return box
 
 
@@ -2418,6 +2465,30 @@ def chart(option, height=200, cap=None):
     from nicegui import ui
     return ui.echart(option).style(f'height:{height}px;width:100%'
                                    + (f';max-width:{cap}px' if cap else ''))
+
+
+# Said in the card's head rather than left to the pointer: the bars are painted into
+# a canvas, which cannot carry a link's colour or a cursor the reader would notice.
+BAR_NOTE = '누르면 메일 목록으로'
+
+
+def bar_link(element, key, names, token):
+    """A count bar is the way into the mail behind it.
+
+    The 대시보드 cards have been links since D2 — a number you cannot act on is only
+    decoration — and these are the same numbers; they are wired to an event instead of
+    drawn as an <a> only because ECharts paints them into a canvas. The filter it opens
+    reads `category`/`priority`, the columns the counts themselves are drawn from, so
+    the bar and the list it opens can never be counting different mail.
+    """
+    from nicegui import ui
+
+    def open_list(event):
+        name = clicked_bar(event.args, names)
+        if name:
+            ui.navigate.to(href('/mail', token, **{key: name}))
+
+    return element.on('componentClick', open_list, list(BAR_EVENT))
 
 
 def card_target(name, token, within=DUE_DAYS):
@@ -3872,16 +3943,18 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     with card('일별 처리량', 'show_chart'):
                         daily = chart(trend_option(latest['trend']), 196)
                     with grid(minimum=240):
-                        with card('메일 종류', 'label'):
-                            kinds = chart(bar_option(
+                        with card('메일 종류', 'label', note=BAR_NOTE):
+                            kinds = bar_link(chart(bar_option(
                                 [(name, latest['data']['categories'][name])
                                  for name in CATEGORIES]),
-                                24 * len(CATEGORIES) + 12, cap=460)
-                        with card('우선순위', 'flag'):
-                            ranks = chart(bar_option(
+                                24 * len(CATEGORIES) + 12, cap=460),
+                                'category', CATEGORIES, token)
+                        with card('우선순위', 'flag', note=BAR_NOTE):
+                            ranks = bar_link(chart(bar_option(
                                 [(name, latest['data']['priorities'][name])
                                  for name, _ in PRIORITIES], STATUS),
-                                24 * len(PRIORITIES) + 12, cap=460)
+                                24 * len(PRIORITIES) + 12, cap=460),
+                                'priority', PRIORITY_NAMES, token)
                 with ui.element('div').classes('ma-stack'):
                     today_block()
                     with card(flush=True):
@@ -3953,8 +4026,10 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             refused()
             return
         saved = dict(app.storage.user.get('list') or {})
-        # A card link arrives with its own filter; it wins over what was remembered.
-        for key in ('state', 'sort', 'query'):
+        # A card or bar link arrives with its own filter; it wins over what was
+        # remembered. A filter the link did not name is left as it was: 공지 clicked
+        # from the 대시보드 keeps the 미처리 the reader chose here a minute ago.
+        for key in ('state', 'sort', 'query', 'category', 'priority'):
             if key in request.query_params:
                 saved[key] = request.query_params[key]
                 saved['page'] = 0
@@ -4550,6 +4625,18 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                                        value=state['state'])
                     picker.props('dense outlined options-dense').style('min-width:140px')
                     picker.on_value_change(lambda event: edit(state=event.value or ''))
+                    # 종류 and 우선순위 are here, and not only on the link the 대시보드
+                    # sends, because a filter that is remembered has to be visible: a
+                    # list quietly narrowed to 공지 since yesterday is a list that has
+                    # lost mail, and nothing on screen would say why.
+                    for key, label, names in BAR_FILTERS:
+                        narrow = ui.select({'': f'전체 {label}',
+                                            **{name: name for name in names}},
+                                           value=state[key])
+                        narrow.props('dense outlined options-dense') \
+                            .style('min-width:130px')
+                        narrow.on_value_change(
+                            lambda event, key=key: edit(**{key: event.value or ''}))
                     ui.space()
                     fetch = ui.button('지금 가져오기', icon='cloud_download', on_click=collect) \
                         .props('unelevated dense no-caps') \
@@ -5469,14 +5556,19 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     else:
                         empty('아직 기록이 없습니다.')
             with grid(minimum=280).style('margin-top:14px'):
-                with card('메일 종류', 'label'):
-                    chart(bar_option([(name, data['categories'][name])
-                                      for name in CATEGORIES]),
-                          24 * len(CATEGORIES) + 12, cap=460)
-                with card('우선순위', 'flag'):
-                    chart(bar_option([(name, data['priorities'][name])
-                                      for name, _ in PRIORITIES], STATUS),
-                          24 * len(PRIORITIES) + 12, cap=460)
+                # The same two charts as the 대시보드's, off the same counts, so they
+                # open the same filtered list — a bar that was a link on one page and
+                # a picture on the other would be the page teaching two lessons.
+                with card('메일 종류', 'label', note=BAR_NOTE):
+                    bar_link(chart(bar_option([(name, data['categories'][name])
+                                               for name in CATEGORIES]),
+                                   24 * len(CATEGORIES) + 12, cap=460),
+                             'category', CATEGORIES, token)
+                with card('우선순위', 'flag', note=BAR_NOTE):
+                    bar_link(chart(bar_option([(name, data['priorities'][name])
+                                               for name, _ in PRIORITIES], STATUS),
+                                   24 * len(PRIORITIES) + 12, cap=460),
+                             'priority', PRIORITY_NAMES, token)
 
         def pick(days):
             span['days'] = days

@@ -410,6 +410,21 @@ class SearchTests(unittest.TestCase):
             self.assertEqual(len(self.subjects(store, state='없는 상태')), 5)   # ignored
             store.db.close()
 
+    def test_a_kind_and_an_urgency_narrow_the_list(self):
+        """The two columns the 대시보드 bars are drawn from, as filters on the list."""
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder)
+            self.assertEqual(self.subjects(store, category='공지'), ['Weekly report'])
+            self.assertEqual(self.subjects(store, priority='긴급'), ['견적 검토 요청'])
+            # Together with each other and with the filters that were already there.
+            self.assertEqual(self.subjects(store, category='공지', priority='긴급'), [])
+            self.assertEqual(self.subjects(store, category='공지', state=HANDLED),
+                             ['Weekly report'])
+            # '' is 전체, and a value nothing carries is simply empty — never everything.
+            self.assertEqual(len(self.subjects(store, category='')), 5)
+            self.assertEqual(self.subjects(store, category='없는 종류'), [])
+            store.db.close()
+
     def test_failures_are_reachable_which_they_were_not_before(self):
         with tempfile.TemporaryDirectory() as folder:
             store = self.store(folder)

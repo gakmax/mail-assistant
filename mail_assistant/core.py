@@ -456,8 +456,13 @@ class Store:
                                (account, limit)).fetchall()
 
     def search(self, account, query='', state='', sort='received', desc=True,
-               limit=LIST_LIMIT, offset=0):
-        """(page of rows, total). The list used to read 2000 rows and sort them in Python."""
+               limit=LIST_LIMIT, offset=0, category='', priority=''):
+        """(page of rows, total). The list used to read 2000 rows and sort them in Python.
+
+        `category` and `priority` are the columns the 대시보드 bars are drawn from, so a
+        bar and the list it opens count the same mail: both are written by analyzed()
+        out of one result, and neither is read back out of the JSON.
+        """
         where, params = ['account = ?'], [account]
         text = query.strip()
         if text:
@@ -470,6 +475,11 @@ class Store:
         if clause:
             where.append(f'({clause})')
             params += list(extra)
+        # The column name is ours; the value is always a parameter.
+        for column, chosen in (('category', category), ('priority', priority)):
+            if chosen:
+                where.append(f'{column} = ?')
+                params.append(chosen)
         condition = ' AND '.join(where)
         total = self.db.execute(f'SELECT COUNT(*) FROM mail WHERE {condition}',
                                 params).fetchone()[0]
