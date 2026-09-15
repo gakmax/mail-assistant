@@ -440,6 +440,31 @@ is set by the things that change a list column (처리 상태, 다시 분석, �
 else. Refreshing while the dialog is open is the same work done where nobody can see
 it, behind a dialog that covers the rows.
 
+**금액 is the only place this app adds numbers up, and every rule in `money.py` leans
+towards not counting.** Every other answer the analysis produces is a sentence a person
+reads and catches when it is wrong; a total does not say that it is wrong. So: two
+currencies are **never** added (`$5,000 + ₩5,000,000 = 5,005,000` is not a number, it is
+an accident); an amount that will not parse is **dropped, never counted as 0**, because
+a total that quietly got smaller is exactly as silent as one that got bigger; a
+`needs_review` the model set is taken at its word; an unknown currency is out. And
+`totals()` returns the sums **and the skipped count in one dict** on purpose — so a
+caller cannot draw the total without the number it left out, which is what
+`skipped_text()` puts on screen. `money_value()` refuses '약 90,000', ranges and '9만':
+the model reads the mail, this code decides what a number is, and neither guesses.
+
+Three more things hold it up. **A person can correct an amount** (`Store.set_money()`,
+which drops `needs_review` and marks `edited`) — without that the feature should not
+exist, because a misread 90,000 → 900,000 would stand forever in a total that cannot
+say it is wrong. `money` lives **inside the result JSON**, exactly as `events` does and
+for the same reason: it repeats, so it cannot be a column, and a table would be a fourth
+place to keep in step with `analyzed()`/`reset()`/`delete()` — putting the correction
+there too means 다시 분석 clears it with the answer it belongs to. And **every amount
+carries its `evidence`**, the mail's own phrase, kept even after a human edit: that line
+is what lets a reader decide whether to believe the total at all, and `MONEY_NOTE` says
+out loud on the page that this is 분석이 읽은 금액, not 회계 자료. Mail analysed before
+the schema grew simply has no `money` and contributes nothing — 다시 분석 is the way in,
+as it is for `parsed`'s table text.
+
 **The toast is the only thing this app says outside its own window, and it says it
 once.** `Store.unnotified()`/`mark_notified()` existed from the beginning with no
 caller; `notify.tell()` is that caller, run by the worker right after analysis. Its rule

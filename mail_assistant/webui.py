@@ -28,6 +28,10 @@ from .hub import line_text
 from .overview import (BRIEF_HOUR, DUE_DAYS, RECENT_DAYS, UPCOMING, overview, past_due,
                        results, review_queue, trend)
 from .services import BODY_LIMIT, DRAFT_TONES, DRAFT_WAYS
+from .money import (CURRENCIES as MONEY_CURRENCIES, KINDS as MONEY_KINDS,
+                    entries as money_entries, entry_of, in_month, by_kind,
+                    main_currency, money_text, month_title, months,
+                    skipped_text, totals, trend as money_trend)
 from .notify import enabled as notify_enabled
 from .settings import (DEFAULTS, FIELDS, GRADE_NOTE, NO_MODELS, RECOMMEND_WHY,
                        field_errors, model_label, model_rows, normalize, read_models)
@@ -94,6 +98,7 @@ WINDOW_FLOOR = (640, 480)   # no desktop is smaller; a floor stops a silly scree
 PAGES = (('/', '대시보드', 'dashboard'), ('/mail', '메일', 'mail'), ('/calendar', '일정', 'event'),
          ('/todo', '할 일', 'checklist'), ('/drafts', '초안', 'drafts'),
          ('/memo', '메모', 'sticky_note_2'), ('/senders', '거래처', 'contacts'),
+         ('/money', '금액', 'payments'),
          ('/chat', '상담', 'forum'), ('/stats', '통계', 'insights'),
          ('/run', '실행', 'play_circle'), ('/settings', '설정', 'settings'))
 # The sidebar's groups, in the order they are drawn. Ten destinations in one flat
@@ -104,6 +109,7 @@ PAGES = (('/', '대시보드', 'dashboard'), ('/mail', '메일', 'mail'), ('/cal
 # nothing else on screen.
 NAV_GROUPS = (('', ('/',)),
               ('업무', ('/mail', '/calendar', '/todo', '/drafts', '/memo', '/senders')),
+              ('돈', ('/money',)),
               ('도움', ('/chat', '/stats')),
               ('시스템', ('/run', '/settings')))
 # The sidebar with labels, and the same sidebar as icons only. The nine links used to
@@ -2187,6 +2193,8 @@ def detail_view(row):
         'summary': result.get('summary', ''), 'requests': result.get('requests', ''),
         'reason': result.get('priority_reason', ''), 'action': result.get('next_action', ''),
         'events': list(result.get('events', [])),
+        'money': [item for item in (result.get('money') or ()) if isinstance(item, dict)],
+        'order_no': str(result.get('order_no', '') or '').strip(),
         'attachments': list(parsed.get('attachments', [])),
         'body': tidy_body(parsed.get('body', '')),
         # 해외영업 메일: what was stored the one time it was asked for, and whether the
@@ -2298,6 +2306,32 @@ ATTACH_DIR = 'attachments'
 # 그 사실을 한 번 말해 두는 자리 — 도우미는 첨부를 분석에 보내지도, 열어 보지도 않는다.
 ATTACH_NOTE = '첨부는 분석에 보내지 않습니다. 꺼낸 파일은 데이터 폴더에 남습니다'
 SIZE_UNITS = (('GB', 1024 ** 3), ('MB', 1024 ** 2), ('KB', 1024), ('B', 1))
+
+
+# 금액 줄에 붙는 색. 들어오는 돈과 나가는 돈이 한 목록에 섞여 서는 화면이라, 종류가
+# 색을 갖지 않으면 합계 옆의 줄들이 전부 같은 것으로 읽힌다. 견적은 아직 돈이 아니라서
+# 중립이고, 입금만 초록이다 — 실제로 들어온 유일한 종류.
+MONEY_TONES = {'견적': NEUTRAL, '청구': SOON, '입금': DASH_GREEN, '계약': LINK, '기타': NEUTRAL}
+# 확인 필요가 걸린 줄. 합계에서 빠졌다는 사실이 줄 자체에도 보여야 한다 — 합계 밑의
+# 한 문장만으로는 '어느 줄이' 빠졌는지 말하지 않는다.
+MONEY_REVIEW_TIP = '합계에서 빠져 있습니다. 금액을 고치면 합계에 들어갑니다'
+MONEY_EDITED_TIP = '사람이 고친 금액입니다'
+MONEY_HINT = '쉼표 없이 숫자만. 비워 두면 합계에서 계속 빠집니다'
+# 이 화면 전체가 무엇인지 한 줄로. '분석이 읽은'이 중요하다 — 회계 자료가 아니라 모델이
+# 메일에서 옮긴 숫자이고, 화면이 그 사실을 감추면 합계가 장부처럼 읽힌다.
+MONEY_NOTE = '분석이 메일에서 읽은 금액입니다. 회계 자료가 아닙니다'
+MONEY_ROW_NOTE = '누르면 그 메일이 열립니다'
+# 한 번에 그리는 금액 줄. 더 있으면 달과 종류로 좁힌다.
+MONEY_ROWS = 80
+
+
+def money_view(view):
+    """메일 상세의 금액 줄. money.entry_of()와 같은 판정을 쓰되 메일은 이미 알고 있다."""
+    row = {'id': view['id'], 'subject': view['subject'], 'sender': view['sender'],
+           'received': '', 'handled': ''}
+    return [entry_of({**item, 'index': index,
+                      'order_no': item.get('order_no') or view['order_no']}, row)
+            for index, item in enumerate(view['money'])]
 
 
 def open_file(path, label):
@@ -4681,6 +4715,51 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 ui.notify(f'{language} 원문을 한국어로 옮겼습니다.'.lstrip())
                 panel.refresh()
 
+            def fix_money(entry):
+                """사람이 금액을 고친다. 이것이 없으면 합계는 있어서는 안 되는 기능이다.
+
+                모델이 90,000을 900,000으로 읽었을 때 되돌릴 방법이 없으면 그 합계는
+                영영 틀린 채 서 있고, 틀린 합계는 틀렸다고 스스로 말하지 않는다.
+                """
+                fixing = ui.dialog()
+
+                def keep():
+                    store(directory).set_money(view['id'], entry['index'],
+                                               amount.value or '', kind_of.value or '',
+                                               kind=sort_of.value or '',
+                                               label=what.value or '')
+                    bump()
+                    touched['now'] = True
+                    fixing.close()
+                    ui.notify('금액을 고쳤습니다. 합계에 반영됩니다.')
+                    panel.refresh()
+
+                with fixing, card('금액 고치기', 'edit').style('max-width:420px'):
+                    if entry['evidence']:
+                        with ui.element('div').classes('ma-sunken') \
+                                .style('padding:8px 10px;margin-bottom:10px'):
+                            ui.label(f"원문 \"{entry['evidence']}\"") \
+                                .classes('ma-meta__item')
+                    amount = ui.input('금액 (숫자만)',
+                                      value='' if entry['value'] is None
+                                      else str(entry['value'])) \
+                        .props('dense outlined stack-label autofocus').classes('w-full')
+                    ui.label(MONEY_HINT).classes('ma-meta__item').style('margin:2px 0 8px')
+                    kind_of = ui.select({code: f'{code} {symbol}'.strip()
+                                         for code, symbol in MONEY_CURRENCIES},
+                                        value=entry['currency'], label='통화') \
+                        .props('dense outlined options-dense stack-label').classes('w-full')
+                    sort_of = ui.select({name: name for name in MONEY_KINDS},
+                                        value=entry['kind'], label='종류') \
+                        .props('dense outlined options-dense stack-label').classes('w-full')
+                    what = ui.input('내용', value=entry['label']) \
+                        .props('dense outlined stack-label').classes('w-full')
+                    with ui.element('div').classes('ma-foot'):
+                        ui.space()
+                        ui.button('취소', on_click=fixing.close).props('flat dense no-caps')
+                        ui.button('저장', on_click=keep).props('unelevated dense no-caps')
+                fixing.open()
+
             async def open_attachment(index):
                 """첨부 하나를 데이터 폴더로 꺼내고 Windows에게 열게 한다.
 
@@ -4841,6 +4920,41 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                                                  '올라가지 않습니다. 일정 화면에서 직접 '
                                                  '추가할 수 있습니다.') \
                                             .classes('ma-meta__item')
+                        for item in money_view(view):
+                            tone = css_color(MONEY_TONES.get(item['kind'], NEUTRAL))
+                            with ui.element('div').classes('ma-part') \
+                                    .style(f'border-left-color:{tone}'):
+                                with ui.element('div').classes('ma-part__head'):
+                                    ui.icon('payments').style(f'color:{tone}')
+                                    ui.label(item['text'] or '금액 미상') \
+                                        .classes('ma-part__label')
+                                    ui.space()
+                                    tag(item['kind'], tone, soft_of(tone))
+                                    if item['edited']:
+                                        tag('수정됨', SUBTLE, SUNKEN)
+                                    if item['review']:
+                                        # 합계 밑의 한 문장은 '어느 줄이' 빠졌는지
+                                        # 말하지 않는다. 줄에도 있어야 한다.
+                                        tag('확인 필요', css_color(URGENT),
+                                            soft_of(css_color(URGENT)))
+                                if item['label']:
+                                    ui.label(item['label']).classes('ma-part__body')
+                                with ui.element('div').classes('ma-meta'):
+                                    if item['order_no']:
+                                        ui.label(f"번호 {item['order_no']}") \
+                                            .classes('ma-meta__item')
+                                    if item['evidence']:
+                                        # 근거는 모델의 문장이 아니라 메일이 쓴 구절이다.
+                                        # 이 줄이 있어서 합계를 믿을지 말지 사람이 정한다.
+                                        ui.label(f"원문 \"{item['evidence']}\"") \
+                                            .classes('ma-meta__item')
+                                    ui.space()
+                                    ui.button('고치기', icon='edit',
+                                              on_click=lambda _, entry=item:
+                                              fix_money(entry)) \
+                                        .props('flat dense no-caps size=sm') \
+                                        .tooltip(MONEY_REVIEW_TIP if item['review']
+                                                 else MONEY_EDITED_TIP)
                         files = attachment_rows(store(directory).attachments(view['id']))
                         if files:
                             with ui.element('div').classes('ma-part'):
@@ -5896,6 +6010,119 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             ui.timer(0.15, lambda: area.scroll_to(percent=1.0), once=True)
 
     # 통계 -----------------------------------------------------------
+
+    # 금액 --------------------------------------------------------------
+
+    @ui.page('/money')
+    def money_page(request: Request):
+        """금액 — 모델이 메일에서 읽은 돈을, 믿어도 되는 것과 아닌 것으로 나눠 놓은 화면.
+
+        이 앱에서 유일하게 합계를 그리는 화면이고, 그래서 유일하게 '세지 않은 것'을
+        같은 크기로 말하는 화면이다. money.totals()가 합계와 제외 건수를 한 dict로
+        돌려주는 것이 그 규칙의 자리고, 여기서는 그것을 그릴 뿐이다.
+        """
+        if not allowed(request):
+            refused()
+            return
+        picked = {'month': '', 'kind': ''}
+
+        @ui.refreshable
+        def body():
+            account = account_of(config)
+            found = money_entries(store(directory).page(account)) if account else []
+            if not found:
+                with card('금액', 'payments', note=MONEY_NOTE):
+                    empty('분석된 메일에서 금액을 찾지 못했습니다.')
+                return
+            month_list = months(found)
+            if picked['month'] and picked['month'] not in month_list:
+                picked['month'] = ''
+            shown = by_kind(in_month(found, picked['month']), picked['kind'])
+            book = totals(shown)
+            with card(flush=True).style('padding:14px 16px'):
+                with ui.element('div').classes('ma-head').style('margin-bottom:10px'):
+                    ui.icon('payments').style(f'color:{MUTED};font-size:17px')
+                    ui.label(month_title(picked['month'])).classes('ma-head__title')
+                    ui.label(f"{book['counted']}건 합계").classes('ma-meta__item')
+                    ui.space()
+                    ui.label(MONEY_NOTE).classes('ma-meta__item')
+                if not book['sums']:
+                    empty('합계를 낼 수 있는 금액이 없습니다.')
+                for currency in sorted(book['sums'], key=lambda code: code != main_currency(found)):
+                    with ui.element('div').style('margin-top:8px'):
+                        with grid(minimum=170, gap=10):
+                            for kind in MONEY_KINDS:
+                                value = book['sums'][currency].get(kind)
+                                if value is None:
+                                    continue
+                                tone = css_color(MONEY_TONES.get(kind, NEUTRAL))
+                                with ui.element('div').classes('ma-kpi'):
+                                    with ui.element('div').classes('ma-kpi__icon') \
+                                            .style(f'background:{tone}1a;color:{tone}'):
+                                        ui.icon('payments')
+                                    with ui.element('div').style('min-width:0'):
+                                        ui.label(f'{kind} · {currency}') \
+                                            .classes('ma-kpi__label')
+                                        ui.label(money_text(value, currency)) \
+                                            .classes('ma-kpi__value')
+                                        ui.label(f"{book['counts'][currency][kind]}건") \
+                                            .classes('ma-kpi__hint')
+                note = skipped_text(book)
+                if note:
+                    # 합계 바로 아래. 더 아래로 내려가면 합계만 읽고 지나가게 된다.
+                    with ui.element('div').classes('ma-alert ma-alert--warn') \
+                            .style('margin-top:12px'):
+                        ui.icon('rule').style('font-size:16px')
+                        ui.label(note + ' — 아래 목록에서 확인 필요 줄을 고치면 들어갑니다') \
+                            .style('font-size:12px')
+            with ui.element('div').style('margin-top:14px'):
+                with card('금액이 적힌 메일', 'receipt_long', note=MONEY_ROW_NOTE):
+                    if not shown:
+                        empty('이 조건에 맞는 금액이 없습니다.')
+                    for entry in shown[:MONEY_ROWS]:
+                        tone = css_color(MONEY_TONES.get(entry['kind'], NEUTRAL))
+                        with ui.element('div').classes('ma-due'):
+                            ui.label(entry['day'][5:]).classes('ma-due__day')
+                            tag(entry['kind'], tone, soft_of(tone))
+                            ui.link(entry['subject'],
+                                    href('/mail', token, id=entry['mail'])) \
+                                .classes('ma-due__title')
+                            if entry['order_no']:
+                                ui.label(entry['order_no']).classes('ma-meta__item')
+                            ui.space()
+                            if entry['review']:
+                                tag('확인 필요', css_color(URGENT), soft_of(css_color(URGENT)))
+                            elif entry['edited']:
+                                tag('수정됨', SUBTLE, SUNKEN)
+                            ui.label(entry['text'] or '금액 미상') \
+                                .classes('ma-due__left').style(f'color:{INK};font-weight:650')
+                    if len(shown) > MONEY_ROWS:
+                        ui.label(f'{len(shown) - MONEY_ROWS}건은 표시하지 않았습니다. '
+                                 '달이나 종류로 좁혀 보세요.').classes('ma-meta__item')
+
+        def pick_month(value):
+            picked['month'] = value or ''
+            body.refresh()
+
+        def pick_kind(value):
+            picked['kind'] = value or ''
+            body.refresh()
+
+        with page_shell('/money'):
+            account = account_of(config)
+            found = money_entries(store(directory).page(account)) if account else []
+            with ui.element('div').classes('ma-head').style('margin-bottom:12px'):
+                ui.icon('payments').style(f'color:{MUTED};font-size:17px')
+                ui.label('금액').classes('ma-head__title')
+                ui.space()
+                ui.select({'': '전체 기간',
+                           **{month: month_title(month) for month in months(found)}},
+                          value='', on_change=lambda event: pick_month(event.value)) \
+                    .props('dense outlined options-dense').style('min-width:140px')
+                ui.select({'': '전체 종류', **{name: name for name in MONEY_KINDS}},
+                          value='', on_change=lambda event: pick_kind(event.value)) \
+                    .props('dense outlined options-dense').style('min-width:130px')
+            body()
 
     # 거래처 ------------------------------------------------------------
 

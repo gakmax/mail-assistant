@@ -48,6 +48,8 @@ from mail_assistant.webui import (CARD_TONES, COST_TONES, DEFAULT_LIST, FONT_FIL
                                   FAILED_CARD, WAITING, WAIT_LATE, WAIT_NOTE, wait_age,
                                   THREAD_SHOWN, thread_view, thread_line, thread_clip,
                                   ATTACH_NOTE, size_text, attachment_rows,
+                                  MONEY_TONES, MONEY_NOTE, MONEY_HINT, MONEY_KINDS,
+                                  money_view, DASH_GREEN, NEUTRAL,
                                   SENDER_SHOWN, SENDER_SORTS, sender_rows, sender_sort,
                                   sender_search, sender_line,
                                   board, board_counts, card_hint, card_rows,
@@ -269,6 +271,47 @@ class WaitingCardTests(unittest.TestCase):
         """POP3로는 보낸 메일을 볼 수 없다 — 그 사실이 화면에 있어야 한다."""
         self.assertIn('완료 표시', WAIT_NOTE)
         self.assertGreater(WAIT_LATE, 0)
+
+
+class MoneyScreenTests(unittest.TestCase):
+    """금액 화면이 그리는 모양 — 특히 '세지 않은 줄'이 줄에서도 보이는가."""
+
+    def view(self, items, order_no=''):
+        return {'id': 'm1', 'subject': '견적', 'sender': 'kim@x',
+                'money': items, 'order_no': order_no}
+
+    def test_every_kind_has_a_tone_and_only_입금_is_green(self):
+        """들어오는 돈과 나가는 돈이 한 목록에 선다. 견적은 아직 돈이 아니라 중립이다."""
+        self.assertEqual(set(MONEY_TONES), set(MONEY_KINDS))
+        self.assertEqual(MONEY_TONES['입금'], DASH_GREEN)
+        self.assertEqual(MONEY_TONES['견적'], NEUTRAL)
+
+    def test_a_row_that_is_out_of_the_total_says_so_on_the_row(self):
+        """합계 밑의 한 문장은 '어느 줄이' 빠졌는지 말하지 않는다."""
+        rows = money_view(self.view([
+            {'kind': '견적', 'amount': '1000', 'currency': 'KRW', 'needs_review': False},
+            {'kind': '견적', 'amount': '약 1000', 'currency': 'KRW', 'needs_review': False},
+            {'kind': '견적', 'amount': '1000', 'currency': 'KRW', 'needs_review': True}]))
+        self.assertEqual([row['review'] for row in rows], [False, True, True])
+        self.assertEqual(rows[0]['text'], '₩1,000')
+        # 읽지 못한 줄은 원문 그대로 보여 준다. 빈 칸은 무엇이 문제인지 말하지 않는다.
+        self.assertEqual(rows[1]['text'], '약 1000')
+
+    def test_the_screen_says_it_is_not_a_ledger(self):
+        """회계 자료가 아니라 모델이 메일에서 옮긴 숫자다."""
+        self.assertIn('회계 자료가 아닙니다', MONEY_NOTE)
+        self.assertIn('합계', MONEY_HINT)
+
+    def test_a_corrected_row_is_marked_as_corrected(self):
+        rows = money_view(self.view([{'kind': '청구', 'amount': '900000',
+                                      'currency': 'KRW', 'edited': True}]))
+        self.assertTrue(rows[0]['edited'])
+        self.assertFalse(rows[0]['review'])
+
+    def test_the_order_number_comes_from_the_mail_when_the_line_has_none(self):
+        rows = money_view(self.view([{'kind': '견적', 'amount': '1', 'currency': 'KRW'}],
+                                    order_no='A26090135'))
+        self.assertEqual(rows[0]['order_no'], 'A26090135')
 
 
 class AttachmentRowTests(unittest.TestCase):

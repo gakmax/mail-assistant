@@ -6,7 +6,7 @@ import time
 import subprocess
 import sys
 import tempfile
-from mail_assistant import notify
+from mail_assistant import money, notify
 import unittest
 import types
 from contextlib import contextmanager
@@ -39,7 +39,8 @@ from mail_assistant.style import STYLE_VERSION, URGENT, apply_style
 from mail_assistant.services import (BODY_LIMIT, DRAFT_BODY_LIMIT, DRAFT_TONES,
                                       DRAFT_WAYS, EFFORT_READ, EFFORT_THINK,
                                       Unanalyzable,
-                                      TRANSLATE_LIMIT, THREAD_TURNS, analyze, briefing,
+                                      TRANSLATE_LIMIT, THREAD_TURNS, MONEY_RULES,
+                                      ANALYSIS_RULES, analyze, briefing,
                                       thread_context, context_size, chat_reply,
                                       chat_schema, draft, draft_schema, fetch_mail,
                                       read_password, save_password, translate,
@@ -51,7 +52,11 @@ CONFIG = {'host': 'pop3s.hiworks.com', 'port': 995, 'email': 'test@example.com',
 RESULT = {'category': '업무 요청', 'summary': '견적 회신 요청', 'requests': '견적 확인',
           'events': [{'title': '회신', 'start': '', 'deadline': '2026-09-11', 'evidence': '9월 11일까지', 'needs_review': False}],
           'priority': '높음', 'priority_reason': '회신 마감 명시', 'next_action': '견적 검토',
-          'reply_needed': True, 'reply_subject': 'Re: 견적', 'reply_draft': '확인 후 회신드리겠습니다.'}
+          'reply_needed': True, 'reply_subject': 'Re: 견적', 'reply_draft': '확인 후 회신드리겠습니다.',
+          'money': [{'kind': '견적', 'amount': '1234000', 'currency': 'KRW',
+                     'label': '9월 견적', 'evidence': '공급가액 1,234,000원',
+                     'needs_review': False}],
+          'order_no': 'A26090135'}
 
 
 def mail():
@@ -438,7 +443,7 @@ class ThreadStoreTests(unittest.TestCase):
                                {'category': '견적·계약', 'summary': '9월 견적 검토 요청',
                                 'requests': '단가 회신', 'events': [], 'priority': '높음',
                                 'priority_reason': '', 'next_action': '', 'reply_needed': True,
-                                'reply_subject': '', 'reply_draft': ''})
+                                'reply_subject': '', 'reply_draft': '', 'money': [], 'order_no': ''})
                 reply = store.add(self.ACCOUNT, 'u2',
                                   self.mail('Re: 견적 요청', '<b@x>', refs='<a@x>'))
                 row = store.detail(reply)
@@ -452,6 +457,172 @@ class ThreadStoreTests(unittest.TestCase):
                                                      store.detail(root)['received']), [])
             finally:
                 store.db.close()
+
+
+class MoneyTests(unittest.TestCase):
+    """금액 — 이 앱에서 유일하게 합계를 그리는 기능이고, 규칙은 전부 '세지 않는 쪽'이다.
+
+    다른 답이 틀리면 사람이 읽다가 알아본다. 합계는 틀렸다는 것을 스스로 말하지 않는다.
+    """
+
+    def item(self, amount='1234000', currency='KRW', kind='견적', review=False, **extra):
+        return {'kind': kind, 'amount': amount, 'currency': currency, 'label': '9월 견적',
+                'evidence': '공급가액 1,234,000원', 'needs_review': review, **extra}
+
+    def row(self, ident='m1', items=(), received='2026-09-14T00:00:00+00:00', order_no=''):
+        return {'id': ident, 'subject': '견적', 'sender': 'kim@x', 'received': received,
+                'handled': '', 'result': json.dumps({'money': list(items),
+                                                     'order_no': order_no})}
+
+    def test_a_number_is_a_number_and_everything_else_is_not(self):
+        """None과 0은 다르다. 0은 '영 원'이고 None은 '나는 이것을 읽지 못했다'이다."""
+        self.assertEqual(money.money_value('1,234,000'), 1234000)
+        self.assertEqual(money.money_value(' 90000 '), 90000)
+        self.assertEqual(money.money_value('12.50'), 12.5)
+        self.assertEqual(money.money_value('0'), 0)
+        for guess in ('약 90,000', '90,000~100,000', '9만', '1,234,000원', '', None, '-500'):
+            self.assertIsNone(money.money_value(guess), guess)
+
+    def test_two_currencies_are_never_added(self):
+        """$5,000과 ₩5,000,000을 더한 5,005,000은 숫자가 아니라 사고다."""
+        found = money.entries([self.row('m1', [self.item('5000', 'USD'),
+                                               self.item('5000000', 'KRW')])])
+        book = money.totals(found)
+        self.assertEqual(book['sums']['USD']['견적'], 5000)
+        self.assertEqual(book['sums']['KRW']['견적'], 5000000)
+        self.assertEqual(set(book['sums']), {'USD', 'KRW'})
+
+    def test_an_unreadable_amount_is_dropped_not_counted_as_zero(self):
+        """못 읽은 것을 0으로 세면 합계는 조용히 작아지고, 작아진 합계는 말이 없다."""
+        found = money.entries([self.row('m1', [self.item('1000'),
+                                               self.item('약 90,000')])])
+        book = money.totals(found)
+        self.assertEqual(book['sums']['KRW']['견적'], 1000)
+        self.assertEqual(book['counted'], 1)
+        self.assertEqual(book['skipped'], 1)
+
+    def test_a_model_that_is_unsure_is_taken_at_its_word(self):
+        found = money.entries([self.row('m1', [self.item('1000', review=True)])])
+        book = money.totals(found)
+        self.assertEqual(book['sums'], {})
+        self.assertEqual(book['skipped'], 1)
+
+    def test_an_unknown_currency_never_joins_a_total(self):
+        """무엇인지 모르는 돈끼리 더한 수는 아무 질문에도 답하지 않는다."""
+        found = money.entries([self.row('m1', [self.item('1000', '기타'),
+                                               self.item('1000', 'ZZZ')])])
+        book = money.totals(found)
+        self.assertEqual(book['sums'], {})
+        self.assertEqual(book['skipped'], 2)
+
+    def test_the_total_cannot_be_read_without_the_number_it_left_out(self):
+        """합계와 제외 건수를 한 dict에 담는 것이 이 모듈의 요점이다."""
+        book = money.totals(money.entries([self.row('m1', [self.item('1000'),
+                                                           self.item('bad')])]))
+        self.assertIn('skipped', book)
+        self.assertEqual(money.skipped_text(book), '확인 필요 1건은 합계에서 뺐습니다')
+        clean = money.totals(money.entries([self.row('m1', [self.item('1000')])]))
+        self.assertEqual(money.skipped_text(clean), '')
+
+    def test_a_mail_with_no_money_contributes_nothing(self):
+        self.assertEqual(money.entries([self.row('m1', [])]), [])
+        self.assertEqual(money.entries([{'id': 'm', 'subject': '', 'sender': '',
+                                         'received': '', 'handled': '', 'result': None}]), [])
+        self.assertEqual(money.entries([{'id': 'm', 'subject': '', 'sender': '',
+                                         'received': '', 'handled': '',
+                                         'result': '{not json'}]), [])
+
+    def test_the_order_number_falls_through_from_the_mail(self):
+        found = money.entries([self.row('m1', [self.item()], order_no='A26090135')])
+        self.assertEqual(found[0]['order_no'], 'A26090135')
+
+    def test_months_and_filters_narrow_the_same_list(self):
+        rows = [self.row('m1', [self.item('100')], received='2026-09-14T00:00:00+00:00'),
+                self.row('m2', [self.item('200', kind='입금')],
+                         received='2026-08-14T00:00:00+00:00')]
+        found = money.entries(rows)
+        self.assertEqual(money.months(found), ['2026-09', '2026-08'])
+        self.assertEqual(len(money.in_month(found, '2026-09')), 1)
+        self.assertEqual(len(money.in_month(found, '')), 2)
+        self.assertEqual(len(money.by_kind(found, '입금')), 1)
+        self.assertEqual(money.month_title('2026-09'), '2026년 9월')
+        self.assertEqual(money.month_title(''), '전체 기간')
+
+    def test_the_currency_shown_is_the_one_most_of_the_mail_used(self):
+        found = money.entries([self.row('m1', [self.item('1', 'USD'), self.item('2', 'USD'),
+                                               self.item('3', 'KRW')])])
+        self.assertEqual(money.main_currency(found), 'USD')
+        self.assertEqual(money.main_currency([]), 'KRW')
+
+    def test_a_person_can_correct_what_the_model_read(self):
+        """고칠 수 없으면 합계는 있어서는 안 되는 기능이다 — 틀린 채로 영영 선다."""
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            try:
+                message = EmailMessage()
+                message['From'] = 'kim@x.example'
+                message['Subject'] = '견적'
+                message.set_content('본문')
+                ident = store.add('acct', 'u1', message.as_bytes())
+                store.analyzed(ident, {'sender': '', 'subject': '', 'body': '',
+                                       'attachments': []},
+                               {**RESULT, 'money': [self.item('약 90,000', review=True)]})
+                before = money.totals(money.entries(store.page('acct')))
+                self.assertEqual(before['sums'], {})
+                self.assertTrue(store.set_money(ident, 0, '900000', 'KRW'))
+                after = money.totals(money.entries(store.page('acct')))
+                self.assertEqual(after['sums']['KRW']['견적'], 900000)
+                self.assertEqual(after['skipped'], 0)
+                entry = money.entries(store.page('acct'))[0]
+                self.assertTrue(entry['edited'])
+                # 근거는 그대로 남는다: 사람이 고쳤어도 원문이 무엇이었는지가 판단의 근거다.
+                self.assertEqual(entry['evidence'], '공급가액 1,234,000원')
+            finally:
+                store.db.close()
+
+    def test_a_correction_that_names_nothing_real_changes_nothing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            try:
+                message = EmailMessage()
+                message['From'] = 'kim@x.example'
+                message['Subject'] = '견적'
+                message.set_content('본문')
+                ident = store.add('acct', 'u1', message.as_bytes())
+                store.analyzed(ident, {'sender': '', 'subject': '', 'body': '',
+                                       'attachments': []},
+                               {**RESULT, 'money': [self.item()]})
+                self.assertFalse(store.set_money(ident, 5, '1', 'KRW'))
+                self.assertFalse(store.set_money('nosuch', 0, '1', 'KRW'))
+            finally:
+                store.db.close()
+
+    def test_다시_분석은_고친_금액도_함께_지운다(self):
+        """money는 result 안에 산다 — 답이 사라지면 고친 값도 같이 사라져야 한다."""
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            try:
+                message = EmailMessage()
+                message['From'] = 'kim@x.example'
+                message['Subject'] = '견적'
+                message.set_content('본문')
+                ident = store.add('acct', 'u1', message.as_bytes())
+                store.analyzed(ident, {'sender': '', 'subject': '', 'body': '',
+                                       'attachments': []},
+                               {**RESULT, 'money': [self.item()]})
+                store.set_money(ident, 0, '999', 'KRW')
+                store.reset([ident], reanalyze=True)
+                self.assertEqual(money.entries(store.page('acct')), [])
+            finally:
+                store.db.close()
+
+    def test_the_prompt_forbids_arithmetic_and_guessing(self):
+        """지어낸 숫자가 합계에 들어가는 것이 이 기능의 유일한 진짜 사고다."""
+        self.assertIn('적혀 있는', MONEY_RULES)
+        self.assertIn('빈 배열', MONEY_RULES)
+        self.assertIn('곱하지', MONEY_RULES)
+        self.assertIn('needs_review=true', MONEY_RULES)
+        self.assertIn(MONEY_RULES, ANALYSIS_RULES)
 
 
 class NotifyTests(unittest.TestCase):
@@ -547,7 +718,7 @@ class NotifyTests(unittest.TestCase):
                                    {'category': '문의', 'summary': '', 'requests': '',
                                     'events': [], 'priority': priority, 'priority_reason': '',
                                     'next_action': '', 'reply_needed': False,
-                                    'reply_subject': '', 'reply_draft': ''})
+                                    'reply_subject': '', 'reply_draft': '', 'money': [], 'order_no': ''})
                     seen.append(ident)
                 with patch.object(notify, 'send', lambda *args, **kwargs: True):
                     self.assertEqual(notify.tell(store, self.ACCOUNT, {'notify': '1'}), 1)
@@ -571,7 +742,7 @@ class NotifyTests(unittest.TestCase):
                                        'attachments': []},
                                {'category': '문의', 'summary': '', 'requests': '', 'events': [],
                                 'priority': '긴급', 'priority_reason': '', 'next_action': '',
-                                'reply_needed': False, 'reply_subject': '', 'reply_draft': ''})
+                                'reply_needed': False, 'reply_subject': '', 'reply_draft': '', 'money': [], 'order_no': ''})
                 sent = []
                 with patch.object(notify, 'send', lambda *a, **k: sent.append(a) or True):
                     self.assertEqual(notify.tell(store, self.ACCOUNT, {'notify': ''}), 0)
@@ -723,7 +894,7 @@ class SenderTests(unittest.TestCase):
                                {'category': '문의', 'summary': '', 'requests': '',
                                 'events': [], 'priority': '보통', 'priority_reason': '',
                                 'next_action': '', 'reply_needed': needed,
-                                'reply_subject': '', 'reply_draft': ''})
+                                'reply_subject': '', 'reply_draft': '', 'money': [], 'order_no': ''})
             if handled:
                 store.set_handled(ident, handled)
             with store.db:
@@ -814,7 +985,7 @@ class WaitingReplyTests(unittest.TestCase):
             store.analyzed(ident, {'sender': '', 'subject': '', 'body': '', 'attachments': []},
                            {'category': '문의', 'summary': '', 'requests': '', 'events': [],
                             'priority': '보통', 'priority_reason': '', 'next_action': '',
-                            'reply_needed': needed, 'reply_subject': '', 'reply_draft': ''})
+                            'reply_needed': needed, 'reply_subject': '', 'reply_draft': '', 'money': [], 'order_no': ''})
             if handled:
                 store.set_handled(ident, handled)
             # `received` is written by now(); the age is the whole point, so it is set
@@ -1006,7 +1177,7 @@ class SearchTests(unittest.TestCase):
                                 'requests': '회신 필요', 'events': [],
                                 'priority': priority, 'priority_reason': '근거',
                                 'next_action': '담당자 확인', 'reply_needed': False,
-                                'reply_subject': '', 'reply_draft': ''})
+                                'reply_subject': '', 'reply_draft': '', 'money': [], 'order_no': ''})
             if handled:
                 store.set_handled(ident, handled)
             if attempts:

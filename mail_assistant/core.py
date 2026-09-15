@@ -999,6 +999,41 @@ class Store:
         with self.db:
             self.db.execute('UPDATE mail SET draft_edit=? WHERE id=?', (text, ident))
 
+    def set_money(self, ident, index, amount, currency, kind='', label=''):
+        """사람이 고친 금액을, 그 금액이 속한 분석 안으로.
+
+        고칠 수 있어야 한다는 것이 이 기능이 있어도 되는 조건이다. 모델이 90,000을
+        900,000으로 읽었을 때 되돌릴 방법이 없으면 합계는 영영 틀린 채로 서 있고, 그러면
+        합계가 없느니만 못하다. `edited`는 화면이 '사람이 고친 줄'이라고 말하기 위한
+        표시이고, needs_review를 내리는 것은 사람이 본 줄이기 때문이다 — 그래야 합계에
+        들어간다.
+
+        set_reply_draft()와 같은 자리에 산다: money는 events처럼 result JSON 안에 살고,
+        고친 값도 거기 있어야 다시 분석할 때 답과 함께 깨끗이 사라진다.
+        """
+        row = self.db.execute('SELECT result FROM mail WHERE id=?', (ident,)).fetchone()
+        if row is None or not row['result']:
+            return False
+        try:
+            result = json.loads(row['result'])
+        except ValueError:
+            return False
+        items = result.get('money') or []
+        if not 0 <= index < len(items):
+            return False
+        items[index] = {**items[index], 'amount': str(amount or ''),
+                        'currency': str(currency or ''), 'needs_review': False,
+                        'edited': True}
+        if kind:
+            items[index]['kind'] = kind
+        if label:
+            items[index]['label'] = label
+        result['money'] = items
+        with self.db:
+            self.db.execute('UPDATE mail SET result=? WHERE id=?',
+                            (json.dumps(result, ensure_ascii=False), ident))
+        return True
+
     def set_reply_draft(self, ident, subject, text):
         """초안 만들기's answer, into the analysis it belongs to.
 
