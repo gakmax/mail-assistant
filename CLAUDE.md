@@ -17,7 +17,7 @@ that break silently if you don't know them.
 ## Commands
 
 ```bash
-python -m unittest discover -s tests -v    # from the repo root; 711 tests, all platforms
+python -m unittest discover -s tests -v    # from the repo root; 737 tests, all platforms
 ```
 
 ```powershell
@@ -120,12 +120,13 @@ backend's own `rateLimitReachedType`/`ordinaryUsageAllowed` and never off 100%: 
 percentage is a measurement and the permission is an answer.
 
 **'분석 중' is a column on the mail, not a log line.** `Store.mark_analyzing()` writes
-`analyzing` before `services.analyze()` and the worker's `finally` clears it — every
+`analyzing` before the Codex call and the worker's `finally` clears it — every
 path, including the one that gives up, or a mail reads 분석 중 for ever and
 `Store.reset()` then refuses to touch it. A crash cannot run that `finally`, so
-`worker.run()` clears the marker at every start. Only one row ever carries it
-(`codex_slot` is a `BoundedSemaphore(1)`), which is why `analyzing()` can return one
-id. `state_of()` puts it *before* 실패: '2회 실패' of a mail Codex is reading right now
+`worker.run()` clears the marker at every start. One call at a time (`codex_slot` is a
+`BoundedSemaphore(1)`), but that one call now reads a **batch**, so `mark_analyzing()`
+takes a list and every row in the group carries the marker until the answer comes back;
+`analyzing()` returns the first of them and no screen reads it. `state_of()` puts it *before* 실패: '2회 실패' of a mail Codex is reading right now
 is a week-old fact. `reset()` skips a marked row and returns how many it changed —
 clearing a result whose answer is already on its way would be overwritten, so a
 button that said '요청했습니다' would be describing something that did not happen;
@@ -661,7 +662,7 @@ failed request does not re-fire for ever with nobody having asked again.
 pure and tested, and every field in it came out of a `result` JSON that `analyze()`
 already paid for. `BRIEF_OPEN`/`BRIEF_EVENTS`/`BRIEF_DRAFTS`/`BRIEF_TEXT` hold it to
 roughly 8-12KB, which is where the answer stops getting sharper; thirty bodies at
-`analyze()`'s own 60,000-character ceiling is the 240-second timeout instead. What the
+`analyze()`'s own `BODY_LIMIT` is the 240-second timeout instead. What the
 caps cut is reported in the payload's own `truncated`, because a model that saw thirty
 of eighty-seven has to be able to say '그 외 57건' rather than write '조용합니다' about
 the thirty. `briefing_view()` then re-clips on the way out: the schema constrains shape,
@@ -843,6 +844,14 @@ asks with `check_login(timeout=LAMP_WAIT)` and reports 확인 중 rather than qu
 behind a 240-second analysis. `CodexBusy` subclasses `RuntimeError`, so catch it
 *before* the `RuntimeError` branch or 'busy' is reported as '로그인 필요'.
 
+**A worker test that does not patch `write_briefing` spends real Codex quota.**
+The end of a cycle builds the day's briefing, and `briefing_due()` is satisfied the
+moment the analysis queue is empty — which is exactly what a test that analyses
+successfully leaves behind. `mail_assistant.worker.briefing` is not patched by patching
+`analyze_one`, so the call goes out to the real CLI on the developer's own account: the
+suite ran in 13 seconds and then in 109, and the difference was real analyses nobody
+asked for. Every helper that calls `worker.run()` patches `write_briefing`.
+
 **Every list query needs `rowid` as its last tie-break.** `received` is written by
 `now()` when the mail is stored, and a Windows clock ticks about every 15ms, so one
 poll cycle gives every mail it collected the same string. `ORDER BY received DESC`
@@ -912,22 +921,71 @@ worst failure this app has is a wrong deadline and that is what a light model pr
 run has no list to choose from — but it is no longer implied to be the best: its hint
 now says out loud that the screen cannot tell you what ran.
 
-**`services.codex_json()` is the one `codex exec` this app makes.** Analysis, 상담,
-the briefing and 번역 differ in what they send and in what they say when it fails; the
+**`services.codex_json()` is the one `codex exec` this app makes.** Analysis (one mail
+and a batch of them), 상담, the briefing, 초안 and 번역 differ in what they send, in how
+hard they need the model to think and in what they say when it fails; the
 sandbox flags, the `--model` splice, the one slot, the 240-second process timeout and
 the rule that stdout is never persisted were four copies of the same twenty-five lines
 and are now one. A new caller passes a prefix, a prompt, a payload, a schema and its
 own Korean failure sentence — and nothing else, because everything else is the part
 that must not drift.
 
+**여러 통이 codex exec 한 번으로 간다, and that is the whole shape of the cost.**
+`codex exec` charges about 15,500 input tokens before a single character of mail — the
+CLI's own instructions and tool catalog — and `cached_input_tokens` is **0 on every
+call**, including two identical ones back to back, because `--ephemeral` opens a new
+thread each time and a prefix cache has nothing to attach to. Measured, not guessed: a
+192-byte payload costs 15,495. For an ordinary 3,000자 mail that is 90% boilerplate, so
+the only lever left is to divide it — five mails in one call measured 16,780 against
+roughly 78,500 as five. `group_mails()` is that rule and `BATCH_MAILS`/`BATCH_CHARS`
+(5 / 24,000자) keep one turn under 30,000 tokens, which is what keeps it inside the
+240-second timeout. Three things hold it up. `mail_id` is the only thing joining an
+answer to its mail, so `analyze_many()` drops an id the model invented rather than
+guessing, and a mail simply **absent** from `results` is not a failure of the batch —
+the worker gives it `retry_at=0` and it goes again *alone* on the next cycle.
+`check_dates()` runs per entry for the same reason: one unparseable deadline must not
+cost the other four. And `BATCH_PROMPT` says 독립적으로 out loud, because the one thing
+this change can break is a mail borrowing the deadline of the mail beside it, which is
+exactly the error that flows into the calendar and the Excel 일정 sheet.
+
+**한 번이라도 실패한 메일은 혼자 간다.** `group_mails()` gives any row with
+`attempts > 0` a group of its own, and that single rule is what makes a batch failure
+self-healing: the five that failed together are retried one at a time, the culprit
+keeps failing and the innocent four are analysed. Without it a batch failure would be
+five mails carrying a failure none of them caused, and the give-up cap below would put
+them all down together.
+
+**A mail is put down after `MAX_ATTEMPTS`, but only once Codex is known to be working.**
+There was no cap at all: `Store.failed()` counted `attempts` and nothing read it, the
+backoff stopped growing at an hour, and a mail that could not finish inside 240 seconds
+was re-analysed 24 times a day for ever at full price. The cap alone is the wrong fix —
+an account that has run out of quota fails every mail in turn, and five hours later the
+whole queue would be marked 포기. So the give-up needs both halves: the mail failed
+**alone** (`len(group) == 1`, which `group_mails()` guarantees for anything that has
+failed before) *and* `Store.analyzed_since(account, row['failed_at'])` — something else
+was analysed successfully since this mail's last failure. `failed_at` is a column for
+that comparison alone. NO_RETRY and 다시 분석 are the way back in, exactly as they are
+for `Unanalyzable`.
+
 **A body over `BODY_LIMIT` is clipped, and the clip is said in three places.**
-60,000자 is what comes back inside the 240-second timeout. What makes clipping safe is
-that nothing about it is silent: `CLIP_NOTE` goes on the front of the prompt so a model
-that saw half a mail does not write '일정 없음' about the other half, `parsed['clipped']`
-carries the *original* length into the database, and the 메일 상세 draws an amber band
-(`clipped_note()`) above the analysis with 실행 saying it too. `parsed` keeps the **whole**
-body — only what is sent to Codex is cut — because 원문 is drawn from that field and a
-reader told 'the analysis saw 60,000 of 72,013자' has to be able to read the rest.
+20,000자 — about 11,000 tokens, and the value 번역 and 초안 already use. What makes
+clipping safe is that nothing about it is silent: `CLIP_NOTE` goes on the front of the
+prompt so a model that saw half a mail does not write '일정 없음' about the other half,
+`parsed['clipped']` carries the *original* length into the database, and the 메일 상세
+draws an amber band (`clipped_note()`) above the analysis with 실행 saying it too.
+`parsed` keeps the **whole** body — only what is sent to Codex is cut — because 원문 is
+drawn from that field and a reader told 'the analysis saw 20,000 of 72,013자' has to be
+able to read the rest.
+
+**`squeeze_body()` folds the whitespace, and only in the copy that is sent.**
+`text_of_html()` carries the HTML source's own indentation out with the text, and on an
+ordinary business mail that is over 60% of the characters. The tokens are the smaller
+half of it: that whitespace was eating the `BODY_LIMIT` budget, so what got clipped was
+real content. Blank runs collapse to one and each line is stripped; the gaps *inside* a
+line are left alone, because that is where a plain-text mail draws its columns and
+folding them loses which figure belongs to which. `prepare()` measures the clip against
+the squeezed text, so a mail that is only long because of indentation is no longer
+clipped at all — and `parsed['body']`, which 원문 draws, never sees any of this.
 
 **A failure a retry cannot fix is `services.Unanalyzable`, and the worker puts that
 mail down.** A mail whose raw bytes will not parse, and one with neither a body nor a

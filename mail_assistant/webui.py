@@ -2124,14 +2124,14 @@ def model_option(row):
 
 
 def clipped_note(total, limit=BODY_LIMIT):
-    """'본문 123,456자 중 앞 60,000자만 분석했습니다' — or '' for an ordinary mail.
+    """'본문 123,456자 중 앞부분 20,000자만 분석했습니다' — or '' for an ordinary mail.
 
     Said out loud and in the warning tone, because a clipped analysis that looked like
     every other analysis is the one way this limit can quietly cost a deadline.
     """
     if not total:
         return ''
-    return (f'본문이 {int(total):,}자여서 앞 {limit:,}자만 분석했습니다. '
+    return (f'본문이 {int(total):,}자여서 앞부분 {limit:,}자만 분석했습니다. '
             '뒤쪽에 있는 일정이나 요청은 빠졌을 수 있으니 원문을 확인하세요. '
             '원문은 전체가 보관되어 있습니다.')
 

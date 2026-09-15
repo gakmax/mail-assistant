@@ -23,7 +23,8 @@ EVENT_MARK = '@'
 PROGRESS = '진행'      # the kanban's middle column; '' -> 진행 -> 처리
 FAILED = '실패'
 # Set by the worker while Codex is actually looking at a mail, cleared the moment it
-# is not. One process at a time (services.codex_slot), so at most one row carries it.
+# is not. One process at a time (services.codex_slot), but that one call may be reading
+# a batch, so every row in it carries the marker until the answer comes back.
 ANALYZING = '분석 중'
 LOG_SCHEMA = 'CREATE TABLE IF NOT EXISTS log (at TEXT NOT NULL, text TEXT NOT NULL)'
 LOG_TRIM_EVERY = 50
@@ -329,7 +330,11 @@ class Store:
                      # 한글 번역, kept beside the mail it belongs to: it is asked for
                      # once, read many times, and costs a Codex run to make again.
                      ('translated', "TEXT NOT NULL DEFAULT ''"),
-                     ('translated_from', "TEXT NOT NULL DEFAULT ''"))
+                     ('translated_from', "TEXT NOT NULL DEFAULT ''"),
+                     # 마지막으로 실패한 시각. 포기해도 되는 실패인지를 이것으로 가른다 —
+                     # 그 뒤에 다른 메일이 분석에 성공했다면 Codex는 멀쩡하고 이 메일이
+                     # 문제라는 뜻이고, 아무것도 성공하지 못했다면 한도나 로그인 쪽이다.
+                     ('failed_at', "TEXT NOT NULL DEFAULT ''"))
         with self.db:
             for column, declaration in additions:
                 if column not in present:
@@ -413,7 +418,15 @@ class Store:
         return ident
 
     def pending(self, account, timestamp):
-        return self.db.execute('SELECT * FROM mail WHERE account=? AND result IS NULL AND retry_at<=? ORDER BY received LIMIT 5',
+        """분석을 기다리는 메일. 묶을지 한 통씩 갈지는 worker가 group_mails()로 정한다.
+
+        LIMIT is one poll's own collection cap: the worker sends these in batches now,
+        so a cycle that used to cost five Codex calls costs one or two. rowid breaks the
+        tie for the same reason page() needs it — a cycle that stored several mails gave
+        them all one `received`, and which of them Codex reads first would otherwise be
+        whatever sqlite felt like, differently on each call.
+        """
+        return self.db.execute('SELECT * FROM mail WHERE account=? AND result IS NULL AND retry_at<=? ORDER BY received, rowid LIMIT 25',
                                (account, timestamp)).fetchall()
 
     def analyzed(self, ident, parsed, result):
@@ -425,8 +438,20 @@ class Store:
 
     def failed(self, ident, error, timestamp):
         with self.db:
-            self.db.execute('UPDATE mail SET attempts=attempts+1, error=?, retry_at=? WHERE id=?',
-                            (error, timestamp, ident))
+            self.db.execute('UPDATE mail SET attempts=attempts+1, error=?, retry_at=?, '
+                            'failed_at=? WHERE id=?', (error, timestamp, now(), ident))
+
+    def analyzed_since(self, account, stamp):
+        """이 시각 뒤에 분석에 성공한 메일이 있는가. 포기해도 되는 실패인지를 이것이 가른다.
+
+        Without it, an account that has run out of quota fails every mail in turn and
+        five hours later the whole queue is marked 포기 — the one failure this cap must
+        not be able to cause. An empty stamp is a mail that has never failed.
+        """
+        if not stamp:
+            return False
+        return self.db.execute('SELECT 1 FROM mail WHERE account=? AND analyzed_at>? LIMIT 1',
+                               (account, stamp)).fetchone() is not None
 
     def unexported(self, account):
         return self.db.execute('SELECT * FROM mail WHERE account=? AND result IS NOT NULL AND exported=0 ORDER BY received LIMIT 50', (account,)).fetchall()
@@ -800,24 +825,31 @@ class Store:
         with self.db:
             for ident in ids:
                 cursor = self.db.execute(
-                    f"UPDATE mail SET attempts=0, retry_at=0, error=''{clause} "
+                    f"UPDATE mail SET attempts=0, retry_at=0, error='', failed_at=''{clause} "
                     "WHERE id=? AND analyzing=''", (ident,))
                 changed += cursor.rowcount
         return changed
 
     def analyzing(self, account):
-        """The id Codex is on right now, or '' — one process at a time, so one row."""
+        """The first id Codex is on right now, or '' — a batch marks all of its own."""
         row = self.db.execute("SELECT id FROM mail WHERE account=? AND analyzing<>'' "
                               'ORDER BY rowid LIMIT 1', (account,)).fetchone()
         return row[0] if row else ''
 
     def mark_analyzing(self, account, ident):
-        """Exactly one row carries the marker; clearing first is what keeps it true."""
+        """Only what Codex has right now carries the marker; clearing first keeps it true.
+
+        An id or a list of them: one codex exec now reads up to BATCH_MAILS at a time,
+        and every one of those rows is 분석 중 until that call comes back.
+        """
+        ids = [ident] if isinstance(ident, str) else [one for one in ident if one]
         with self.db:
             self.db.execute("UPDATE mail SET analyzing='' WHERE account=? AND analyzing<>''",
                             (account,))
-            if ident:
-                self.db.execute('UPDATE mail SET analyzing=? WHERE id=?', (now(), ident))
+            stamp = now()
+            for one in ids:
+                if one:
+                    self.db.execute('UPDATE mail SET analyzing=? WHERE id=?', (stamp, one))
 
     def set_todo_hidden(self, ident, hidden=True):
         """Take a mail's card off the 할 일 판 without touching the mail itself."""

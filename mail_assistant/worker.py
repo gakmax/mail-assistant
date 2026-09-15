@@ -6,11 +6,23 @@ from .core import NO_RETRY, Store, account_key, now
 from .excel import Excel, error_detail
 from .overview import briefing_due, briefing_input, trend
 from .report import remember_secret, report
-from .services import (BODY_LIMIT, Unanalyzable, analyze, briefing, check_login,
-                       fetch_mail, read_password)
+from .services import (BODY_LIMIT, Unanalyzable, analyze_many, analyze_one, briefing,
+                       check_login, fetch_mail, group_mails, prepare, read_password)
 
 # A failed briefing waits this long, rather than retrying on every 180-second cycle.
 BRIEF_BACKOFF = 1800
+# 한 메일이 이만큼 실패하면 더 묻지 않는다. 전에는 상한이 없어서, 240초 안에 끝나지 않는
+# 한 통이 매시간 같은 값을 치르며 영원히 돌았다 — 백오프는 한 시간에서 멈추고 attempts는
+# 아무것도 하지 않았다. 다만 이 상한이 한도 소진을 메일 전체의 포기로 바꿔서는 안 되므로,
+# 포기는 (1) 혼자 분석하다 실패했고 (2) 그 메일이 마지막으로 실패한 뒤 다른 메일은 분석에
+# 성공했을 때만 일어난다 — 즉 Codex는 멀쩡한데 이 메일만 안 되는 것이 확인된 때만.
+MAX_ATTEMPTS = 5
+GIVE_UP = (f'분석이 {MAX_ATTEMPTS}회 실패해 더 시도하지 않습니다. '
+           '메일을 열어 다시 분석을 누르면 한 번 더 시도합니다.')
+
+
+def subject_of(row):
+    return (row['subject'] or '(제목 없음)')[:40]
 
 
 def connect_detail(exc, password):
@@ -56,27 +68,12 @@ def run(config, directory, stop, notify, wake=None):
             if pending and time.time() >= next_analysis and not stop.is_set():
                 try:
                     check_login()
-                    for index, row in enumerate(pending, 1):
-                        if stop.is_set():
-                            break
-                        # Which mail, and how far in: '분석 중' alone left the user
-                        # unable to tell a slow analysis from a stuck one.
-                        subject = (row['subject'] or '(제목 없음)')[:40]
-                        notify(f'메일 분석 중 {index}/{len(pending)}: {subject}'
-                               ' — 중지하면 현재 분석이 끝난 뒤 멈춥니다.')
-                        # The screens read this, not the log line above: a list is not
-                        # watching the log, and '분석 대기' for four minutes reads as a
-                        # mail nobody has started on.
-                        store.mark_analyzing(account, row['id'])
+                    # 파싱부터 먼저. 분석할 수 없는 메일은 Codex를 한 번도 부르지 않고
+                    # 여기서 내려놓고, 남은 것만 크기와 실패 횟수를 들고 묶음으로 간다.
+                    ready, entries = {}, []
+                    for row in pending:
                         try:
-                            parsed, result = analyze(row, config)
-                            store.analyzed(row['id'], parsed, result)
-                            if parsed.get('clipped'):
-                                # Not silent anywhere: the mail carries the notice and
-                                # 실행 says it too, because a clipped analysis reads
-                                # exactly like a whole one.
-                                messages.append(f'본문이 길어 앞 {BODY_LIMIT:,}자만 분석: '
-                                                f'{subject}')
+                            parsed, sent = prepare(row)
                         except Unanalyzable as exc:
                             # Nothing a retry can change, so this mail is put down where
                             # it is: no global backoff, because the queue behind it is
@@ -84,18 +81,75 @@ def run(config, directory, stop, notify, wake=None):
                             # again every hour for ever is one the reader stops reading.
                             # The mail says why on its own row, and 분석 실패 counts it.
                             store.failed(row['id'], str(exc), NO_RETRY)
-                            messages.append(f'분석 제외: {subject} — {exc}')
+                            messages.append(f'분석 제외: {subject_of(row)} — {exc}')
                             continue
+                        ready[row['id']] = (row, parsed, sent)
+                        entries.append({'id': row['id'], 'attempts': row['attempts'],
+                                        'size': len(sent['body'])})
+                    seen = 0
+                    for group in group_mails(entries):
+                        if stop.is_set():
+                            break
+                        rows = [ready[ident][0] for ident in group]
+                        # Which mail, and how far in: '분석 중' alone left the user
+                        # unable to tell a slow analysis from a stuck one.
+                        span = (f'{seen + 1}' if len(group) == 1
+                                else f'{seen + 1}-{seen + len(group)}')
+                        what = (subject_of(rows[0]) if len(group) == 1
+                                else f'{len(group)}통 묶음: ' + subject_of(rows[0]))
+                        notify(f'메일 분석 중 {span}/{len(entries)}: {what}'
+                               ' — 중지하면 현재 분석이 끝난 뒤 멈춥니다.')
+                        # The screens read this, not the log line above: a list is not
+                        # watching the log, and '분석 대기' for four minutes reads as a
+                        # mail nobody has started on. A whole batch carries it.
+                        store.mark_analyzing(account, group)
+                        seen += len(group)
+                        try:
+                            if len(group) == 1:
+                                found = {group[0]: analyze_one(ready[group[0]][2], config)}
+                            else:
+                                found = analyze_many([(ident, ready[ident][2])
+                                                      for ident in group], config)
                         except Exception as exc:
-                            report('분석 실패', exc, f"{row['attempts'] + 1}번째 시도")
+                            report('분석 실패', exc,
+                                   f"{len(group)}건, {rows[0]['attempts'] + 1}번째 시도")
                             # Back off globally too, so rate limits don't trigger repeated calls.
-                            delay = min(3600, 300 * 2 ** min(row['attempts'], 4))
+                            delay = min(3600, 300 * 2 ** min(rows[0]['attempts'], 4))
                             next_analysis = time.time() + delay
-                            store.failed(row['id'], '분석 실패: 로그인·한도·본문 형식을 확인하세요.', next_analysis)
-                            messages.append(f'분석 대기: 약 {delay // 60}분 후 재시도합니다.')
+                            waits = 0
+                            for row in rows:
+                                # 포기는 이 메일만의 실패가 확인된 때뿐이다 — 혼자 갔고,
+                                # 지난 실패 뒤에 다른 메일은 분석에 성공했을 때.
+                                if (len(group) == 1 and row['attempts'] + 1 >= MAX_ATTEMPTS
+                                        and store.analyzed_since(account, row['failed_at'])):
+                                    store.failed(row['id'], GIVE_UP, NO_RETRY)
+                                    messages.append(f'분석 포기: {subject_of(row)} — ' + GIVE_UP)
+                                    continue
+                                store.failed(row['id'], '분석 실패: 로그인·한도·본문 형식을 확인하세요.',
+                                             next_analysis)
+                                waits += 1
+                            if waits:
+                                # 묶음이면 다섯 통이 같은 문장을 다섯 번 쓰게 된다. 한 번만.
+                                messages.append(f'분석 대기: {waits}건, 약 {delay // 60}분 후 재시도합니다.')
                             break
                         finally:
                             store.mark_analyzing(account, '')
+                        for ident in group:
+                            row, parsed, _ = ready[ident]
+                            result = found.get(ident)
+                            if result is None:
+                                # 묶음에서 빠져 돌아왔다. 전체 백오프 없이, 다음 주기에
+                                # 혼자 다시 간다 — group_mails()가 attempts로 가른다.
+                                store.failed(ident, '분석 결과가 오지 않아 한 통씩 다시 시도합니다.', 0)
+                                messages.append(f'다시 시도 예정: {subject_of(row)}')
+                                continue
+                            store.analyzed(ident, parsed, result)
+                            if parsed.get('clipped'):
+                                # Not silent anywhere: the mail carries the notice and
+                                # 실행 says it too, because a clipped analysis reads
+                                # exactly like a whole one.
+                                messages.append(f'본문이 길어 앞부분 {BODY_LIMIT:,}자만 분석: '
+                                                f'{subject_of(row)}')
                 except Exception as exc:
                     report('Codex 로그인 확인 실패', exc)
                     next_analysis = time.time() + 300

@@ -38,7 +38,8 @@ from mail_assistant.services import (BODY_LIMIT, DRAFT_BODY_LIMIT, DRAFT_TONES,
                                       TRANSLATE_LIMIT, analyze, briefing, chat_reply,
                                       chat_schema, draft, draft_schema, fetch_mail,
                                       read_password, save_password, translate,
-                                      translate_schema)
+                                      translate_schema, BATCH_CHARS, BATCH_MAILS,
+                                      analyze_many, group_mails, prepare, squeeze_body)
 
 
 CONFIG = {'host': 'pop3s.hiworks.com', 'port': 995, 'email': 'test@example.com', 'model': ''}
@@ -2276,7 +2277,8 @@ class WorkerTests(unittest.TestCase):
 class AnalyzingMarkerTests(unittest.TestCase):
     """The worker's own end of '분석 중': set before the call, gone after every exit."""
 
-    def run_once(self, directory, analyze):
+    def run_once(self, directory, answer):
+        """`answer` is analyze_one(sent, config)'s: the worker prepares for itself now."""
         from mail_assistant.worker import run
         stop = MagicMock()
         # One whole cycle: counting is_set() calls breaks the moment the loop grows a
@@ -2284,10 +2286,13 @@ class AnalyzingMarkerTests(unittest.TestCase):
         stop.is_set.return_value = False
         stop.wait.side_effect = lambda *_: stop.is_set.configure_mock(return_value=True)
         messages = []
+        # write_briefing은 반드시 막는다: 분석에 성공하면 대기열이 비고 브리핑이 due가
+        # 되므로, 패치하지 않은 테스트는 진짜 Codex를 부르고 진짜 사용량을 쓴다.
         with patch('mail_assistant.worker.fetch_mail', return_value='새 메일 0건 수집'), \
                 patch('mail_assistant.worker.read_password', return_value='test'), \
                 patch('mail_assistant.worker.check_login'), \
-                patch('mail_assistant.worker.analyze', side_effect=analyze), \
+                patch('mail_assistant.worker.analyze_one', side_effect=answer), \
+                patch('mail_assistant.worker.write_briefing'), \
                 patch('mail_assistant.worker.Excel'):
             run({**CONFIG, 'workbook': str(directory / 'test.xlsx'), 'interval': 180},
                 directory, stop, messages.append)
@@ -2305,13 +2310,13 @@ class AnalyzingMarkerTests(unittest.TestCase):
             directory, ident = self.prepared(folder)
             seen = []
 
-            def analyze(row, config):
+            def answer(sent, config=None):
                 store = Store(directory / 'mail.db')
                 seen.append(store.analyzing(account_key(CONFIG)))
                 store.db.close()
-                return parse_mail(mail()), RESULT
+                return RESULT
 
-            self.run_once(directory, analyze)
+            self.run_once(directory, answer)
             self.assertEqual(seen, [ident])
             store = Store(directory / 'mail.db')
             self.assertEqual(store.analyzing(account_key(CONFIG)), '')
@@ -2333,14 +2338,14 @@ class AnalyzingMarkerTests(unittest.TestCase):
             store = Store(directory / 'mail.db')
             store.mark_analyzing(account_key(CONFIG), ident)
             store.db.close()
-            self.run_once(directory, lambda row, config: (parse_mail(mail()), RESULT))
+            self.run_once(directory, lambda sent, config=None: RESULT)
             store = Store(directory / 'mail.db')
             self.assertEqual(store.analyzing(account_key(CONFIG)), '')
             store.db.close()
 
 
 class BodyLimitTests(unittest.TestCase):
-    """60,000자 상한은 일부러 있는 것이고, 거절의 *종류*가 무엇이냐가 요점이다."""
+    """본문 상한은 일부러 있는 것이고, 거절의 *종류*가 무엇이냐가 요점이다."""
 
     def oversize(self):
         msg = EmailMessage()
@@ -2443,22 +2448,51 @@ class BodyLimitTests(unittest.TestCase):
 class UnanalyzableTests(unittest.TestCase):
     """다시 물어도 같은 답이 나오는 실패는, 다시 묻지 않는다."""
 
-    def run_once(self, directory, analyze, reports):
+    def run_once(self, directory, reports, prepare=None, answer=None, asked=None):
+        """Unanalyzable은 이제 prepare()에서 나온다 — worker가 Codex를 부르기 *전*이다.
+
+        That is the split this class is about, so the two are patched separately: what
+        refuses a mail and what fails while analysing it are no longer the same call.
+        """
         from mail_assistant.worker import run
         stop = MagicMock()
         stop.is_set.return_value = False
         stop.wait.side_effect = lambda *_: stop.is_set.configure_mock(return_value=True)
         messages = []
+
+        def analysed(sent, config=None):
+            if asked is not None:
+                asked.append(sent.get('subject'))
+            if answer is None:
+                return RESULT
+            return answer(sent, config)
+
+        def batched(items, config=None):
+            return {ident: analysed(sent, config) for ident, sent in items}
+
         with patch('mail_assistant.worker.fetch_mail', return_value='새 메일 0건 수집'), \
                 patch('mail_assistant.worker.read_password', return_value='test'), \
                 patch('mail_assistant.worker.check_login'), \
-                patch('mail_assistant.worker.analyze', side_effect=analyze), \
+                patch('mail_assistant.worker.analyze_one', side_effect=analysed), \
+                patch('mail_assistant.worker.analyze_many', side_effect=batched), \
+                patch('mail_assistant.worker.write_briefing'), \
                 patch('mail_assistant.worker.report',
                       side_effect=lambda *args, **kw: reports.append(args)), \
                 patch('mail_assistant.worker.Excel'):
+            if prepare is not None:
+                with patch('mail_assistant.worker.prepare', side_effect=prepare):
+                    run({**CONFIG, 'workbook': str(directory / 'test.xlsx'), 'interval': 180},
+                        directory, stop, messages.append)
+                return messages
             run({**CONFIG, 'workbook': str(directory / 'test.xlsx'), 'interval': 180},
                 directory, stop, messages.append)
         return messages
+
+    # 다시 물어도 같은 답이 나오는 실패 하나, 두 통 모두에.
+    REFUSAL = '본문을 읽지 못했습니다. 원문은 그대로 보관됩니다.'
+
+    def refuse(self, row):
+        raise Unanalyzable(self.REFUSAL)
 
     def two_mails(self, folder):
         directory = Path(folder)
@@ -2471,19 +2505,17 @@ class UnanalyzableTests(unittest.TestCase):
     def test_an_oversize_body_is_put_down_rather_than_asked_again(self):
         with tempfile.TemporaryDirectory() as folder:
             directory, first, _ = self.two_mails(folder)
-            reports = []
-
-            def analyze(row, config):
-                raise Unanalyzable('본문이 60,000자를 초과해 분석하지 않았습니다.')
-
-            self.run_once(directory, analyze, reports)
+            reports, asked = [], []
+            self.run_once(directory, reports, prepare=self.refuse, asked=asked)
             store = Store(directory / 'mail.db')
             row = store.detail(first)
             # No clock brings it back; 다시 분석 is the only way in.
             self.assertEqual(row['retry_at'], NO_RETRY)
             self.assertEqual(store.pending(account_key(CONFIG), time.time()), [])
             # And the mail itself says why, rather than '로그인·한도·본문 형식을 확인하세요'.
-            self.assertIn('60,000자', row['error'])
+            self.assertIn(self.REFUSAL, row['error'])
+            # Codex was never asked: prepare() refuses before a slot is taken at all.
+            self.assertEqual(asked, [])
             store.db.close()
 
     def test_it_never_reaches_the_crash_channel(self):
@@ -2491,8 +2523,7 @@ class UnanalyzableTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             directory, _, _ = self.two_mails(folder)
             reports = []
-            self.run_once(directory, lambda row, config: (_ for _ in ()).throw(
-                Unanalyzable('본문이 깁니다.')), reports)
+            self.run_once(directory, reports, prepare=self.refuse)
             self.assertEqual([stage for stage, *_ in reports], [])
 
     def test_the_queue_behind_it_carries_on_in_the_same_cycle(self):
@@ -2500,25 +2531,27 @@ class UnanalyzableTests(unittest.TestCase):
         one mail that can never be analysed must not cost the mailbox that."""
         with tempfile.TemporaryDirectory() as folder:
             directory, first, second = self.two_mails(folder)
-            reports, seen = [], []
+            reports, asked = [], []
+            from mail_assistant.services import prepare as real_prepare
 
-            def analyze(row, config):
-                seen.append(row['id'])
+            def prepare(row):
                 if row['id'] == first:
-                    raise Unanalyzable('본문이 깁니다.')
-                return parse_mail(mail()), RESULT
+                    raise Unanalyzable(self.REFUSAL)
+                return real_prepare(row)
 
-            self.run_once(directory, analyze, reports)
-            self.assertEqual(seen, [first, second])
+            self.run_once(directory, reports, prepare=prepare, asked=asked)
             store = Store(directory / 'mail.db')
             self.assertIsNotNone(store.detail(second)['result'])
+            # The one that could never be analysed never reached Codex, and the one
+            # behind it was analysed in the same cycle rather than an hour later.
+            self.assertEqual(len(asked), 1)
+            self.assertEqual(store.detail(first)['retry_at'], NO_RETRY)
             store.db.close()
 
     def test_다시_분석_is_the_way_back_in(self):
         with tempfile.TemporaryDirectory() as folder:
             directory, first, _ = self.two_mails(folder)
-            self.run_once(directory, lambda row, config: (_ for _ in ()).throw(
-                Unanalyzable('본문이 깁니다.')), [])
+            self.run_once(directory, [], prepare=self.refuse)
             store = Store(directory / 'mail.db')
             self.assertEqual(store.reset([first]), 1)
             self.assertEqual([row['id'] for row in
@@ -2531,14 +2564,377 @@ class UnanalyzableTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             directory, first, _ = self.two_mails(folder)
             reports = []
-            self.run_once(directory, lambda row, config: (_ for _ in ()).throw(
-                RuntimeError('rate limited')), reports)
+            self.run_once(directory, reports, answer=lambda sent, config=None: (
+                _ for _ in ()).throw(RuntimeError('rate limited')))
             store = Store(directory / 'mail.db')
             row = store.detail(first)
             self.assertLess(row['retry_at'], NO_RETRY)
             self.assertGreater(row['retry_at'], time.time())
             store.db.close()
             self.assertEqual([stage for stage, *_ in reports], ['분석 실패'])
+
+
+class SqueezeTests(unittest.TestCase):
+    """Codex로 가는 사본에서만 공백을 접는다. 저장되는 원문은 화면이 읽는 그것이다."""
+
+    HTML = ('<div style="padding:20px">\n      <p>\n        안녕하세요.\n      </p>\n'
+            '      <p>\n        견적서를 보냅니다.\n      </p>\n    </div>')
+
+    def test_the_indentation_html_mail_arrives_with_is_dropped(self):
+        text = text_of_html(self.HTML)
+        self.assertGreater(len(text), len(squeeze_body(text)) * 1.5)
+        self.assertEqual(squeeze_body(text).splitlines()[0], '안녕하세요.')
+
+    def test_a_run_of_blank_lines_becomes_one(self):
+        self.assertEqual(squeeze_body('가\n\n\n\n나'), '가\n\n나')
+
+    def test_a_gap_inside_a_line_is_left_alone(self):
+        """평문 메일이 표를 그리는 자리다. 그것까지 접으면 숫자가 어느 칸의 것인지 사라진다."""
+        self.assertEqual(squeeze_body('품번      수량\nA26090135      10'),
+                         '품번      수량\nA26090135      10')
+
+    def test_what_is_stored_still_has_every_space_in_it(self):
+        message = EmailMessage()
+        message['Subject'] = 'HTML 메일'
+        message['From'] = 'sender@example.com'
+        message['Date'] = 'Thu, 10 Sep 2026 10:00:00 +0900'
+        message.set_content(self.HTML, subtype='html')
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            store.add(account_key(CONFIG), 'html', message.as_bytes())
+            row = store.pending(account_key(CONFIG), time.time())[0]
+            parsed, sent = prepare(row)
+            store.db.close()
+        self.assertGreater(len(parsed['body']), len(sent['body']))
+        self.assertIn('\n      ', parsed['body'])
+
+    def test_whitespace_alone_no_longer_costs_a_mail_its_ending(self):
+        """상한을 먹는 것이 들여쓰기이면, 잘리는 것은 진짜 내용이다."""
+        body = ('가' * 40 + ' ' * 200 + '\n') * 300        # 72,000자, 내용은 12,000자
+        message = EmailMessage()
+        message['Subject'] = '긴 메일'
+        message['From'] = 'sender@example.com'
+        message['Date'] = 'Thu, 10 Sep 2026 10:00:00 +0900'
+        message.set_content(body)
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            store.add(account_key(CONFIG), 'padded', message.as_bytes())
+            row = store.pending(account_key(CONFIG), time.time())[0]
+            parsed, sent = prepare(row)
+            store.db.close()
+        self.assertGreater(len(parsed['body']), BODY_LIMIT)
+        self.assertNotIn('clipped', sent)               # 접고 나니 상한 아래다
+        self.assertNotIn('clipped', parsed)
+
+
+class GroupMailsTests(unittest.TestCase):
+    """무엇을 묶고 무엇을 혼자 보내는가. codex exec 한 번의 고정비를 나누는 규칙이다."""
+
+    def entries(self, *specs):
+        return [{'id': ident, 'attempts': attempts, 'size': size}
+                for ident, attempts, size in specs]
+
+    def test_new_mail_travels_together(self):
+        rows = self.entries(*[(f'm{i}', 0, 100) for i in range(3)])
+        self.assertEqual(group_mails(rows), [['m0', 'm1', 'm2']])
+
+    def test_the_count_bounds_a_group(self):
+        rows = self.entries(*[(f'm{i}', 0, 10) for i in range(BATCH_MAILS + 2)])
+        groups = group_mails(rows)
+        self.assertEqual(len(groups[0]), BATCH_MAILS)
+        self.assertEqual(len(groups[1]), 2)
+
+    def test_the_character_budget_bounds_a_group(self):
+        rows = self.entries(('a', 0, BATCH_CHARS - 10), ('b', 0, 100))
+        self.assertEqual(group_mails(rows), [['a'], ['b']])
+
+    def test_one_mail_bigger_than_the_budget_goes_by_itself(self):
+        rows = self.entries(('big', 0, BATCH_CHARS * 2), ('b', 0, 10))
+        self.assertEqual(group_mails(rows), [['big'], ['b']])
+
+    def test_a_mail_that_has_failed_before_goes_alone(self):
+        """묶음이 통째로 실패했을 때 범인이 스스로 드러나게 하는 것이 이 규칙의 전부다."""
+        rows = self.entries(('fresh', 0, 10), ('burnt', 2, 10), ('other', 0, 10))
+        self.assertEqual(group_mails(rows), [['fresh'], ['burnt'], ['other']])
+
+    def test_the_order_mail_arrived_in_survives(self):
+        rows = self.entries(('a', 0, 10), ('b', 0, 10), ('c', 1, 10), ('d', 0, 10))
+        self.assertEqual(group_mails(rows), [['a', 'b'], ['c'], ['d']])
+
+
+class BatchAnalysisTests(unittest.TestCase):
+    """여러 통이 codex exec 한 번으로 간다. 나머지는 답을 어느 메일의 것으로 돌리느냐다."""
+
+    def sent(self, ident, subject):
+        return (ident, {'subject': subject, 'body': '본문', 'date': '', 'attachments': []})
+
+    def call(self, answer):
+        """analyze_many() against a fake Codex, returning (what was sent, what came back)."""
+        seen = {}
+
+        def execute(command, **kwargs):
+            seen['input'] = kwargs['input']
+            Path(command[command.index('-o') + 1]).write_text(
+                json.dumps(answer, ensure_ascii=False), encoding='utf-8')
+            return subprocess.CompletedProcess(command, 0)
+
+        with patch('mail_assistant.services.codex_command', return_value=['codex']), \
+             patch('mail_assistant.services.subprocess.run', side_effect=execute) as run:
+            found = analyze_many([self.sent('id-a', '첫 메일'), self.sent('id-b', '둘째')],
+                                 CONFIG)
+        return seen['input'], found, run
+
+    def answer(self, *idents):
+        return {'results': [{'mail_id': ident, **RESULT} for ident in idents]}
+
+    def test_two_mails_are_one_codex_process(self):
+        text, found, run = self.call(self.answer('id-a', 'id-b'))
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(set(found), {'id-a', 'id-b'})
+        self.assertIn('첫 메일', text)
+        self.assertIn('둘째', text)
+
+    def test_the_model_is_told_not_to_mix_them(self):
+        """한 메일의 마감이 옆 메일의 근거가 되면 달력과 엑셀까지 틀린 채로 흘러간다."""
+        text, _, _ = self.call(self.answer('id-a', 'id-b'))
+        self.assertIn('독립적으로', text)
+        self.assertIn('다른 메일의 근거로 쓰지 마세요', text)
+
+    def test_mail_id_never_reaches_the_stored_result(self):
+        _, found, _ = self.call(self.answer('id-a', 'id-b'))
+        self.assertEqual(found['id-a'], RESULT)
+
+    def test_an_id_the_model_invented_is_dropped(self):
+        _, found, _ = self.call(self.answer('id-a', 'id-made-up'))
+        self.assertEqual(set(found), {'id-a'})
+
+    def test_a_mail_left_out_of_the_answer_is_simply_absent(self):
+        """부르는 쪽이 그것을 보고 다음 주기에 한 통씩 다시 보낸다."""
+        _, found, _ = self.call(self.answer('id-a'))
+        self.assertEqual(set(found), {'id-a'})
+
+    def test_a_broken_date_costs_only_its_own_mail(self):
+        broken = {'results': [{'mail_id': 'id-a', **RESULT},
+                              {'mail_id': 'id-b', **RESULT,
+                               'events': [{'title': '회신', 'start': '', 'deadline': '다음 주',
+                                           'evidence': '', 'needs_review': False}]}]}
+        _, found, _ = self.call(broken)
+        self.assertEqual(set(found), {'id-a'})
+
+
+class WorkerBatchTests(unittest.TestCase):
+    """한 주기에 Codex를 몇 번 부르는가, 그리고 묶음이 깨졌을 때 무엇이 혼자 가는가."""
+
+    def cycle(self, directory, one=None, many=None, reports=None):
+        """한 주기. 부른 것을 그대로 돌려주므로 호출 횟수와 묶음 크기를 셀 수 있다."""
+        from mail_assistant.worker import run
+        stop = MagicMock()
+        stop.is_set.return_value = False
+        stop.wait.side_effect = lambda *_: stop.is_set.configure_mock(return_value=True)
+        calls, messages = [], []
+
+        def solo(sent, config=None):
+            calls.append([sent.get('subject')])
+            return RESULT if one is None else one(sent)
+
+        def batch(items, config=None):
+            calls.append([sent.get('subject') for _, sent in items])
+            if many is not None:
+                return many(items)
+            return {ident: RESULT for ident, _ in items}
+
+        with patch('mail_assistant.worker.fetch_mail', return_value='새 메일 0건 수집'), \
+                patch('mail_assistant.worker.read_password', return_value='test'), \
+                patch('mail_assistant.worker.check_login'), \
+                patch('mail_assistant.worker.analyze_one', side_effect=solo), \
+                patch('mail_assistant.worker.analyze_many', side_effect=batch), \
+                patch('mail_assistant.worker.write_briefing'), \
+                patch('mail_assistant.worker.report',
+                      side_effect=lambda *args, **kw: (reports if reports is not None
+                                                       else []).append(args)), \
+                patch('mail_assistant.worker.Excel'):
+            run({**CONFIG, 'workbook': str(directory / 'test.xlsx'), 'interval': 180},
+                directory, stop, messages.append)
+        return calls, messages
+
+    def stocked(self, folder, count):
+        directory = Path(folder)
+        store = Store(directory / 'mail.db')
+        idents = []
+        for index in range(count):
+            message = EmailMessage()
+            message['Subject'] = f'메일 {index}'
+            message['From'] = 'sender@example.com'
+            message['Date'] = 'Thu, 10 Sep 2026 10:00:00 +0900'
+            message.set_content('9월 11일까지 회신 부탁드립니다.')
+            idents.append(store.add(account_key(CONFIG), f'uid-{index}',
+                                    message.as_bytes()))
+        store.db.close()
+        return directory, idents
+
+    def test_a_cycle_of_new_mail_is_one_codex_call(self):
+        """이 변경의 전부다. 다섯 통이면 다섯 번이 아니라 한 번."""
+        with tempfile.TemporaryDirectory() as folder:
+            directory, idents = self.stocked(folder, BATCH_MAILS)
+            calls, _ = self.cycle(directory)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(len(calls[0]), BATCH_MAILS)
+            store = Store(directory / 'mail.db')
+            for ident in idents:
+                self.assertIsNotNone(store.detail(ident)['result'])
+            store.db.close()
+
+    def test_every_mail_in_the_batch_carries_분석_중_while_it_runs(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory, idents = self.stocked(folder, 3)
+            seen = []
+
+            def many(items):
+                store = Store(directory / 'mail.db')
+                seen.extend(row['id'] for row in store.page(account_key(CONFIG))
+                            if row['analyzing'])
+                store.db.close()
+                return {ident: RESULT for ident, _ in items}
+
+            self.cycle(directory, many=many)
+            self.assertEqual(sorted(seen), sorted(idents))
+            store = Store(directory / 'mail.db')
+            self.assertEqual(store.analyzing(account_key(CONFIG)), '')
+            store.db.close()
+
+    def test_a_mail_the_answer_left_out_comes_back_alone(self):
+        """빠진 한 통 때문에 나머지를 버리지 않는다. 그 한 통만 다음 주기에 혼자 간다."""
+        with tempfile.TemporaryDirectory() as folder:
+            directory, idents = self.stocked(folder, 3)
+            missing = idents[1]
+            self.cycle(directory, many=lambda items: {ident: RESULT for ident, _ in items
+                                                      if ident != missing})
+            store = Store(directory / 'mail.db')
+            row = store.detail(missing)
+            self.assertIsNone(row['result'])
+            self.assertEqual(row['attempts'], 1)
+            # 전체 백오프가 아니다: 다음 주기에 바로 다시 간다.
+            self.assertEqual(row['retry_at'], 0)
+            self.assertIsNotNone(store.detail(idents[0])['result'])
+            store.db.close()
+            # 그리고 혼자 간다 — group_mails()가 attempts로 가른다.
+            calls, _ = self.cycle(directory)
+            self.assertEqual(calls, [['메일 1']])
+
+    def test_a_batch_that_fails_sends_every_one_of_them_alone_next_time(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory, idents = self.stocked(folder, 3)
+            self.cycle(directory, many=lambda items: (_ for _ in ()).throw(
+                RuntimeError('rate limited')))
+            store = Store(directory / 'mail.db')
+            rows = [store.detail(ident) for ident in idents]
+            self.assertEqual([row['attempts'] for row in rows], [1, 1, 1])
+            # 아무도 포기당하지 않는다: 묶음의 실패는 그 메일의 잘못이 아니다.
+            self.assertTrue(all(row['retry_at'] < NO_RETRY for row in rows))
+            for row in rows:
+                store.db.execute('UPDATE mail SET retry_at=0 WHERE id=?', (row['id'],))
+            store.db.commit()
+            store.db.close()
+            calls, _ = self.cycle(directory)
+            self.assertEqual(calls, [['메일 0'], ['메일 1'], ['메일 2']])
+
+    def test_one_wait_line_rather_than_one_for_each_mail(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory, _ = self.stocked(folder, 3)
+            _, messages = self.cycle(directory, many=lambda items: (_ for _ in ()).throw(
+                RuntimeError('rate limited')))
+            waits = [line for line in ' / '.join(messages).split(' / ')
+                     if line.startswith('분석 대기')]
+            self.assertEqual(len(waits), 1)
+            self.assertIn('3건', waits[0])
+
+
+class GiveUpTests(unittest.TestCase):
+    """영원한 재시도를 끊되, 한도 소진을 '메일 전체 포기'로 바꾸지는 않는다."""
+
+    def prepared(self, folder, attempts):
+        """실패를 `attempts`번 쌓은 메일 하나, 그리고 두 번째 메일 하나."""
+        directory = Path(folder)
+        store = Store(directory / 'mail.db')
+        first = store.add(account_key(CONFIG), 'stuck', mail())
+        second = store.add(account_key(CONFIG), 'other', mail())
+        for _ in range(attempts):
+            store.failed(first, '분석 실패', 0)
+        return directory, store, first, second
+
+    def cycle(self, directory):
+        from mail_assistant.worker import run
+        stop = MagicMock()
+        stop.is_set.return_value = False
+        stop.wait.side_effect = lambda *_: stop.is_set.configure_mock(return_value=True)
+        messages = []
+        with patch('mail_assistant.worker.fetch_mail', return_value='새 메일 0건 수집'), \
+                patch('mail_assistant.worker.read_password', return_value='test'), \
+                patch('mail_assistant.worker.check_login'), \
+                patch('mail_assistant.worker.analyze_one',
+                      side_effect=RuntimeError('rate limited')), \
+                patch('mail_assistant.worker.write_briefing'), \
+                patch('mail_assistant.worker.report'), \
+                patch('mail_assistant.worker.Excel'):
+            run({**CONFIG, 'workbook': str(directory / 'test.xlsx'), 'interval': 180},
+                directory, stop, messages.append)
+        return messages
+
+    def test_it_is_put_down_once_codex_is_known_to_be_working(self):
+        from mail_assistant.worker import MAX_ATTEMPTS
+        with tempfile.TemporaryDirectory() as folder:
+            directory, store, first, second = self.prepared(folder, MAX_ATTEMPTS - 1)
+            # 이 메일이 마지막으로 실패한 *뒤에* 다른 메일이 분석에 성공했다.
+            store.analyzed(second, parse_mail(mail()), RESULT)
+            store.db.close()
+            messages = self.cycle(directory)
+            store = Store(directory / 'mail.db')
+            row = store.detail(first)
+            self.assertEqual(row['retry_at'], NO_RETRY)
+            self.assertIn('더 시도하지 않습니다', row['error'])
+            self.assertIn('분석 포기', ' / '.join(messages))
+            store.db.close()
+
+    def test_a_quota_outage_never_puts_the_queue_down(self):
+        """아무것도 성공하지 못했다면 한도나 로그인 쪽이고, 그것은 메일의 잘못이 아니다."""
+        from mail_assistant.worker import MAX_ATTEMPTS
+        with tempfile.TemporaryDirectory() as folder:
+            directory, store, first, _ = self.prepared(folder, MAX_ATTEMPTS - 1)
+            store.db.close()
+            self.cycle(directory)
+            store = Store(directory / 'mail.db')
+            row = store.detail(first)
+            self.assertLess(row['retry_at'], NO_RETRY)
+            self.assertGreater(row['retry_at'], time.time())
+            store.db.close()
+
+    def test_다시_분석_is_still_the_way_back_in(self):
+        from mail_assistant.worker import MAX_ATTEMPTS
+        with tempfile.TemporaryDirectory() as folder:
+            directory, store, first, second = self.prepared(folder, MAX_ATTEMPTS - 1)
+            store.analyzed(second, parse_mail(mail()), RESULT)
+            store.db.close()
+            self.cycle(directory)
+            store = Store(directory / 'mail.db')
+            self.assertEqual(store.reset([first]), 1)
+            row = store.detail(first)
+            self.assertEqual(row['attempts'], 0)
+            self.assertEqual(row['failed_at'], '')
+            self.assertEqual([one['id'] for one in
+                              store.pending(account_key(CONFIG), time.time())], [first])
+            store.db.close()
+
+    def test_analyzed_since_is_what_tells_the_two_apart(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory, store, first, second = self.prepared(folder, 1)
+            stamp = store.detail(first)['failed_at']
+            self.assertTrue(stamp)
+            self.assertFalse(store.analyzed_since(account_key(CONFIG), stamp))
+            store.analyzed(second, parse_mail(mail()), RESULT)
+            self.assertTrue(store.analyzed_since(account_key(CONFIG), stamp))
+            # 한 번도 실패한 적 없는 메일에는 물어볼 것이 없다.
+            self.assertFalse(store.analyzed_since(account_key(CONFIG), ''))
+            store.db.close()
 
 
 class ConsoleTests(unittest.TestCase):
