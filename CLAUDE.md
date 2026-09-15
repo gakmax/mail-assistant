@@ -17,7 +17,7 @@ that break silently if you don't know them.
 ## Commands
 
 ```bash
-python -m unittest discover -s tests -v    # from the repo root; 675 tests, all platforms
+python -m unittest discover -s tests -v    # from the repo root; 683 tests, all platforms
 ```
 
 ```powershell
@@ -873,6 +873,19 @@ the rule that stdout is never persisted were four copies of the same twenty-five
 and are now one. A new caller passes a prefix, a prompt, a payload, a schema and its
 own Korean failure sentence — and nothing else, because everything else is the part
 that must not drift.
+
+**A failure a retry cannot fix is `services.Unanalyzable`, and the worker puts that
+mail down.** The 60,000-character guard in `analyze()` is deliberate — clipping would
+silently lose whatever deadline was in the second half — but for six cycles it was
+raised as a plain `RuntimeError`, which is the branch that reports to Discord, pushes
+the *global* `next_analysis` backoff to an hour and `break`s the loop. So one mail that
+could never succeed stalled every other mail behind it, for ever, and posted a crash
+report each time round (report.py's 30-minute de-duplication does not help: the backoff
+grows past it). `Unanalyzable` gets its own branch — `store.failed(id, str(exc),
+NO_RETRY)`, no report, no backoff, `continue` — and it is the one failure whose message
+is stored on the mail, because it is ours rather than Codex's output. `core.NO_RETRY` is
+a far-future `retry_at` and `Store.reset()` writing 0 over it is the way back in, which
+is what makes 다시 분석 the only thing that asks again.
 
 **분석은 답변 초안을 쓰지 않는다, and a made one goes into `reply_draft`.** The
 analysis's prompt now says `reply_draft는 항상 빈 문자열` while still judging

@@ -2,11 +2,12 @@ import json
 import time
 from datetime import date, datetime
 
-from .core import Store, account_key, now
+from .core import NO_RETRY, Store, account_key, now
 from .excel import Excel, error_detail
 from .overview import briefing_due, briefing_input, trend
 from .report import remember_secret, report
-from .services import analyze, briefing, check_login, fetch_mail, read_password
+from .services import (Unanalyzable, analyze, briefing, check_login, fetch_mail,
+                       read_password)
 
 # A failed briefing waits this long, rather than retrying on every 180-second cycle.
 BRIEF_BACKOFF = 1800
@@ -70,6 +71,15 @@ def run(config, directory, stop, notify, wake=None):
                         try:
                             parsed, result = analyze(row, config)
                             store.analyzed(row['id'], parsed, result)
+                        except Unanalyzable as exc:
+                            # Nothing a retry can change, so this mail is put down where
+                            # it is: no global backoff, because the queue behind it is
+                            # fine, and no crash report, because a report that arrives
+                            # again every hour for ever is one the reader stops reading.
+                            # The mail says why on its own row, and 분석 실패 counts it.
+                            store.failed(row['id'], str(exc), NO_RETRY)
+                            messages.append(f'분석 제외: {subject} — {exc}')
+                            continue
                         except Exception as exc:
                             report('분석 실패', exc, f"{row['attempts'] + 1}번째 시도")
                             # Back off globally too, so rate limits don't trigger repeated calls.

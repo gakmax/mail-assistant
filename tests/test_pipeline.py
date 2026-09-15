@@ -13,7 +13,8 @@ from email.message import EmailMessage
 from pathlib import Path
 from unittest.mock import call, patch, MagicMock
 
-from mail_assistant.core import (ANALYZING, FAILED, HANDLED, HEADERS, PRIORITY_ORDER, ROOM_MARK, Store,
+from mail_assistant.core import (ANALYZING, FAILED, HANDLED, HEADERS, NO_RETRY,
+                                 PRIORITY_ORDER, ROOM_MARK, Store,
                                  account_key, STATES, STATE_SQL, day_bounds, filter_rows,
                                  local_text, parse_mail, row_view, sql_text, state_of,
                                  table_text, text_of_html, workbook_rows)
@@ -31,7 +32,8 @@ from mail_assistant.settings import (GRADES, field_errors, model_choices, model_
                                      model_rows, model_traits, normalize, read_models)
 from mail_assistant.services import check_connection, connection_steps, login_state
 from mail_assistant.style import STYLE_VERSION, URGENT, apply_style
-from mail_assistant.services import (DRAFT_BODY_LIMIT, DRAFT_TONES, DRAFT_WAYS,
+from mail_assistant.services import (BODY_LIMIT, DRAFT_BODY_LIMIT, DRAFT_TONES,
+                                      DRAFT_WAYS, Unanalyzable,
                                       TRANSLATE_LIMIT, analyze, briefing, chat_reply,
                                       chat_schema, draft, draft_schema, fetch_mail,
                                       read_password, save_password, translate,
@@ -2264,6 +2266,154 @@ class AnalyzingMarkerTests(unittest.TestCase):
             store = Store(directory / 'mail.db')
             self.assertEqual(store.analyzing(account_key(CONFIG)), '')
             store.db.close()
+
+
+class BodyLimitTests(unittest.TestCase):
+    """60,000자 상한은 일부러 있는 것이고, 거절의 *종류*가 무엇이냐가 요점이다."""
+
+    def oversize(self):
+        msg = EmailMessage()
+        msg['Subject'] = '긴 메일'
+        msg['From'] = 'sender@example.com'
+        msg['Date'] = 'Thu, 10 Sep 2026 10:00:00 +0900'
+        msg.set_content('가' * (BODY_LIMIT + 1))
+        return msg.as_bytes()
+
+    def test_an_oversize_body_is_refused_and_never_clipped(self):
+        """뒤쪽 절반에 있던 마감을 조용히 잃는 쪽이 더 나쁘다."""
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            store.add(account_key(CONFIG), 'long', self.oversize())
+            row = store.pending(account_key(CONFIG), time.time())[0]
+            with patch('mail_assistant.services.subprocess.run') as run:
+                with self.assertRaises(Unanalyzable) as caught:
+                    analyze(row, CONFIG)
+            run.assert_not_called()             # Codex was never asked
+            self.assertIn(f'{BODY_LIMIT:,}자', str(caught.exception))
+            store.db.close()
+
+    def test_it_is_not_the_kind_of_failure_a_retry_fixes(self):
+        """Unanalyzable subclasses RuntimeError, so an older except still catches it —
+        but the worker's own branch has to come first, which is what this pins."""
+        self.assertTrue(issubclass(Unanalyzable, RuntimeError))
+
+    def test_a_body_inside_the_limit_is_analysed_as_before(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            store.add(account_key(CONFIG), 'fine', mail())
+            row = store.pending(account_key(CONFIG), time.time())[0]
+
+            def execute(command, **kwargs):
+                Path(command[command.index('-o') + 1]).write_text(json.dumps(RESULT),
+                                                                  encoding='utf-8')
+                return subprocess.CompletedProcess(command, 0)
+
+            with patch('mail_assistant.services.codex_command', return_value=['codex']), \
+                 patch('mail_assistant.services.subprocess.run', side_effect=execute):
+                _, result = analyze(row, CONFIG)
+            self.assertEqual(result, RESULT)
+            store.db.close()
+
+
+class UnanalyzableTests(unittest.TestCase):
+    """다시 물어도 같은 답이 나오는 실패는, 다시 묻지 않는다."""
+
+    def run_once(self, directory, analyze, reports):
+        from mail_assistant.worker import run
+        stop = MagicMock()
+        stop.is_set.return_value = False
+        stop.wait.side_effect = lambda *_: stop.is_set.configure_mock(return_value=True)
+        messages = []
+        with patch('mail_assistant.worker.fetch_mail', return_value='새 메일 0건 수집'), \
+                patch('mail_assistant.worker.read_password', return_value='test'), \
+                patch('mail_assistant.worker.check_login'), \
+                patch('mail_assistant.worker.analyze', side_effect=analyze), \
+                patch('mail_assistant.worker.report',
+                      side_effect=lambda *args, **kw: reports.append(args)), \
+                patch('mail_assistant.worker.Excel'):
+            run({**CONFIG, 'workbook': str(directory / 'test.xlsx'), 'interval': 180},
+                directory, stop, messages.append)
+        return messages
+
+    def two_mails(self, folder):
+        directory = Path(folder)
+        store = Store(directory / 'mail.db')
+        first = store.add(account_key(CONFIG), 'long', mail())
+        second = store.add(account_key(CONFIG), 'next', mail())
+        store.db.close()
+        return directory, first, second
+
+    def test_an_oversize_body_is_put_down_rather_than_asked_again(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory, first, _ = self.two_mails(folder)
+            reports = []
+
+            def analyze(row, config):
+                raise Unanalyzable('본문이 60,000자를 초과해 분석하지 않았습니다.')
+
+            self.run_once(directory, analyze, reports)
+            store = Store(directory / 'mail.db')
+            row = store.detail(first)
+            # No clock brings it back; 다시 분석 is the only way in.
+            self.assertEqual(row['retry_at'], NO_RETRY)
+            self.assertEqual(store.pending(account_key(CONFIG), time.time()), [])
+            # And the mail itself says why, rather than '로그인·한도·본문 형식을 확인하세요'.
+            self.assertIn('60,000자', row['error'])
+            store.db.close()
+
+    def test_it_never_reaches_the_crash_channel(self):
+        """A report that arrives again every hour for ever is one nobody reads."""
+        with tempfile.TemporaryDirectory() as folder:
+            directory, _, _ = self.two_mails(folder)
+            reports = []
+            self.run_once(directory, lambda row, config: (_ for _ in ()).throw(
+                Unanalyzable('본문이 깁니다.')), reports)
+            self.assertEqual([stage for stage, *_ in reports], [])
+
+    def test_the_queue_behind_it_carries_on_in_the_same_cycle(self):
+        """The retry path breaks the loop and backs every mail off by up to an hour;
+        one mail that can never be analysed must not cost the mailbox that."""
+        with tempfile.TemporaryDirectory() as folder:
+            directory, first, second = self.two_mails(folder)
+            reports, seen = [], []
+
+            def analyze(row, config):
+                seen.append(row['id'])
+                if row['id'] == first:
+                    raise Unanalyzable('본문이 깁니다.')
+                return parse_mail(mail()), RESULT
+
+            self.run_once(directory, analyze, reports)
+            self.assertEqual(seen, [first, second])
+            store = Store(directory / 'mail.db')
+            self.assertIsNotNone(store.detail(second)['result'])
+            store.db.close()
+
+    def test_다시_분석_is_the_way_back_in(self):
+        with tempfile.TemporaryDirectory() as folder:
+            directory, first, _ = self.two_mails(folder)
+            self.run_once(directory, lambda row, config: (_ for _ in ()).throw(
+                Unanalyzable('본문이 깁니다.')), [])
+            store = Store(directory / 'mail.db')
+            self.assertEqual(store.reset([first]), 1)
+            self.assertEqual([row['id'] for row in
+                              store.pending(account_key(CONFIG), time.time())], [first])
+            store.db.close()
+
+    def test_a_failure_a_retry_could_fix_still_backs_off_and_reports(self):
+        """The split is the point: a rate limit and a 60,000-character body are not
+        the same thing, and before this they were handled as if they were."""
+        with tempfile.TemporaryDirectory() as folder:
+            directory, first, _ = self.two_mails(folder)
+            reports = []
+            self.run_once(directory, lambda row, config: (_ for _ in ()).throw(
+                RuntimeError('rate limited')), reports)
+            store = Store(directory / 'mail.db')
+            row = store.detail(first)
+            self.assertLess(row['retry_at'], NO_RETRY)
+            self.assertGreater(row['retry_at'], time.time())
+            store.db.close()
+            self.assertEqual([stage for stage, *_ in reports], ['분석 실패'])
 
 
 class ConsoleTests(unittest.TestCase):

@@ -33,6 +33,13 @@ LIST_LIMIT = 50
 PRIORITY_ORDER = ('긴급', '높음', '보통', '낮음')
 
 
+# retry_at for a mail no clock should ever bring back: one that failed for a reason
+# asking again cannot change. Far-future rather than a flag column, because pending()
+# already compares this against time.time() and 다시 분석 (Store.reset) writes 0 over it,
+# which is the one way back in.
+NO_RETRY = 4102444800.0     # 2100-01-01
+
+
 def event_key(ident):
     """A 직접 추가한 일정's id, in the fields that otherwise hold a mail id."""
     return f'{EVENT_MARK}{ident}'
