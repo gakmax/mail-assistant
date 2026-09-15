@@ -440,6 +440,28 @@ is set by the things that change a list column (처리 상태, 다시 분석, �
 else. Refreshing while the dialog is open is the same work done where nobody can see
 it, behind a dialog that covers the rows.
 
+**'답장 대기' is a filter, not a state, and the one thing it must never claim is that
+you did not reply.** This app cannot see sent mail — POP3 reports what arrived, and a
+`mailto:` reply never touches this process — so the honest sentence is '아직 완료로
+표시되지 않았다', which is what `WAIT_NOTE` says out loud above the panel and what
+`BRIEF_PROMPT` tells Codex to write instead of '답장하지 않았다'. Four things hold the
+rest of it up. The verdict is the **`reply_needed` column**, denormalised by
+`Store.analyzed()` exactly as `category`/`priority` are and cleared back to -1 by
+`reset(reanalyze=True)` with the rest of the answer — its default is **-1 rather than
+0** because 0 is a real answer ('답장 불필요') and `backfill_replies()` would have no way
+to know where it had got to. The judgement itself is `core.waiting_days()`, one function
+for the card, the panel, the tkinter list and — through the same `WAIT_DAYS` calendar
+cutoff — `state_where()`'s SQL, so the card and the list it opens cannot count different
+mail; a test holds those two against each other. `WAIT_DAYS` exists so the number can
+reach zero: counting every mail that ever needed a reply gives a card that never falls,
+and that is the same arithmetic that keeps 분석 실패 absent rather than 0. And the panel
+carries the **완료 checkbox** rather than sending the reader elsewhere, because a list
+that only says '늦었다' is a list people learn to skip; it writes the mail's own
+`handled`, the field the kanban and the 마감 checklist already move. 답장 대기 is the one
+filter value that is *not* a `state_of()` answer — the 상태 column still reads 미처리,
+which is true — so `filter_rows()` reads `row_view()`'s own `waiting` flag for it rather
+than `matches_state()`, or the fallback window would offer the filter and list nothing.
+
 **A mail card swept off the 할 일 판 is `todo_hidden`, not a deletion.** The board
 grows a card for every analysed mail that produced a `next_action`, and before this
 the only way to be finished with one was to mark the mail 완료 — a different sentence.

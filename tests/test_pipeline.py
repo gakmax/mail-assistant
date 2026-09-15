@@ -15,7 +15,8 @@ from unittest.mock import call, patch, MagicMock
 
 from mail_assistant.core import (ANALYZING, FAILED, HANDLED, HEADERS, NO_RETRY,
                                  PRIORITY_ORDER, ROOM_MARK, Store,
-                                 account_key, STATES, STATE_SQL, day_bounds, filter_rows,
+                                 account_key, STATES, STATE_SQL, state_where, wait_cutoff,
+                                 WAITING, PROGRESS, day_bounds, filter_rows,
                                  local_text, parse_mail, row_view, sql_text, state_of,
                                  table_text, text_of_html, workbook_rows)
 from mail_assistant.excel import (Excel, ExcelUpdateError, append_missing, ensure_table,
@@ -27,7 +28,7 @@ from mail_assistant.calendar_sheet import (SHEET, Entry, cell_text, collect, mon
 from mail_assistant.dashboard import (PRIORITIES, SHEET as DASHBOARD, UPCOMING_ROWS,
                                       UPCOMING_TOP, blocks, describe, update_dashboard, upcoming)
 from mail_assistant.excel import address_of, link_to_draft, link_to_mail, mail_rows, mailto
-from mail_assistant.overview import overview, past_due
+from mail_assistant.overview import briefing_input, overview, past_due, waiting_replies
 from mail_assistant.settings import (GRADES, field_errors, model_choices, model_label,
                                      model_rows, model_traits, normalize, read_models)
 from mail_assistant.services import check_connection, connection_steps, login_state
@@ -321,6 +322,190 @@ class StoreViewTests(unittest.TestCase):
             store.mark_notified([first])
             self.assertEqual(store.unnotified('acct'), [])
             store.db.close()
+
+
+class WaitingReplyTests(unittest.TestCase):
+    """답장 대기 — 분석은 답장이 필요하다 했는데 완료 표시 없이 며칠이 지난 메일.
+
+    이 앱은 보낸 메일을 볼 수 없다. 그래서 이 기능이 말할 수 있는 것은 '완료 표시가
+    없다'까지이고, 여기서 지키는 것은 그 판정을 내리는 자리가 하나뿐이라는 것이다 —
+    카드는 waiting_replies()로 세고 그 카드가 여는 목록은 SQL로 거르므로, 둘이
+    갈라지면 같은 질문에 두 답이 생긴다.
+    """
+
+    ACCOUNT = 'acct'
+    TODAY = datetime.date(2026, 9, 15)
+
+    def store(self, folder, plan):
+        """plan: (uid, 받은 날짜, reply_needed, handled)"""
+        store = Store(Path(folder) / 'mail.db')
+        self.ids = {}
+        for uid, day, needed, handled in plan:
+            message = EmailMessage()
+            message['From'] = f'{uid}@corp.example'
+            message['Subject'] = f'{uid} 제목'
+            message.set_content('본문')
+            ident = store.add(self.ACCOUNT, uid, message.as_bytes())
+            self.ids[uid] = ident
+            store.analyzed(ident, {'sender': '', 'subject': '', 'body': '', 'attachments': []},
+                           {'category': '문의', 'summary': '', 'requests': '', 'events': [],
+                            'priority': '보통', 'priority_reason': '', 'next_action': '',
+                            'reply_needed': needed, 'reply_subject': '', 'reply_draft': ''})
+            if handled:
+                store.set_handled(ident, handled)
+            # `received` is written by now(); the age is the whole point, so it is set
+            # to the Korean day the fixture asked for.
+            with store.db:
+                store.db.execute('UPDATE mail SET received=? WHERE id=?',
+                                 (day_bounds(day)[0], ident))
+        return store
+
+    def waiting(self, store):
+        rows = list(store.page(self.ACCOUNT))
+        handled = {row['id'] for row in rows if row['handled'] == HANDLED}
+        return waiting_replies(rows, self.TODAY, handled)
+
+    def test_a_mail_younger_than_the_threshold_is_not_yet_late(self):
+        plan = [('today', self.TODAY, True, ''),
+                ('yesterday', self.TODAY - datetime.timedelta(days=1), True, ''),
+                ('twodays', self.TODAY - datetime.timedelta(days=2), True, '')]
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder, plan)
+            try:
+                self.assertEqual([row['id'] for row in self.waiting(store)],
+                                 [self.ids['twodays']])
+            finally:
+                store.db.close()
+
+    def test_the_list_stands_oldest_first(self):
+        plan = [('old', self.TODAY - datetime.timedelta(days=9), True, ''),
+                ('mid', self.TODAY - datetime.timedelta(days=4), True, ''),
+                ('new', self.TODAY - datetime.timedelta(days=2), True, '')]
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder, plan)
+            try:
+                rows = self.waiting(store)
+                self.assertEqual([row['days'] for row in rows], [9, 4, 2])
+            finally:
+                store.db.close()
+
+    def test_a_reply_nobody_asked_for_and_a_finished_mail_are_both_out(self):
+        plan = [('needs', self.TODAY - datetime.timedelta(days=5), True, ''),
+                ('no_reply', self.TODAY - datetime.timedelta(days=5), False, ''),
+                ('done', self.TODAY - datetime.timedelta(days=5), True, HANDLED)]
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder, plan)
+            try:
+                self.assertEqual([row['id'] for row in self.waiting(store)],
+                                 [self.ids['needs']])
+            finally:
+                store.db.close()
+
+    def test_진행_중은_빠지지_않고_그렇게_적힌다(self):
+        """열흘째 진행 중인 메일이야말로 이 패널이 있는 이유다."""
+        plan = [('moving', self.TODAY - datetime.timedelta(days=10), True, PROGRESS)]
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder, plan)
+            try:
+                rows = self.waiting(store)
+                self.assertEqual(len(rows), 1)
+                self.assertTrue(rows[0]['progress'])
+            finally:
+                store.db.close()
+
+    def test_the_card_and_the_list_it_opens_count_the_same_mail(self):
+        """카드는 waiting_replies()로 세고 목록은 SQL로 거른다. 둘은 같아야 한다."""
+        plan = [('a', self.TODAY - datetime.timedelta(days=9), True, ''),
+                ('b', self.TODAY - datetime.timedelta(days=3), True, ''),
+                ('c', self.TODAY - datetime.timedelta(days=1), True, ''),
+                ('d', self.TODAY - datetime.timedelta(days=6), False, ''),
+                ('e', self.TODAY - datetime.timedelta(days=6), True, HANDLED),
+                ('f', self.TODAY - datetime.timedelta(days=6), True, PROGRESS)]
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder, plan)
+            try:
+                counted = {row['id'] for row in self.waiting(store)}
+                clause, params = state_where(WAITING, self.TODAY)
+                listed = {row['id'] for row in store.db.execute(
+                    f'SELECT id FROM mail WHERE account=? AND ({clause})',
+                    (self.ACCOUNT, *params))}
+                self.assertEqual(counted, listed)
+                self.assertEqual(counted, {self.ids['a'], self.ids['b'], self.ids['f']})
+            finally:
+                store.db.close()
+
+    def test_다시_분석은_판정까지_되돌린다(self):
+        """result를 지우면서 reply_needed를 두고 가면, 없는 분석을 근거로 서 있게 된다."""
+        plan = [('again', self.TODAY - datetime.timedelta(days=5), True, '')]
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder, plan)
+            try:
+                self.assertEqual(len(self.waiting(store)), 1)
+                store.reset([self.ids['again']], reanalyze=True)
+                self.assertEqual(self.waiting(store), [])
+                row = store.db.execute('SELECT reply_needed FROM mail WHERE id=?',
+                                       (self.ids['again'],)).fetchone()
+                self.assertEqual(row['reply_needed'], -1)
+            finally:
+                store.db.close()
+
+    def test_older_mail_gets_its_verdict_backfilled(self):
+        """컬럼이 생기기 전에 분석된 메일도 같은 답을 내야 한다."""
+        plan = [('old', self.TODAY - datetime.timedelta(days=5), True, ''),
+                ('quiet', self.TODAY - datetime.timedelta(days=5), False, '')]
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder, plan)
+            try:
+                with store.db:
+                    store.db.execute('UPDATE mail SET reply_needed=-1')
+                store.backfill_replies()
+                self.assertEqual([row['id'] for row in self.waiting(store)],
+                                 [self.ids['old']])
+                # 두 번째 호출이 집어 들 행이 없어야 한다: -1이 '아직 안 채움'의
+                # 정확한 표시라는 것이 이 backfill이 끝을 아는 유일한 방법이다.
+                left = store.db.execute('SELECT COUNT(*) FROM mail WHERE result IS NOT NULL '
+                                        'AND reply_needed = -1').fetchone()[0]
+                self.assertEqual(left, 0)
+            finally:
+                store.db.close()
+
+    def test_the_fallback_window_filters_on_the_same_judgement(self):
+        """app.py는 SQL이 아니라 filter_rows()로 거른다 — 드롭다운에 값만 생기고
+        거르는 쪽이 모르면, 그 화면은 아무것도 없는 목록을 조용히 보여 준다."""
+        plan = [('late', self.TODAY - datetime.timedelta(days=6), True, ''),
+                ('fresh', datetime.date.today(), True, ''),
+                ('quiet', self.TODAY - datetime.timedelta(days=6), False, '')]
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder, plan)
+            try:
+                views = [row_view(row) for row in store.page(self.ACCOUNT)]
+                shown = filter_rows(views, state=WAITING)
+                self.assertEqual([view['id'] for view in shown], [self.ids['late']])
+                # 전체는 그대로 전부다.
+                self.assertEqual(len(filter_rows(views)), 3)
+            finally:
+                store.db.close()
+
+    def test_the_briefing_is_told_what_is_waiting_and_how_long(self):
+        """브리핑이 '오늘 무엇이 왔나' 말고 '내가 무엇을 붙잡고 있나'를 말할 수 있는 자리."""
+        plan = [('a', self.TODAY - datetime.timedelta(days=8), True, ''),
+                ('b', self.TODAY - datetime.timedelta(days=3), True, '')]
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder, plan)
+            try:
+                payload = briefing_input(list(store.page(self.ACCOUNT)), self.TODAY)
+                self.assertEqual([row['days'] for row in payload['waiting_reply']], [8, 3])
+                self.assertEqual(payload['counts']['답장 대기'], 2)
+                self.assertEqual(payload['truncated']['waiting_reply'],
+                                 {'shown': 2, 'total': 2})
+            finally:
+                store.db.close()
+
+    def test_the_cutoff_is_a_calendar_day_not_48_hours(self):
+        """'이틀 지났다'는 달력 두 장이지 48시간이 아니다 — 화면의 N일째와 같은 계산."""
+        self.assertEqual(wait_cutoff(self.TODAY, days=2),
+                         day_bounds(self.TODAY - datetime.timedelta(days=1))[0])
+        self.assertEqual(wait_cutoff(self.TODAY, days=1), day_bounds(self.TODAY)[0])
 
 
 class SearchTests(unittest.TestCase):
@@ -630,9 +815,19 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(PRIORITY_ORDER, tuple(name for name, _ in PRIORITIES))
 
     def test_the_offered_filters_are_exactly_the_ones_sql_knows(self):
-        """A value in the dropdown with no SQL behind it would silently show everything."""
-        self.assertEqual(set(STATES) - {''}, set(STATE_SQL))
+        """A value in the dropdown with no SQL behind it would silently show everything.
+
+        Held against state_where() rather than STATE_SQL because that is what search()
+        calls: 답장 대기 carries a cutoff that moves with the calendar and so is built
+        per call, and a test on the static table alone would not have seen it.
+        """
+        for state in STATES[1:]:
+            clause, params = state_where(state, datetime.date(2026, 9, 15))
+            self.assertTrue(clause, state)
+            self.assertEqual(clause.count('?'), len(params), state)
+        self.assertEqual(state_where('', datetime.date(2026, 9, 15)), ('', ()))
         self.assertEqual(STATES[0], '')
+        self.assertLessEqual(set(STATE_SQL), set(STATES))
 
     def test_a_constant_with_a_quote_is_refused_rather_than_interpolated(self):
         self.assertEqual(sql_text('처리'), "'처리'")

@@ -7,7 +7,8 @@ import json
 from datetime import date, timedelta
 
 from .calendar_sheet import collect, plain_title
-from .core import HANDLED, PRIORITY_ORDER, day_bounds, event_key, local_text
+from .core import (HANDLED, PRIORITY_ORDER, PROGRESS, WAIT_DAYS, day_bounds,
+                   event_key, local_text, waiting_days)
 from .core import workbook_rows
 from .dashboard import CATEGORIES, PRIORITIES
 
@@ -22,6 +23,8 @@ UPCOMING = 8
 BRIEF_OPEN = 30
 BRIEF_EVENTS = 15
 BRIEF_DRAFTS = 10
+# 답장 대기는 이미 경과일로 세워져 있으니 앞의 열 건이 가장 오래 기다린 열 건이다.
+BRIEF_WAIT = 10
 BRIEF_TEXT = 200
 # Nothing before this hour: a briefing written at 03:00 describes yesterday and is
 # what the reader finds at nine.
@@ -116,6 +119,33 @@ def oldest_open(rows, today, handled=()):
     return max(0, (today - min(days)).days) if days else None
 
 
+def waiting_replies(rows, today, handled=(), days=WAIT_DAYS):
+    """답장이 필요한데 완료 표시가 없는 채로 days일이 지난 메일, 오래 기다린 것부터.
+
+    Reads the `reply_needed` *column*, never the stored JSON, because the 메일 화면's
+    own 답장 대기 filter is SQL over that column (core.state_where): a card that
+    counted one source and opened a list built from the other would be two answers to
+    one question, which is the same rule that put category and priority in columns.
+
+    core.waiting_days() is that one judgement, shared with the tkinter list's own
+    filter, so 'is this one waiting' is decided in a single place whatever screen asks.
+    """
+    waiting = []
+    for row in rows:
+        elapsed = waiting_days(row, today)
+        if elapsed is None or elapsed < days or row['id'] in handled:
+            continue
+        waiting.append({'id': row['id'], 'subject': row['subject'] or '(제목 없음)',
+                        'sender': row['sender'] or '', 'priority': row['priority'] or '',
+                        'received': row['received'] or '', 'days': elapsed,
+                        'progress': row['handled'] == PROGRESS})
+    # 오래 기다린 것부터. 우선순위가 아니라 경과일로 세우는 것이 이 목록의 전부다 —
+    # 급한 것은 긴급·높음 카드가 이미 말하고 있고, 여기서만 볼 수 있는 사실은
+    # '이것이 제일 오래 서 있다'뿐이다.
+    waiting.sort(key=lambda item: (-item['days'], item['received']))
+    return waiting
+
+
 def counts_by(rows, field, allowed):
     counted = {name: 0 for name in allowed}
     for _, result in results(rows):
@@ -147,9 +177,14 @@ def trend(store, account, today, days=RECENT_DAYS):
 
 
 def review_queue(rows):
-    """답변이 필요한데 사람이 초안을 손대지 않은 메일. 카드와 검토 큐가 같은 판정을 쓴다."""
-    return [row for row, result in results(rows)
-            if result.get('reply_needed') and not (row['draft_edit'] or '').strip()]
+    """답변이 필요한데 사람이 초안을 손대지 않은 메일. 카드와 검토 큐가 같은 판정을 쓴다.
+
+    '답장이 필요한가'를 묻는 곳이 이제 셋이다 — 이 큐, 답장 대기 카드, 메일 화면의
+    필터 — 그래서 셋 다 reply_needed 컬럼 하나를 읽는다. 저장된 JSON에서 다시 꺼내면
+    backfill이 한쪽만 건드린 날 두 화면이 다른 답을 하게 된다.
+    """
+    return [row for row in analysed(rows)
+            if row['reply_needed'] == 1 and not (row['draft_edit'] or '').strip()]
 
 
 def review_pending(rows):
@@ -185,6 +220,7 @@ def briefing_input(rows, today, events=(), within=DUE_DAYS, trend_rows=()):
     open_mail = sorted(((row, result) for row, result in results(rows)
                         if row['id'] not in handled), key=lambda pair: brief_rank(*pair))
     drafts = review_queue(rows)
+    waiting = data['reply_wait']
     deadline_rows = [(day, entry) for day, entry in data['due_window']
                      if entry.mail_id not in handled]
     return {
@@ -192,7 +228,7 @@ def briefing_input(rows, today, events=(), within=DUE_DAYS, trend_rows=()):
         'window_days': within,
         'counts': {**data['cards'], '분석 실패': data['failed'],
                    '수집 전체': data['total'], '분석 대기': data['waiting'],
-                   '처리 완료': len(handled)},
+                   '답장 대기': len(waiting), '처리 완료': len(handled)},
         'oldest_open_days': data['oldest'],
         'deadlines': [{'day': day.isoformat(), 'kind': entry.kind,
                        'title': clip(plain_title(entry.label)),
@@ -208,13 +244,22 @@ def briefing_input(rows, today, events=(), within=DUE_DAYS, trend_rows=()):
                       for row, result in open_mail[:BRIEF_OPEN]],
         'unedited_drafts': [clip(row['subject'] or '(제목 없음)', 80)
                             for row in drafts[:BRIEF_DRAFTS]],
+        # 브리핑이 '오늘 무엇이 왔나' 말고 '내가 무엇을 붙잡고 있나'를 말할 수 있는
+        # 유일한 자리. days가 문장의 전부이므로 제목보다 먼저 온다.
+        'waiting_reply': [{'mail_id': row['id'], 'days': row['days'],
+                           'subject': clip(row['subject'], 80),
+                           'sender': clip(row['sender'], 80),
+                           'priority': row['priority']}
+                          for row in waiting[:BRIEF_WAIT]],
         'daily': [{'day': day, **counts} for day, counts in trend_rows],
         'truncated': {'open_mail': {'shown': min(len(open_mail), BRIEF_OPEN),
                                     'total': len(open_mail)},
                       'deadlines': {'shown': min(len(deadline_rows), BRIEF_EVENTS),
                                     'total': len(deadline_rows)},
                       'unedited_drafts': {'shown': min(len(drafts), BRIEF_DRAFTS),
-                                          'total': len(drafts)}},
+                                          'total': len(drafts)},
+                      'waiting_reply': {'shown': min(len(waiting), BRIEF_WAIT),
+                                        'total': len(waiting)}},
     }
 
 
@@ -261,7 +306,10 @@ def overview(rows, today, within=DUE_DAYS, events=()):
         'total': len(rows),
         'waiting': sum(1 for row in rows if not row['result']),
         # Beside the four cards, not among them: the window in app.py lays those out
-        # as a fixed four and a fifth key would land in none of its labels.
+        # as a fixed four and a fifth key would land in none of its labels. 답장 대기
+        # is here for the same reason, and is a list rather than a count because the
+        # panel that draws it needs the rows and the card only needs len().
         'failed': failures(rows),
+        'reply_wait': waiting_replies(rows, today, handled),
         'oldest': oldest_open(rows, today, handled),
     }

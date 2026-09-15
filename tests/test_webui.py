@@ -45,7 +45,8 @@ from mail_assistant.webui import (CARD_TONES, COST_TONES, DEFAULT_LIST, FONT_FIL
                                   soft_of, summary_line, tag_cell, tidy_body,
                                   body_blocks,
                                   calendar_events, card_target, countdown_text, run_view,
-                                  FAILED_CARD, board, board_counts, card_hint, card_rows,
+                                  FAILED_CARD, WAITING, WAIT_LATE, WAIT_NOTE, wait_age,
+                                  board, board_counts, card_hint, card_rows,
                                   chat_context, draft_view, label_step, stats_view,
                                   deadline_progress, drag_drop, drag_payload, drag_start,
                                   rich_text,
@@ -224,6 +225,46 @@ class CardRowTests(unittest.TestCase):
 
     def test_the_failure_card_says_the_worker_keeps_trying(self):
         self.assertIn('자동 재시도', card_hint(FAILED_CARD, self.data(failed=2)))
+
+
+class WaitingCardTests(unittest.TestCase):
+    """답장 대기: the card, where it sends you, and the line under its number."""
+
+    def data(self, days=()):
+        return {'cards': {'미처리 메일': 3, '긴급·높음': 1, '7일 내 마감': 2, '검토 전 초안': 0},
+                'failed': 0, 'oldest': None,
+                'reply_wait': [{'id': f'm{n}', 'days': day, 'subject': 's',
+                                'sender': '', 'priority': '', 'received': '',
+                                'progress': False}
+                               for n, day in enumerate(days)]}
+
+    def test_the_card_is_absent_until_something_is_waiting(self):
+        self.assertNotIn(WAITING, [name for name, _ in card_rows(self.data())])
+
+    def test_the_card_carries_the_count_and_sits_before_the_failures(self):
+        rows = card_rows(dict(self.data(days=(4, 2)), failed=1))
+        self.assertEqual(rows[-2], (WAITING, 2))
+        self.assertEqual(rows[-1][0], FAILED_CARD)
+
+    def test_the_card_opens_the_same_filter_it_counted(self):
+        target = card_target(WAITING, 'tok')
+        self.assertIn(f'state={WAITING}', target)
+        self.assertIn('sort=received', target)
+        # Oldest first: the card's own hint names the worst row, and the list it
+        # opens has to put that row at the top rather than at the bottom.
+        self.assertIn('desc=0', target)
+
+    def test_the_hint_names_the_worst_row_not_the_newest(self):
+        self.assertEqual(card_hint(WAITING, self.data(days=(9, 2))), '가장 오래 기다린 건 9일째')
+        self.assertEqual(card_hint(WAITING, self.data()), '')
+
+    def test_the_age_reads_as_a_day_count(self):
+        self.assertEqual(wait_age(3), '3일째')
+
+    def test_the_panel_says_out_loud_what_it_cannot_know(self):
+        """POP3로는 보낸 메일을 볼 수 없다 — 그 사실이 화면에 있어야 한다."""
+        self.assertIn('완료 표시', WAIT_NOTE)
+        self.assertGreater(WAIT_LATE, 0)
 
 
 class CardIconTests(unittest.TestCase):
@@ -655,8 +696,9 @@ class ListingTests(unittest.TestCase):
             self.build(folder, count=1)
             row = listing(folder, CONFIG, list_state())['rows'][0]
             # 'tip' is the web list's own column: the window has no hover to draw.
+            # 'waiting' is the window's, and rides here because both are row_view().
             self.assertEqual(set(row), {'id', 'received', 'sender', 'subject', 'category',
-                                        'priority', 'state', 'error', 'tip'})
+                                        'priority', 'state', 'error', 'waiting', 'tip'})
 
 
 class BarFilterTests(unittest.TestCase):
@@ -1790,12 +1832,17 @@ class PaletteTests(unittest.TestCase):
         self.assertEqual(set(STATUS), {name for name, _ in PRIORITIES})
 
     def test_card_tones_name_cards_that_exist(self):
-        """card_rows() and not ['cards']: 분석 실패 is a card the four-key dict never holds."""
+        """card_rows() and not ['cards']: 분석 실패 and 답장 대기 are cards the
+        four-key dict never holds, and both are absent until they have a number."""
         with tempfile.TemporaryDirectory() as folder:
             data = snapshot(Path(folder), {}, TODAY)
-        drawn = {name for name, _ in card_rows(dict(data, failed=1))}
+        drawn = {name for name, _ in card_rows(
+            dict(data, failed=1, reply_wait=[{'id': 'a', 'days': 3}]))}
         self.assertLessEqual(set(CARD_TONES), drawn)
         self.assertIn(f'{DUE_DAYS}일 내 마감', CARD_TONES)
+        quiet = {name for name, _ in card_rows(dict(data, failed=0, reply_wait=[]))}
+        self.assertNotIn(WAITING, quiet)
+        self.assertNotIn(FAILED_CARD, quiet)
 
     def test_colours_are_css_hex(self):
         for value in list(STATUS.values()) + list(CARD_TONES.values()):

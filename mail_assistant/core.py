@@ -4,7 +4,7 @@ import hashlib
 import json
 import secrets
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from email import policy
 from email.parser import BytesParser
 from html.parser import HTMLParser
@@ -26,6 +26,17 @@ FAILED = '실패'
 # is not. One process at a time (services.codex_slot), but that one call may be reading
 # a batch, so every row in it carries the marker until the answer comes back.
 ANALYZING = '분석 중'
+# 답장이 필요하다고 분석이 판단했는데, 받은 지 WAIT_DAYS일이 지나도록 완료 표시가
+# 없는 메일. 이것은 state_of()가 돌려주는 '상태'가 아니라 미처리를 시간으로 좁힌
+# *걸러보기*다 — 목록의 상태 칸은 그대로 '미처리'라고 말한다. 그것이 사실이기도 하고,
+# 이 앱은 보낸 메일을 볼 수 없어서 '답장을 안 했다'고는 끝내 말할 수 없기 때문이다.
+# 아는 것은 '완료 표시가 없다'까지이고, 화면도 딱 그만큼만 말한다.
+WAITING = '답장 대기'
+# 이틀. 업무 메일에서 하루는 아직 '오늘 안에'이고, 사흘은 이미 늦은 뒤다. 문턱이
+# 있는 이유는 노이즈를 줄이는 것보다 카드가 0으로 떨어질 수 있게 하는 데 있다 —
+# 어제 온 메일까지 세면 이 숫자는 영영 내려오지 않고, 내려오지 않는 숫자는 읽는
+# 사람이 보지 않게 되는 숫자다(분석 실패 카드가 0일 때 아예 없는 것과 같은 계산).
+WAIT_DAYS = 2
 LOG_SCHEMA = 'CREATE TABLE IF NOT EXISTS log (at TEXT NOT NULL, text TEXT NOT NULL)'
 LOG_TRIM_EVERY = 50
 LIST_LIMIT = 50
@@ -101,7 +112,32 @@ STATE_SQL = {
 SORTS = {'received': 'received', 'subject': 'subject', 'sender': 'sender',
          'category': 'category', 'priority': priority_case(), 'state': state_case()}
 # The filter values a screen offers, in the order it offers them. '' is 전체.
-STATES = ('', '분석 대기', ANALYZING, FAILED, '미처리', PROGRESS, HANDLED)
+# 답장 대기 sits next to 미처리 because that is what it narrows.
+STATES = ('', '분석 대기', ANALYZING, FAILED, '미처리', WAITING, PROGRESS, HANDLED)
+
+
+def wait_cutoff(today, days=WAIT_DAYS):
+    """`received` 아래로는 WAIT_DAYS일이 지난 것이 되는 경계, UTC ISO 문자열.
+
+    Korean calendar days, through day_bounds(), because '이틀 지났다'는 24시간 x 2가
+    아니라 달력 두 장이다 — 화면의 '2일째'와 목록이 거르는 범위가 같은 날짜 계산에서
+    나와야 카드와 그 카드가 여는 목록이 다른 메일을 셀 수 없다.
+    """
+    return day_bounds(today - timedelta(days=days - 1))[0]
+
+
+def state_where(state, today=None):
+    """(WHERE 조각, 파라미터) for one filter value. search()가 쓰는 유일한 통로.
+
+    STATE_SQL holds the fixed ones. 답장 대기 is the one whose boundary moves with the
+    calendar, so its parameters are built per call rather than stored beside the
+    clause: this process runs for days at a time, and a cutoff frozen at import is a
+    filter that quietly means something different tomorrow.
+    """
+    if state == WAITING:
+        return ('reply_needed = 1 AND handled <> ? AND received < ?',
+                (HANDLED, wait_cutoff(today or local_now().date())))
+    return STATE_SQL.get(state, ('', ()))
 
 
 def now():
@@ -334,13 +370,19 @@ class Store:
                      # 마지막으로 실패한 시각. 포기해도 되는 실패인지를 이것으로 가른다 —
                      # 그 뒤에 다른 메일이 분석에 성공했다면 Codex는 멀쩡하고 이 메일이
                      # 문제라는 뜻이고, 아무것도 성공하지 못했다면 한도나 로그인 쪽이다.
-                     ('failed_at', "TEXT NOT NULL DEFAULT ''"))
+                     ('failed_at', "TEXT NOT NULL DEFAULT ''"),
+                     # 답장이 필요한가, 분석의 답 그대로. 세 값을 가진다: 1 예, 0 아니오,
+                     # -1 아직 모름. 기본값이 0이 아니라 -1인 것이 backfill_replies()가
+                     # 끝을 아는 유일한 방법이다 — 0은 '답장 필요 없음'이라는 진짜 답이라
+                     # 아직 채우지 않은 행과 구별되지 않는다.
+                     ('reply_needed', 'INTEGER NOT NULL DEFAULT -1'))
         with self.db:
             for column, declaration in additions:
                 if column not in present:
                     self.db.execute(f'ALTER TABLE mail ADD COLUMN {column} {declaration}')
         self.backfill_headers()
         self.backfill_verdicts()
+        self.backfill_replies()
 
     def backfill_headers(self):
         """Fill subject/sender for mail collected before those columns existed."""
@@ -370,6 +412,29 @@ class Store:
         if updates:
             with self.db:
                 self.db.executemany('UPDATE mail SET category=?, priority=? WHERE id=?', updates)
+
+    def backfill_replies(self):
+        """Fill reply_needed for mail analysed before the column existed.
+
+        `= -1` is an exact match for 'never filled', so this converges and then costs
+        one indexless count of nothing — unlike the two above, whose '' test a real
+        answer could also satisfy.
+        """
+        rows = self.db.execute('SELECT id, result FROM mail '
+                               'WHERE result IS NOT NULL AND reply_needed = -1').fetchall()
+        updates = []
+        for row in rows:
+            try:
+                result = json.loads(row['result'])
+            except ValueError:
+                # 읽을 수 없는 결과는 0으로 내려 둔다. -1로 두면 이 쿼리가 매번 같은
+                # 행을 다시 집어 든다.
+                updates.append((0, row['id']))
+                continue
+            updates.append((1 if result.get('reply_needed') else 0, row['id']))
+        if updates:
+            with self.db:
+                self.db.executemany('UPDATE mail SET reply_needed=? WHERE id=?', updates)
 
     def get_meta(self, key):
         row = self.db.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchone()
@@ -432,9 +497,10 @@ class Store:
     def analyzed(self, ident, parsed, result):
         with self.db:
             self.db.execute('UPDATE mail SET parsed=?, result=?, error=\'\', analyzed_at=?, '
-                            'category=?, priority=? WHERE id=?',
+                            'category=?, priority=?, reply_needed=? WHERE id=?',
                             (json.dumps(parsed, ensure_ascii=False), json.dumps(result, ensure_ascii=False),
-                             now(), result.get('category', ''), result.get('priority', ''), ident))
+                             now(), result.get('category', ''), result.get('priority', ''),
+                             1 if result.get('reply_needed') else 0, ident))
 
     def failed(self, ident, error, timestamp):
         with self.db:
@@ -465,8 +531,12 @@ class Store:
     def counts(self, account):
         return dict(self.db.execute('SELECT COUNT(*) total, COALESCE(SUM(result IS NULL),0) pending, COALESCE(SUM(result IS NOT NULL AND exported=0),0) waiting FROM mail WHERE account=?', (account,)).fetchone())
 
+    # category/priority/reply_needed are the denormalised verdict: the list already
+    # filters and sorts on them, and a screen that reads them here rather than out of
+    # the result JSON cannot disagree with the query that found the row.
     LIST_COLUMNS = ('id, received, subject, sender, parsed, result, handled, draft_edit, '
-                    'attempts, retry_at, error, exported, notified, analyzing, todo_hidden')
+                    'attempts, retry_at, error, exported, notified, analyzing, todo_hidden, '
+                    'category, priority, reply_needed')
 
     def page(self, account, limit=2000):
         """Newest first, without the raw blob. Filtering happens in filter_rows().
@@ -496,7 +566,7 @@ class Store:
             # finds what the user remembers reading, not just what the list shows.
             where.append('(subject LIKE ? OR sender LIKE ? OR parsed LIKE ? OR result LIKE ?)')
             params += [like] * 4
-        clause, extra = STATE_SQL.get(state, ('', ()))
+        clause, extra = state_where(state)
         if clause:
             where.append(f'({clause})')
             params += list(extra)
@@ -820,7 +890,11 @@ class Store:
         overwritten by the answer already on its way, so the request would vanish with
         nothing on screen saying so. The count is what lets the screen say it instead.
         """
-        clause = ", result=NULL, analyzed_at='', category='', priority=''" if reanalyze else ''
+        # reply_needed goes back to -1 with the rest of the verdict: it *is* part of
+        # the answer being thrown away, and left at 1 the mail would sit in 답장 대기
+        # describing an analysis that no longer exists.
+        clause = (", result=NULL, analyzed_at='', category='', priority='', reply_needed=-1"
+                  if reanalyze else '')
         changed = 0
         with self.db:
             for ident in ids:
@@ -945,10 +1019,33 @@ def state_of(row):
 def row_view(row):
     """One line of the mail list. Works before analysis, when result is still empty."""
     result = json.loads(row['result']) if row['result'] else {}
+    # 답장 대기 is not a state_of() answer — it narrows 미처리 by the calendar — so it
+    # rides beside `state` rather than in it, and filter_rows() reads it there. Without
+    # it the fallback window offers the filter in its dropdown and then lists nothing.
+    days = waiting_days(row, local_now().date())
     return {'id': row['id'], 'received': local_text(row['received']),
             'sender': row['sender'], 'subject': row['subject'] or '(제목 없음)',
             'category': result.get('category', ''), 'priority': result.get('priority', ''),
-            'state': state_of(row), 'error': row['error']}
+            'state': state_of(row), 'error': row['error'],
+            'waiting': days is not None and days >= WAIT_DAYS}
+
+
+def waiting_days(row, today):
+    """답장 대기의 경과일, 아니면 None. 세 화면이 같은 계산을 쓰게 하는 한 자리.
+
+    The web card, the 대시보드 panel and the tkinter list all ask this question, and
+    the SQL in state_where() asks it a fourth way — of the same `reply_needed` column
+    and the same calendar-day cutoff, which is what keeps the four answers one answer.
+    """
+    if row['reply_needed'] != 1 or row['handled'] == HANDLED:
+        return None
+    try:
+        day = date.fromisoformat(local_text(row['received'], '%Y-%m-%d'))
+    except ValueError:
+        return None
+    # max(0, …): `received` is the collection time, and a PC whose clock is behind the
+    # mail server's produces a mail from tomorrow. '-3일째' is not a thing.
+    return max(0, (today - day).days)
 
 
 def matches_state(state, wanted):
@@ -964,7 +1061,7 @@ def filter_rows(views, query='', state=''):
     text = query.strip().lower()
     return [view for view in views
             if (not text or text in view['subject'].lower() or text in view['sender'].lower())
-            and matches_state(view['state'], state)]
+            and (view['waiting'] if state == WAITING else matches_state(view['state'], state))]
 
 
 def account_key(config):

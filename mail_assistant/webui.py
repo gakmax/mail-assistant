@@ -18,7 +18,8 @@ from pathlib import Path
 from . import __version__
 from .calendar_sheet import COLORS, parse_day, plain_title
 from .core import (ANALYZING, FAILED, HANDLED, LIST_LIMIT, PROGRESS, ROOM_MARK, SORTS,
-                   STATES, Store, account_key, event_row_id, is_event_key, local_text,
+                   STATES, Store, WAIT_DAYS, WAITING, account_key, event_row_id,
+                   is_event_key, local_text,
                    looks_foreign, now, parse_mail, row_view, state_of)
 from .dashboard import CATEGORIES, PRIORITIES, describe
 from .excel import mailto
@@ -57,7 +58,8 @@ FAILED_CARD = '분석 실패'
 # A card wears a tone only while its number is actionable. The number itself stays
 # ink, so colour is never the only thing saying '이건 봐야 한다'.
 CARD_TONES = {'긴급·높음': css_color(URGENT), f'{DUE_DAYS}일 내 마감': css_color(SOON),
-              '검토 전 초안': SERIES, FAILED_CARD: css_color(URGENT)}
+              '검토 전 초안': SERIES, WAITING: css_color(SOON),
+              FAILED_CARD: css_color(URGENT)}
 REFRESH_SECONDS = 5.0
 # 실행 and 메일 read their own numbers every second: both are screens somebody opens
 # *because* something is moving, and five seconds of a still picture reads as a hang.
@@ -131,7 +133,7 @@ NAV_BADGE_MAX = 99
 WEEKDAYS = ('월', '화', '수', '목', '금', '토', '일')
 # The 대시보드 cards. '…일 내 마감' carries the window in its name, so it is matched by suffix.
 CARD_ICONS = {'미처리 메일': 'inbox', '긴급·높음': 'priority_high', '검토 전 초안': 'edit_note',
-              FAILED_CARD: 'error_outline'}
+              WAITING: 'reply', FAILED_CARD: 'error_outline'}
 # The 메일 list's columns, in the order the table draws them. Every key is also a key
 # of core.SORTS, which is what lets the header itself be the sort control — a test
 # holds the two together, because a header with no SQL behind it would sort nothing.
@@ -2501,6 +2503,10 @@ def card_target(name, token, within=DUE_DAYS):
         return href('/calendar', token)
     if name == '검토 전 초안':
         return href('/drafts', token)
+    if name == WAITING:
+        # The card and this list count the same mail: core.state_where() filters on the
+        # reply_needed column and the same WAIT_DAYS cutoff waiting_replies() used.
+        return href('/mail', token, state=WAITING, sort='received', desc='0')
     if name == FAILED_CARD:
         return href('/mail', token, state=FAILED)
     return None
@@ -2510,6 +2516,9 @@ def card_hint(name, data):
     """The line under a card's number. A total says how many, never how long."""
     if name == '미처리 메일' and data.get('oldest'):
         return f"가장 오래된 건 {data['oldest']}일 경과"
+    if name == WAITING and data.get('reply_wait'):
+        # The list is already sorted by elapsed days, so the first row is the worst one.
+        return f"가장 오래 기다린 건 {data['reply_wait'][0]['days']}일째"
     if name == FAILED_CARD:
         # worker.py backs off 5·10·20·40 minutes and then stays hourly, for ever: there
         # is no attempt cap, so the honest line is how often, not whether.
@@ -2518,8 +2527,16 @@ def card_hint(name, data):
 
 
 def card_rows(data):
-    """The four fixed cards, plus 분석 실패 only while there is something to report."""
+    """The four fixed cards, plus 답장 대기 and 분석 실패 while there is one to report.
+
+    Both are absent at zero rather than drawn as 0, and 답장 대기 is the one that had
+    to earn it: a card counting every mail that ever needed a reply would never fall,
+    and core.WAIT_DAYS is the threshold that lets it. 분석 실패 stays last — it is the
+    app reporting on itself, and the four above it are the reader's own work.
+    """
     rows = list(data['cards'].items())
+    if data.get('reply_wait'):
+        rows.append((WAITING, len(data['reply_wait'])))
     if data.get('failed'):
         rows.append((FAILED_CARD, data['failed']))
     return rows
@@ -2589,6 +2606,60 @@ def deadlines(data, today, token, on_tick):
                 ui.space()
                 ui.label(row['left']).classes(
                     'ma-due__left' + (' is-missed' if row['missed'] else ''))
+
+
+# 이 앱은 보낸 메일을 볼 수 없다 — POP3는 받은 것만 말하고, mailto로 보낸 답장은
+# 이 프로세스를 거치지 않는다. 그래서 이 패널이 아는 것은 '완료 표시가 없다'까지이고,
+# 밑에 한 줄로 그렇게 말한다. 말하지 않으면 '당신은 답장을 안 했습니다'로 읽히는데,
+# 웹메일에서 답장하고 표시만 안 한 사람에게 그것은 틀린 문장이다.
+WAIT_NOTE = '보낸 메일은 볼 수 없어 완료 표시를 기준으로 셉니다'
+# 한 주를 넘긴 것만 색을 얻는다. WAIT_DAYS를 막 넘긴 이틀째까지 붉으면 이 패널은
+# 전부 붉고, 전부 붉은 목록은 어느 줄이 나쁜지 말하지 않는다.
+WAIT_LATE = 7
+
+
+def wait_age(days):
+    """'2일째'. 경과일이 이 줄의 전부라 제목보다 먼저 읽히는 자리에 놓는다."""
+    return f'{days}일째'
+
+
+def waiting_panel(rows, token, on_done):
+    """답장 대기 — 오래 기다린 것부터, 그 자리에서 완료할 수 있게.
+
+    The 완료 checkbox is why this is a panel and not a second count: a list that only
+    says '당신은 늦었다' and makes you go somewhere else to answer it is a list a reader
+    learns to skip. It writes the mail's own `handled`, the same field the kanban and
+    the 마감 checklist move, so no two screens can disagree about what is finished.
+    """
+    from nicegui import ui
+    with card(flush=True):
+        with ui.element('div').classes('ma-lane__head'):
+            ui.icon('reply').style(f'color:{MUTED};font-size:17px')
+            ui.label(WAITING).classes('ma-head__title')
+            if rows:
+                ui.label(f'{len(rows)}건').classes('ma-meta__item')
+            ui.space()
+            ui.label(WAIT_NOTE).classes('ma-meta__item')
+        if not rows:
+            empty(f'{WAIT_DAYS}일 넘게 답장을 기다리는 메일이 없습니다.')
+            return
+        with ui.element('div').classes('ma-duelist'):
+            for row in rows:
+                with ui.element('div').classes('ma-due'):
+                    ui.checkbox(value=False,
+                                on_change=lambda event, ident=row['id']:
+                                on_done(ident, event.value)) \
+                        .props('dense size=xs').tooltip('체크하면 처리 완료가 됩니다')
+                    ui.label(local_text(row['received'], '%m-%d')).classes('ma-due__day')
+                    ui.link(row['subject'], href('/mail', token, id=row['id'])) \
+                        .classes('ma-due__title')
+                    if row['progress']:
+                        # 진행 중은 잊은 것이 아니다. 줄을 빼지는 않는다 — 열흘째 진행
+                        # 중인 메일이야말로 이 패널이 있는 이유다 — 대신 그렇게 적는다.
+                        tag(PROGRESS, tone=css_color(LINK), soft=SUNKEN)
+                    ui.space()
+                    ui.label(wait_age(row['days'])).classes(
+                        'ma-due__left' + (' is-missed' if row['days'] >= WAIT_LATE else ''))
 
 
 def briefing_frame():
@@ -3871,6 +3942,10 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             today_panel(latest['today'], date.today(), token)
 
         @ui.refreshable
+        def wait_block():
+            waiting_panel(latest['data']['reply_wait'], token, tick)
+
+        @ui.refreshable
         def deadline_block():
             deadlines(latest['data'], date.today(), token, tick)
 
@@ -3907,7 +3982,8 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             read()
             # The kanban's middle column is this same field, so its tally moves too,
             # and a handled mail leaves 오늘 일정 the way it leaves the calendar.
-            for block in (kpi_row, today_block, deadline_block, todo_block, summary_row):
+            for block in (kpi_row, today_block, wait_block, deadline_block, todo_block,
+                          summary_row):
                 block.refresh()
 
         @ui.refreshable
@@ -3957,6 +4033,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                                 'priority', PRIORITY_NAMES, token)
                 with ui.element('div').classes('ma-stack'):
                     today_block()
+                    wait_block()
                     with card(flush=True):
                         with ui.element('div').classes('ma-head') \
                                 .style('padding:16px 18px 0;margin-bottom:10px'):
@@ -3977,8 +4054,9 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
 
             def paint():
                 data = read()
-                for block in (brief_block, kpi_row, today_block, deadline_block,
-                              todo_block, memo_block, run_block, summary_row):
+                for block in (brief_block, kpi_row, today_block, wait_block,
+                              deadline_block, todo_block, memo_block, run_block,
+                              summary_row):
                     block.refresh()
                 for element, option in (
                         (daily, trend_option(latest['trend'])),
@@ -4033,6 +4111,13 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             if key in request.query_params:
                 saved[key] = request.query_params[key]
                 saved['page'] = 0
+        if 'desc' in request.query_params:
+            # Read here rather than left to list_state(), which ends bool(value): a
+            # link's '0' is a non-empty string and every one of those is True. 답장
+            # 대기 is the one card whose list has to open oldest-first, because its
+            # own hint names the oldest row.
+            saved['desc'] = request.query_params['desc'] not in ('0', 'false')
+            saved['page'] = 0
         state = list_state(saved)
         opened = request.query_params.get('id')
         if opened:
