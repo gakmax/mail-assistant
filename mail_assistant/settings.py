@@ -5,7 +5,10 @@ import os
 # depend on the platform the tests happen to run on.
 from pathlib import Path, PureWindowsPath
 
-DEFAULTS = {'host': 'pop3s.hiworks.com', 'port': 995, 'interval': 180, 'email': '', 'model': ''}
+DEFAULTS = {'host': 'pop3s.hiworks.com', 'port': 995, 'interval': 180, 'email': '', 'model': '',
+            # 창 밖 알림. FIELDS에 없는 것은 글자를 입력하는 칸이 아니기 때문이고,
+            # normalize()가 values에 있는 키를 그대로 통과시키므로 저장은 같이 된다.
+            'notify': '1'}
 FIELDS = (('email', '메일 계정'), ('password', '메일 전용 비밀번호'), ('host', '수신 서버'),
           ('port', 'SSL 포트'), ('interval', '확인 간격(초, 최소 60)'), ('workbook', '엑셀 파일'),
           ('model', 'Codex 모델'))

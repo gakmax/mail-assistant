@@ -6,6 +6,7 @@ import time
 import subprocess
 import sys
 import tempfile
+from mail_assistant import notify
 import unittest
 import types
 from contextlib import contextmanager
@@ -449,6 +450,133 @@ class ThreadStoreTests(unittest.TestCase):
                 # 자기 자신은 맥락이 아니다: received<? 가 그것을 자른다.
                 self.assertEqual(store.thread_before(self.ACCOUNT, row['thread'],
                                                      store.detail(root)['received']), [])
+            finally:
+                store.db.close()
+
+
+class NotifyTests(unittest.TestCase):
+    """창 밖 알림 — 무엇을 알리고, 무엇을 알리지 않고, 실패하면 어떻게 되는가."""
+
+    ACCOUNT = 'acct'
+
+    def row(self, ident, priority, subject='제목', handled='', action='다음 행동'):
+        return {'id': ident, 'handled': handled, 'subject': subject,
+                'result': json.dumps({'priority': priority, 'next_action': action})}
+
+    def test_only_긴급과_높음이_창_밖으로_나간다(self):
+        """'보통'까지 알리면 알림은 '메일이 왔다'와 같아지고, 그것은 메일함이 할 말이다."""
+        rows = [self.row('a', '긴급'), self.row('b', '높음'),
+                self.row('c', '보통'), self.row('d', '낮음')]
+        self.assertEqual([item['id'] for item in notify.worth_telling(rows)], ['a', 'b'])
+
+    def test_a_mail_already_finished_is_not_news(self):
+        """알림이 도착하기 전에 읽고 완료한 메일까지 알리면, 방금 한 일을 모르는 알림이다."""
+        self.assertEqual(notify.worth_telling([self.row('a', '긴급', handled=HANDLED)]), [])
+
+    def test_긴급이_먼저_선다(self):
+        rows = [self.row('a', '높음'), self.row('b', '긴급')]
+        self.assertEqual([item['id'] for item in notify.worth_telling(rows)], ['b', 'a'])
+
+    def test_one_mail_names_itself_and_several_are_counted(self):
+        one = notify.worth_telling([self.row('a', '긴급', subject='서버 점검')])
+        title, body = notify.summarise(one)
+        self.assertEqual(title, '긴급 메일: 서버 점검')
+        self.assertEqual(body, '다음 행동')
+        many = notify.worth_telling([self.row('a', '긴급', subject='서버 점검'),
+                                     self.row('b', '긴급'), self.row('c', '높음')])
+        title, body = notify.summarise(many)
+        self.assertEqual(title, '긴급 메일 3건')
+        self.assertIn('외 2건', body)
+        self.assertEqual(notify.summarise([]), (None, None))
+
+    def test_a_broken_result_is_skipped_not_raised(self):
+        self.assertEqual(notify.worth_telling(
+            [{'id': 'a', 'handled': '', 'subject': 's', 'result': '{not json'}]), [])
+
+    def test_the_setting_defaults_to_on_for_a_config_that_predates_it(self):
+        self.assertTrue(notify.enabled({}))
+        self.assertTrue(notify.enabled({'notify': '1'}))
+        self.assertFalse(notify.enabled({'notify': ''}))
+        self.assertFalse(notify.enabled({'notify': '0'}))
+
+    def test_a_pc_that_cannot_toast_says_so_rather_than_raising(self):
+        """알림이 안 뜨는 것은 불편이고, 알림 때문에 수집이 멈추는 것은 고장이다."""
+        with patch.dict('sys.modules', {'win32gui': None, 'win32con': None}):
+            self.assertFalse(notify.send('제목', '본문'))
+
+    def test_the_balloon_goes_out_through_shell_notifyicon(self):
+        calls = []
+        fake_gui = types.SimpleNamespace(
+            GetModuleHandle=lambda _: 1,
+            WNDCLASS=lambda: types.SimpleNamespace(),
+            RegisterClass=lambda klass: 7,
+            CreateWindow=lambda *args: 99,
+            LoadIcon=lambda *args: 5,
+            ExtractIconEx=lambda *args: ([], []),
+            DestroyIcon=lambda handle: None,
+            Shell_NotifyIcon=lambda action, data: calls.append((action, data)))
+        fake_con = types.SimpleNamespace(WS_OVERLAPPED=0, IDI_APPLICATION=32512,
+                                         IMAGE_ICON=1, LR_LOADFROMFILE=16, LR_DEFAULTSIZE=64)
+        notify._tray.clear()
+        try:
+            with patch.dict('sys.modules', {'win32gui': fake_gui, 'win32con': fake_con}):
+                self.assertTrue(notify.send('긴급 메일 2건', '외 1건'))
+                # 두 번째 알림은 창을 다시 만들지 않는다: 등록이 두 번 되면 실패하고,
+                # 창을 지우면 풍선도 같이 사라진다.
+                self.assertTrue(notify.send('또', '하나'))
+            self.assertEqual([action for action, _ in calls],
+                             [notify.NIM_ADD, notify.NIM_MODIFY, notify.NIM_MODIFY])
+            self.assertIn('긴급 메일 2건', calls[1][1])
+        finally:
+            notify._tray.clear()
+
+    def test_tell_marks_every_mail_it_looked_at_even_the_quiet_ones(self):
+        """다음 주기에 세 시간 전의 긴급 메일을 처음인 양 띄우는 것은 잔소리다."""
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            try:
+                seen = []
+                for uid, priority in (('u1', '긴급'), ('u2', '낮음')):
+                    message = EmailMessage()
+                    message['From'] = 'kim@x.example'
+                    message['Subject'] = f'{uid} 제목'
+                    message.set_content('본문')
+                    ident = store.add(self.ACCOUNT, uid, message.as_bytes())
+                    store.analyzed(ident, {'sender': '', 'subject': '', 'body': '',
+                                           'attachments': []},
+                                   {'category': '문의', 'summary': '', 'requests': '',
+                                    'events': [], 'priority': priority, 'priority_reason': '',
+                                    'next_action': '', 'reply_needed': False,
+                                    'reply_subject': '', 'reply_draft': ''})
+                    seen.append(ident)
+                with patch.object(notify, 'send', lambda *args, **kwargs: True):
+                    self.assertEqual(notify.tell(store, self.ACCOUNT, {'notify': '1'}), 1)
+                    # 두 번째 주기에는 알릴 것이 없다.
+                    self.assertEqual(notify.tell(store, self.ACCOUNT, {'notify': '1'}), 0)
+                self.assertEqual(store.unnotified(self.ACCOUNT), [])
+            finally:
+                store.db.close()
+
+    def test_a_switched_off_notification_still_marks_the_mail(self):
+        """끈 동안 쌓인 것을 다시 켠 날 한꺼번에 띄우면, 그것은 알림이 아니라 사고다."""
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            try:
+                message = EmailMessage()
+                message['From'] = 'kim@x.example'
+                message['Subject'] = '긴급'
+                message.set_content('본문')
+                ident = store.add(self.ACCOUNT, 'u1', message.as_bytes())
+                store.analyzed(ident, {'sender': '', 'subject': '', 'body': '',
+                                       'attachments': []},
+                               {'category': '문의', 'summary': '', 'requests': '', 'events': [],
+                                'priority': '긴급', 'priority_reason': '', 'next_action': '',
+                                'reply_needed': False, 'reply_subject': '', 'reply_draft': ''})
+                sent = []
+                with patch.object(notify, 'send', lambda *a, **k: sent.append(a) or True):
+                    self.assertEqual(notify.tell(store, self.ACCOUNT, {'notify': ''}), 0)
+                self.assertEqual(sent, [])
+                self.assertEqual(store.unnotified(self.ACCOUNT), [])
             finally:
                 store.db.close()
 

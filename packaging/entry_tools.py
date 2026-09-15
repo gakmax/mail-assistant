@@ -143,6 +143,16 @@ def check_chat():
     return f'{total:,} bytes'
 
 
+def check_notify():
+    """알림이 쓰는 늦은 import. 풍선을 실제로 띄우지는 않는다."""
+    import win32gui                                  # noqa: F401
+    from mail_assistant import notify
+    title, body = notify.summarise(
+        [{'id': 'x', 'priority': '긴급', 'subject': '점검', 'action': '확인'}])
+    assert title and body, '알림 문구가 비어 있습니다'
+    return f'win32gui, 문구 예시: {title}'
+
+
 def check_native():
     """MailAssistant.exe is the web screens in a pywebview frame. No frame, no window.
 
@@ -190,6 +200,9 @@ def selftest():
         ('nicegui 상담 자산', check_chat),
         # The window itself: MailAssistant.exe opens the screens in a pywebview frame.
         ('pywebview (창)', check_native),
+        # 창 밖 알림은 win32gui를 늦게 import한다. 번들에서 빠져도 앱은 조용히 돌기만
+        # 하고(send()가 False를 돌려준다), 알림이 안 뜨는 이유를 말해 주는 데가 없다.
+        ('알림 (win32gui)', check_notify),
     ]
     failed = 0
     for name, probe in checks:

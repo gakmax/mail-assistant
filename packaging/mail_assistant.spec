@@ -56,6 +56,10 @@ HIDDEN = [
     # one. Nothing static can see that import, so a bundle without this line raises
     # ModuleNotFoundError the first time a password is read — which is every poll.
     'win32timezone',
+    # notify.py's own late imports. Both windows and the worker can raise a balloon,
+    # and send() swallows its own failure — so a bundle missing these is an app whose
+    # 알림 switch is on and does nothing, with nowhere saying why. selftest checks it.
+    'win32gui', 'win32con',
     'win32com', 'win32com.client', 'win32com.shell',
     'win32comext.shell.shell', 'win32comext.shell.shellcon',
     'pythoncom', 'pywintypes',

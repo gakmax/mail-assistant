@@ -440,6 +440,24 @@ is set by the things that change a list column (처리 상태, 다시 분석, �
 else. Refreshing while the dialog is open is the same work done where nobody can see
 it, behind a dialog that covers the rows.
 
+**The toast is the only thing this app says outside its own window, and it says it
+once.** `Store.unnotified()`/`mark_notified()` existed from the beginning with no
+caller; `notify.tell()` is that caller, run by the worker right after analysis. Its rule
+is that **every mail it looked at is marked, whether or not a balloon went up** — with
+the switch off, with no Windows, with `send()` failing — because the alternative is a
+day's worth of 긴급 arriving at once the moment the switch is turned back on, and
+because a mail that was urgent three hours ago is not news the list and the 대시보드
+are not already holding. Only 긴급 and 높음 go out (알림 for 보통 is just '메일이 왔다',
+which the mailbox already says) and a mail already marked 처리 does not, or the toast is
+telling the reader about something they just finished. One balloon per cycle, counted —
+five separate toasts are four interruptions. `notify.py` imports no toolkit and no
+Windows module at module level, exactly as `updater.py` does, so the whole decision is
+tested off Windows; `send()` returns False rather than raising, because a notification
+that does not appear is an inconvenience and a notification that stops collection is a
+fault. The hidden window and tray icon are **created once per process** and cached:
+registering the window class twice fails, and destroying the window takes the balloon
+with it — `main()`'s `finally` calls `close()` so no ghost icon is left in the tray.
+
 **An attachment's filename is the one string an outsider hands to the filesystem.**
 The bytes were in `raw` all along — nothing migrated for 첨부 꺼내기 to work, which is
 what keeping `raw` earns a second time — but the *name* comes out of a header a sender

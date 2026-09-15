@@ -6,6 +6,7 @@ from .core import NO_RETRY, Store, account_key, now
 from .excel import Excel, error_detail
 from .overview import briefing_due, briefing_input, trend
 from .report import remember_secret, report
+from .notify import tell
 from .services import (BODY_LIMIT, THREAD_TURNS, Unanalyzable, analyze_many, analyze_one,
                        briefing, check_login, context_size, fetch_mail, group_mails,
                        prepare, read_password, thread_context)
@@ -163,6 +164,15 @@ def run(config, directory, stop, notify, wake=None):
                     report('Codex 로그인 확인 실패', exc)
                     next_analysis = time.time() + 300
                     messages.append('Codex ChatGPT 로그인을 확인하세요. 5분 후 재시도합니다.')
+            # 분석이 끝난 직후. 창 밖으로 나가는 유일한 것이고, 알린 뒤에는 표시를
+            # 남겨 같은 메일을 다시 알리지 않는다 — tell()이 둘 다 한다.
+            try:
+                told = tell(store, account, config)
+                if told:
+                    messages.append(f'긴급 메일 알림 {told}건')
+            except Exception as exc:
+                # 알림이 수집을 멈출 수 있는 것은 아니다.
+                report('알림 실패', exc)
             waiting = store.unexported(account)
             counts = store.counts(account)
             status = {

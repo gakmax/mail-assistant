@@ -28,6 +28,7 @@ from .hub import line_text
 from .overview import (BRIEF_HOUR, DUE_DAYS, RECENT_DAYS, UPCOMING, overview, past_due,
                        results, review_queue, trend)
 from .services import BODY_LIMIT, DRAFT_TONES, DRAFT_WAYS
+from .notify import enabled as notify_enabled
 from .settings import (DEFAULTS, FIELDS, GRADE_NOTE, NO_MODELS, RECOMMEND_WHY,
                        field_errors, model_label, model_rows, normalize, read_models)
 from .style import CALM, DASH_GREEN, LINK, NEUTRAL, SOON, URGENT, css_color
@@ -2289,6 +2290,9 @@ def thread_strip(rows, token):
 
 
 # 꺼낸 첨부가 놓이는 폴더 이름. 데이터 폴더 아래이고, 메일마다 제 하위 폴더를 갖는다.
+# 알림이 무엇을 하고 무엇을 하지 않는지. '창을 닫아도'가 아니라 '수집이 도는 동안'인
+# 것이 중요하다 — 알림을 띄우는 것은 수집기이지 창이 아니다.
+NOTIFY_NOTE = '수집이 도는 동안만 알립니다. 이미 알린 메일은 다시 알리지 않습니다'
 ATTACH_DIR = 'attachments'
 # 첨부는 이 앱이 만든 것이 아니라 남이 보낸 파일이고, 여는 것은 Windows다. 화면이
 # 그 사실을 한 번 말해 두는 자리 — 도우미는 첨부를 분석에 보내지도, 열어 보지도 않는다.
@@ -6187,6 +6191,9 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             refused()
             return
         values = {key: str(config.get(key, '')) for key, _ in FIELDS if key != 'password'}
+        # FIELDS에 없는 것은 글자 칸이 아니라 스위치이기 때문이고, normalize()가
+        # values의 키를 그대로 통과시키므로 저장은 같은 '저장' 단추가 한다.
+        values['notify'] = '1' if notify_enabled(config) else ''
         inputs, notes = {}, {}
         # 진단 used to be a page of its own. It is two buttons and a result list that
         # nobody opens until something is already wrong, and everything it asks about —
@@ -6321,6 +6328,13 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                         inputs[key] = box
                         notes[key] = ui.label('').classes('ma-meta__item') \
                             .style('margin:0 0 8px 2px')
+                    switch = ui.switch('긴급·높음 메일이 오면 Windows 알림',
+                                       value=bool(values['notify']))
+                    switch.props('dense').style('margin:2px 0 0 -6px')
+                    switch.on_value_change(
+                        lambda event: values.update({'notify': '1' if event.value else ''}))
+                    ui.label(NOTIFY_NOTE).classes('ma-meta__item') \
+                        .style('margin:0 0 6px 2px')
                     ui.button('저장', icon='save', on_click=save) \
                         .props('unelevated dense no-caps').style('margin-top:4px')
 

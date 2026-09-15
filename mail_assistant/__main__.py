@@ -13,7 +13,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import update
+from . import notify, update
 from .console import use_utf8
 from .report import install_hooks, report
 from .settings import DEFAULTS, field_errors
@@ -170,6 +170,9 @@ def main():
             pending = open_window(directory, config, config_path, hub, autostart, complaint)
     finally:
         hub.close()
+        # 트레이에서 아이콘을 거둔다. 남겨 두면 프로세스가 끝난 뒤에도 마우스를 올려야
+        # 사라지는 유령 아이콘이 되고, 업데이트 설치 뒤에는 두 개가 된다.
+        notify.close()
         # Close the mutex first. The last handle going away destroys the kernel object
         # even though we are still alive, so Setup's AppMutex check cannot collide with
         # us and abort with exit code 2 — 'user cancelled' — under /SUPPRESSMSGBOXES.
