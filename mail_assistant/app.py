@@ -811,6 +811,32 @@ class App:
         self.background('update', lambda: update.check(self.config, self.config_path), self.show_offer)
         # A slow or hanging check must never hold up work at login.
         self.root.after(20000, self.release_autostart)
+        self.root.after(update.WATCH_SECONDS * 1000, self.watch_update)
+
+    def watch_update(self):
+        """Ask again while the window stays open, which is all day for a mail poller.
+
+        The web screens do this on the shell's own beat; both go through the same
+        `update.check()` gate, so the interval is how soon somebody hears rather than
+        how often GitHub is asked. Reschedules first: a check that raised would
+        otherwise be the last one this process ever ran.
+        """
+        self.root.after(update.WATCH_SECONDS * 1000, self.watch_update)
+        if self.offer is None:
+            self.background('update', lambda: update.check(self.config, self.config_path),
+                            self.found_offer)
+
+    def found_offer(self, result):
+        """A version found while somebody is working: the button and the log, no dialog.
+
+        show_offer() opens one because it runs at login, on a window nobody has touched
+        yet. This one can arrive in the middle of a draft.
+        """
+        if isinstance(result, Exception) or not result:
+            return
+        self.offer = result
+        self.update_button.pack(side='left', padx=8)
+        self.log(f"새 버전 {result['version']}이(가) 나왔습니다. 업데이트 단추로 설치할 수 있습니다.")
 
     def release_autostart(self):
         """Let the worker start whether or not the update check has answered yet."""

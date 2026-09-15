@@ -107,6 +107,17 @@ class Updater:
             self.message = ''
         return found
 
+    def watch(self):
+        """The beat's own look: only when there is nothing already on the table.
+
+        Not force: `update.check()`'s own CHECK_SECONDS gate is what keeps this from
+        being a request every time, and a beat that forced would be one screen left
+        open asking GitHub every half hour for as long as the PC is on.
+        """
+        if self.offer is not None or self.state != IDLE:
+            return None
+        return self.look()
+
     def recheck(self):
         """A 지금 확인: force a check and say which of the four things happened.
 

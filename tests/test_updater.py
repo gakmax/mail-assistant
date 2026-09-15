@@ -137,6 +137,44 @@ class RecheckTests(unittest.TestCase):
             self.assertEqual(update.stamp(broken), 0.0)
 
 
+class WatchTests(unittest.TestCase):
+    """The beat that keeps an app left open all day from only ever checking at launch."""
+
+    def make(self, folder):
+        path = Path(folder) / 'config.json'
+        path.write_text(json.dumps({}), encoding='utf-8')
+        return Updater(Path(folder), {}, path)
+
+    def test_a_beat_asks_without_forcing(self):
+        """check()'s own gate decides whether it costs a request; forcing would defeat it."""
+        with tempfile.TemporaryDirectory() as folder:
+            worker = self.make(folder)
+            with patch.object(update, 'check', return_value=OFFER) as check:
+                self.assertEqual(worker.watch(), OFFER)
+            self.assertFalse(check.call_args.kwargs.get('force', False))
+            self.assertTrue(worker.waiting())
+
+    def test_a_beat_leaves_an_offer_already_on_the_table_alone(self):
+        with tempfile.TemporaryDirectory() as folder:
+            worker = self.make(folder)
+            worker.offer = OFFER
+            with patch.object(update, 'check') as check:
+                self.assertIsNone(worker.watch())
+            check.assert_not_called()
+
+    def test_a_beat_does_not_interrupt_a_download(self):
+        with tempfile.TemporaryDirectory() as folder:
+            worker = self.make(folder)
+            worker.state = WORKING
+            with patch.object(update, 'check') as check:
+                self.assertIsNone(worker.watch())
+            check.assert_not_called()
+
+    def test_the_beat_is_finer_than_the_gate(self):
+        """Or the six hours pass with nobody asking, which is the silence being fixed."""
+        self.assertLess(update.WATCH_SECONDS, update.CHECK_SECONDS)
+
+
 class UpdaterTests(unittest.TestCase):
     def make(self, folder):
         path = Path(folder) / 'config.json'

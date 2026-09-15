@@ -30,6 +30,11 @@ AGENT = f'mail-assistant/{__version__}'
 CHECK_TIMEOUT = 15
 READ_TIMEOUT = 30
 CHECK_SECONDS = 6 * 3600
+# How often a screen bothers asking, which is not how often GitHub is asked: check()
+# returns None without a request until CHECK_SECONDS has passed, so this only decides
+# how soon after that gate opens somebody hears about it. The app sits open all day,
+# so without a beat of some kind the only checks that ever happen are at launch.
+WATCH_SECONDS = 30 * 60
 # /SILENT rather than /VERYSILENT: once our window closes, the installer's
 # progress bar is the only sign anything is happening. A blank desktop reads
 # as a crash. The manifest can override this without shipping a new client.

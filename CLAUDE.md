@@ -17,7 +17,7 @@ that break silently if you don't know them.
 ## Commands
 
 ```bash
-python -m unittest discover -s tests -v    # from the repo root; 591 tests, all platforms
+python -m unittest discover -s tests -v    # from the repo root; 595 tests, all platforms
 ```
 
 ```powershell
@@ -703,6 +703,23 @@ before anything is drawn, with a traceback only `entry_gui.py` would catch.
 excludes, from when `MailAssistant.exe` was tkinter and only the tools exe served
 pages. Left in place it would have frozen a window that cannot import its own window —
 and nothing but a real Windows build would have said so.
+
+**The update check has a beat, and it is the shell's.** `update.check()` was called
+in exactly two places — `home()`'s once-only timer and `App.boot()` — so an app left
+open, which is what a mail poller is, only ever checked at launch: CHECK_SECONDS could
+pass all week with nobody asking, and 지금 확인 was the only way to learn about a
+release. `Updater.watch()` is that beat's look, and it is deliberately *not* forced —
+`check()`'s own six-hour gate is what decides whether a beat costs a request, so
+`WATCH_SECONDS` only decides how soon after the gate opens somebody hears. It lives in
+`update.py` because both windows read it. Three things follow. The timer is in
+`shell()`, not on the 대시보드, because the shell is the one thing every page has. It
+never opens the dialog — that one lands at launch on a page nobody has typed into, while
+this one can arrive over a draft, a memo or a half-written 상담 question; the pill and a
+`ui.notify` say it instead, and the pill needs no wiring because `chrome()` already reads
+the same `offer`. And `watch()` returns None while an offer is on the table or a download
+is running, or a beat would re-offer what the reader is already looking at. The tkinter
+fallback repeats the same beat with `root.after`, rescheduling *before* the check so a
+raise cannot make one beat the last.
 
 **The update offer is a state machine in `updater.py`, not in a screen.** `Updater`
 holds `offer`, `state`, `progress` and `message`, and — the part `main()` depends on —

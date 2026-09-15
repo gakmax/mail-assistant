@@ -28,6 +28,9 @@ from .overview import (BRIEF_HOUR, DUE_DAYS, RECENT_DAYS, UPCOMING, overview, pa
 from .settings import (CUSTOM, DEFAULTS, FIELDS, NO_MODELS, field_errors, model_rows,
                        model_value, normalize, read_models)
 from .style import CALM, DASH_GREEN, LINK, NEUTRAL, SOON, URGENT, css_color
+# The one module here that is not a screen's: update.py is stdlib-only, so the
+# beat's interval can be shared with app.py without either importing a toolkit.
+from .update import WATCH_SECONDS
 
 SERIES = css_color(LINK)      # one hue: every count bar measures the same thing
 INK = '#18181b'
@@ -2689,7 +2692,7 @@ def update_pill(offer):
     return f'새 버전 {version}' if version else ''
 
 
-def shell(current, token, chrome=None):
+def shell(current, token, chrome=None, watch=None):
     """The sidebar, the header band and the page area, identical on every page.
 
     `chrome` is one callable returning {'counts', 'state', 'offer'} — one call per tick
@@ -2697,6 +2700,10 @@ def shell(current, token, chrome=None):
     same beat and re-reading the mailbox once per element is what it is there to avoid.
     It is passed in rather than taken from a hub, so this module keeps importing without
     nicegui and nav_rows()/bar_status() stay coverable on Linux.
+
+    `watch` is the update re-check, on its own much slower beat. It lives here rather
+    than on the 대시보드 because this is the one thing every page has, and an app that
+    is open all day is exactly the one that never sees a launch-time check again.
     """
     from contextlib import contextmanager
     from nicegui import ui
@@ -2803,10 +2810,26 @@ def shell(current, token, chrome=None):
                 offer.set_text(found)
                 paint(state, found)
 
+        async def look():
+            """A version found while somebody is working: the pill and one line.
+
+            Never the dialog the 대시보드 opens. That one lands at launch, on a page
+            nobody has typed into yet; this one can arrive over a draft, a memo or a
+            half-written 상담 question, and a dialog there is the edit-eating every
+            other screen in this app is built to avoid. The pill itself needs no help:
+            chrome() reads the same `offer`, so the next tick paints it.
+            """
+            found = await watch()
+            if found:
+                ui.notify(f"새 버전 {found.get('version', '')}이(가) 나왔습니다. "
+                          '실행 화면에서 설치할 수 있습니다.', type='info', timeout=10000)
+
         if chrome is not None:
             # Built while the page is, never inside a handler that has refreshed:
             # a timer takes its client from the current slot.
             ui.timer(REFRESH_SECONDS, tick)
+        if watch is not None:
+            ui.timer(WATCH_SECONDS, look)
 
     return frame()
 
@@ -3117,9 +3140,21 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 'state': hub.state() if hub is not None else None,
                 'offer': updater.offer if updater is not None else None}
 
+    async def watch_update():
+        """The shell's slow beat. None when there is nothing new, which is most beats.
+
+        `Updater.watch()` is not forced, so `update.check()`'s own six-hour gate decides
+        whether this costs a request at all; every other beat returns without leaving the
+        machine. Several open pages each run this, and the stamp check() writes is what
+        keeps them from all asking at once.
+        """
+        if updater is None:
+            return None
+        return await nicerun.io_bound(updater.watch)
+
     def page_shell(current):
         """The shell every page opens with, wired to this build's hub and updater."""
-        return shell(current, token, chrome)
+        return shell(current, token, chrome, watch_update if updater is not None else None)
 
     async def install():
         """Stop collecting, then bring the server down so main() can run Setup.
