@@ -16,7 +16,7 @@ from unittest.mock import call, patch, MagicMock
 from mail_assistant.core import (ANALYZING, FAILED, HANDLED, HEADERS, PRIORITY_ORDER, ROOM_MARK, Store,
                                  account_key, STATES, STATE_SQL, day_bounds, filter_rows,
                                  local_text, parse_mail, row_view, sql_text, state_of,
-                                 workbook_rows)
+                                 table_text, text_of_html, workbook_rows)
 from mail_assistant.excel import (Excel, ExcelUpdateError, append_missing, ensure_table,
                                   error_detail, first_column, repair_generated_header,
                                   row_text)
@@ -128,6 +128,45 @@ class PipelineTests(unittest.TestCase):
         self.assertIn('본문', data['body'])
         self.assertNotIn('숨김', data['body'])
         self.assertEqual(data['attachments'], ['견적.pdf'])
+
+    def test_table_keeps_its_cells_apart(self):
+        """Hiworks sends 수주 mail as a table; the figures must not run together."""
+        msg = EmailMessage()
+        msg['Subject'] = '수주채번'
+        msg.set_content('<div>완료했습니다.</div>'
+                        '<table><tr><th>수주번호</th><th>공급가액</th><th>세액</th></tr>'
+                        '<tr><td>A26090135</td><td>90,000</td><td>9,000</td></tr></table>',
+                        subtype='html')
+        body = parse_mail(msg.as_bytes())['body']
+        self.assertNotIn('A2609013590,000', body)
+        self.assertIn('| 수주번호 | 공급가액 | 세액 |', body)
+        self.assertIn('| A26090135 | 90,000 | 9,000 |', body)
+        # The separator row is what makes the column a cell belongs to readable.
+        self.assertIn('| --- | --- | --- |', body)
+
+    def test_layout_table_is_not_drawn_as_one(self):
+        """Mail HTML wraps bodies and signatures in tables; a grid round those is noise."""
+        text = text_of_html('<table><tr><td><p>안녕하세요</p><p>김규림 드림</p></td></tr></table>')
+        self.assertNotIn('---', text)
+        self.assertEqual(text.split(), ['안녕하세요', '김규림', '드림'])
+        self.assertIn('\n', text.strip())      # the cell keeps its own line breaks
+
+    def test_table_inside_a_layout_wrapper_survives(self):
+        text = text_of_html('<table><tr><td>앞말'
+                            '<table><tr><th>항목</th><th>금액</th></tr>'
+                            '<tr><td>총액</td><td>99,000</td></tr></table>'
+                            '뒷말</td></tr></table>')
+        self.assertIn('| 항목 | 금액 |', text)
+        self.assertIn('| 총액 | 99,000 |', text)
+
+    def test_ragged_and_unclosed_table(self):
+        """A short row is padded and a table the mail never closed is still emitted."""
+        text = text_of_html('<table><tr><td>a|b</td><td>줄1<br>줄2</td></tr><tr><td>x</td>')
+        self.assertIn(r'| a\|b | 줄1 줄2 |', text)     # a pipe in a cell cannot open one
+        self.assertIn('| x |  |', text)
+
+    def test_empty_table_draws_nothing(self):
+        self.assertEqual(table_text([[['\xa0'], ['  ']]]), '')
 
     def test_codex_stdin_schema_and_no_api_key(self):
         def execute(command, **kwargs):

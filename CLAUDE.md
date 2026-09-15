@@ -17,7 +17,7 @@ that break silently if you don't know them.
 ## Commands
 
 ```bash
-python -m unittest discover -s tests -v    # from the repo root; 559 tests, all platforms
+python -m unittest discover -s tests -v    # from the repo root; 569 tests, all platforms
 ```
 
 ```powershell
@@ -390,6 +390,36 @@ is checked against `card_rows()`. `event_kind()` gives an analysed event the cal
 own kind, and calls one 확인 필요 when *neither* date parses even if Codex did not say
 so — the card is then the only place that can tell the reader why that event is on no
 calendar, which is the one thing the calendar itself cannot say.
+
+**A table cell that emits nothing joins its neighbours.** `TextHTML` gave `br p div
+tr li` a newline and `td`/`th` nothing at all, so 수주번호 A26090135 beside 공급가액
+90,000 reached Codex — and 원문 — as `A2609013590,000`, one run with no way back to
+the two figures. Hiworks states 수주·견적·정산 in tables, so this was quietly costing
+accuracy on exactly the mail that carries numbers. Rows are collected now and
+`table_text()` decides between two shapes: a Markdown grid, whose separator row is
+what tells a model which column a cell is in, and — for anything under `TABLE_SHAPE`
+— plain lines. That second case is not a fallback but the common one: mail HTML wraps
+bodies and signatures in single-cell tables, and a grid drawn round a signature is
+noise, which is also why a layout cell keeps its own line breaks while a grid cell is
+squashed to one line. A nested table is rendered when its own `</table>` is seen and
+written into the cell holding it, so the real table inside a layout wrapper survives.
+`parsed` is written once by `Store.analyzed()`, so mail analysed before this keeps the
+old run-together body until 다시 분석; `raw` is still there, which is what makes that
+possible.
+
+**원문 draws the table back, and never the mail's own HTML.** `body_blocks()` splits
+the body into `('text', …)` and `('table', rows)` by finding the Markdown `table_text()`
+wrote, and `body_panel()` builds a real `<table>` out of elements — the cells go in
+through `ui.label`, so markup a sender wrote cannot reach the DOM and the panel needs
+no sanitiser of its own. Rendering the mail's HTML instead would: that is the whole
+reason this goes the long way round. A table is claimed only when a header, the rule
+under it and a row are all three present, because a sender may well write a line that
+begins and ends with a pipe, and drawing a grid round that is the panel inventing a
+table nobody sent. The class is `.ma-sheet`, not `.ma-grid` — that one is `display:grid`
+and every layout on the site uses it — and not `.ma-table` either, which is the 메일
+목록's, with a pointer cursor and a row hover for rows that open something. The mail
+decides how many columns it has, so `.ma-sheet__wrap` scrolls sideways on `.ma-scroll`'s
+own thumb rather than the dialog doing it.
 
 **Deleting mail keeps its `seen` uid.** `Store.delete()` drops the mail row and the
 chat hung off it, and deliberately leaves `seen` alone: the mail is still on the POP3

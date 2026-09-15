@@ -107,24 +107,108 @@ def day_bounds(day):
 
 
 class TextHTML(HTMLParser):
+    """HTML mail to text, keeping a table's cell boundaries.
+
+    A td that emits nothing joins its neighbours: 수주번호 A26090135 beside 공급가액
+    90,000 left Codex — and the 원문 panel — one run reading 'A2609013590,000', with
+    no way back to the two figures. Rows are collected instead of flattened, and a
+    table that is really a table is emitted as Markdown so the column a cell belongs
+    to survives the trip.
+    """
+
     def __init__(self):
         super().__init__()
         self.parts = []
         self.hidden = 0
+        self.tables = []   # one entry per open <table>, innermost last
+
+    def write(self, text):
+        """Text goes to the open cell, or to the document when there is none."""
+        cell = self.cell()
+        (cell if cell is not None else self.parts).append(text)
+
+    def cell(self):
+        for table in reversed(self.tables):
+            if table and table[-1]:
+                return table[-1][-1]
+        return None
 
     def handle_starttag(self, tag, attrs):
         if tag in ('script', 'style'):
             self.hidden += 1
-        if tag in ('br', 'p', 'div', 'tr', 'li'):
-            self.parts.append('\n')
+        elif tag == 'table':
+            self.tables.append([])
+        elif tag == 'tr' and self.tables:
+            self.tables[-1].append([])
+        elif tag in ('td', 'th') and self.tables:
+            if not self.tables[-1]:
+                self.tables[-1].append([])      # a cell outside any <tr>
+            self.tables[-1][-1].append([])
+        elif tag in ('br', 'p', 'div', 'tr', 'li'):
+            self.write('\n')
 
     def handle_endtag(self, tag):
         if tag in ('script', 'style'):
             self.hidden = max(0, self.hidden - 1)
+        elif tag == 'table' and self.tables:
+            # Popped first: a nested table's text belongs to the cell holding it.
+            self.write(table_text(self.tables.pop()))
 
     def handle_data(self, data):
         if not self.hidden:
-            self.parts.append(data)
+            self.write(data)
+
+    def text(self):
+        """The document, closing any table the mail forgot to."""
+        while self.tables:
+            self.write(table_text(self.tables.pop()))
+        return ''.join(self.parts)
+
+
+# A layout table is the common case in mail HTML, and a Markdown grid drawn round
+# somebody's signature is noise. Only a table of at least this shape gets one.
+TABLE_SHAPE = (2, 2)   # columns, rows
+
+
+def squash(text):
+    """A cell as one line: a Markdown row cannot carry the newlines a cell may hold."""
+    return ' '.join(str(text).split()).replace('|', r'\|')
+
+
+def table_text(table):
+    """A collected table as text, Markdown only when it is a grid rather than a layout."""
+    rows = [[''.join(cell) for cell in row] for row in table]
+    rows = [row for row in rows if any(cell.strip() for cell in row)]
+    if not rows:
+        return ''
+    width = max(len(row) for row in rows)
+    columns, least = TABLE_SHAPE
+    if width < columns or len(rows) < least:
+        return '\n' + '\n'.join(layout_rows(rows)) + '\n'
+    grid = [[squash(cell) for cell in row] + [''] * (width - len(row)) for row in rows]
+    grid.insert(1, ['---'] * width)
+    return '\n' + '\n'.join('| ' + ' | '.join(row) + ' |' for row in grid) + '\n'
+
+
+def layout_rows(rows):
+    """A table that is only holding a layout: the cells are text, not columns.
+
+    Most mail HTML wraps the body — or a signature, or a nested real table — in one
+    of these, so a cell keeps its own line breaks. Only a row that really has several
+    cells is put on one line, where the boundary is the thing worth keeping.
+    """
+    lines = []
+    for row in rows:
+        kept = [cell for cell in row if cell.strip()]
+        lines.append(' | '.join(squash(cell) for cell in kept) if len(kept) > 1 else kept[0].strip())
+    return lines
+
+
+def text_of_html(html):
+    """HTML mail as the text everything downstream reads: Codex, 원문 and the search box."""
+    parser = TextHTML()
+    parser.feed(str(html))
+    return parser.text()
 
 
 def parse_mail(raw: bytes):
@@ -134,9 +218,7 @@ def parse_mail(raw: bytes):
     if body:
         text = body.get_content()
         if body.get_content_type() == 'text/html':
-            parser = TextHTML()
-            parser.feed(text)
-            text = ''.join(parser.parts)
+            text = text_of_html(text)
     return {
         'sender': str(message.get('From', '')),
         'subject': str(message.get('Subject', '(제목 없음)')),

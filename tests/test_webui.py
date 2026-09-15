@@ -11,7 +11,8 @@ from email.message import EmailMessage
 from pathlib import Path
 
 from mail_assistant.core import (ANALYZING, EVENT_MARK, FAILED, HANDLED, PROGRESS, SORTS,
-                                 Store, account_key, event_key, event_row_id, is_event_key)
+                                 Store, account_key, event_key, event_row_id, is_event_key,
+                                 text_of_html)
 from mail_assistant.dashboard import PRIORITIES
 from mail_assistant.calendar_sheet import MARKERS
 from mail_assistant.hub import Hub
@@ -29,6 +30,7 @@ from mail_assistant.webui import (CARD_TONES, DEFAULT_LIST, FONT_FILE, STATE_TON
                                   detail_view, href, list_state, listing, new_token, open_port,
                                   release_store, run_summary, snapshot,
                                   soft_of, summary_line, tag_cell, tidy_body,
+                                  body_blocks,
                                   calendar_events, card_target, countdown_text, run_view,
                                   FAILED_CARD, board, board_counts, card_hint, card_rows,
                                   chat_context, draft_view, label_step, stats_view,
@@ -631,6 +633,40 @@ class ListingTests(unittest.TestCase):
             row = listing(folder, CONFIG, list_state())['rows'][0]
             self.assertEqual(set(row), {'id', 'received', 'sender', 'subject', 'category',
                                         'priority', 'state', 'error'})
+
+
+class BodyBlockTests(unittest.TestCase):
+    """원문 splits into text and tables, so a table is drawn as one rather than shown raw."""
+
+    def blocks(self, html):
+        return body_blocks(tidy_body(text_of_html(html)))
+
+    def test_a_table_becomes_a_block_of_rows(self):
+        blocks = self.blocks('<div>완료했습니다.</div>'
+                             '<table><tr><th>수주번호</th><th>공급가액</th></tr>'
+                             '<tr><td>A26090135</td><td>90,000</td></tr></table>'
+                             '<div>확인 부탁드립니다.</div>')
+        self.assertEqual(blocks, [('text', '완료했습니다.'),
+                                  ('table', [['수주번호', '공급가액'], ['A26090135', '90,000']]),
+                                  ('text', '확인 부탁드립니다.')])
+
+    def test_a_pipe_in_a_cell_is_a_cell_not_a_column(self):
+        blocks = self.blocks('<table><tr><th>항목</th><th>비고</th></tr>'
+                             '<tr><td>a|b</td><td>c</td></tr></table>')
+        self.assertEqual(blocks[0][1][1], ['a|b', 'c'])
+
+    def test_a_line_of_pipes_is_not_a_table(self):
+        """Only a header and the rule under it make one: the rest is what the sender wrote."""
+        self.assertEqual(body_blocks('|정말| 표가 아닙니다|\n다음 줄'),
+                         [('text', '|정말| 표가 아닙니다|\n다음 줄')])
+
+    def test_a_body_with_no_table_is_one_block(self):
+        self.assertEqual(body_blocks('안녕하세요\n\n감사합니다'),
+                         [('text', '안녕하세요\n\n감사합니다')])
+
+    def test_an_empty_body_has_no_blocks(self):
+        self.assertEqual(body_blocks(''), [])
+        self.assertEqual(body_blocks(None), [])
 
 
 class DetailViewTests(unittest.TestCase):

@@ -482,6 +482,17 @@ a.ma-kpi:hover {{
   font-variant-numeric:tabular-nums;
 }}
 
+/* 원문 속의 표. Not .ma-table: that one is the 메일 목록's, with a pointer cursor and
+   a row hover, and nothing here is clickable. The mail decides how many columns it
+   has, so the wrapper scrolls sideways rather than the panel doing it. */
+.ma-sheet__wrap {{ display:block; overflow-x:auto; max-width:100%; margin:8px 0 10px; }}
+.ma-sheet {{ border-collapse:collapse; font-size:12px; line-height:1.6; background:var(--card); }}
+.ma-sheet td, .ma-sheet th {{
+  border:1px solid var(--line); padding:5px 9px; text-align:left;
+  vertical-align:top; color:var(--ink); white-space:nowrap;
+}}
+.ma-sheet th {{ background:var(--sunken); color:var(--muted); font-weight:600; }}
+
 /* Quasar overrides: the table is the one place the defaults fight the page. */
 .ma-table thead tr th {{
   background:var(--sunken); color:var(--muted); font-size:11.5px; font-weight:600;
@@ -1235,6 +1246,71 @@ def tidy_body(text):
     return '\n'.join(kept)
 
 
+# A row of our own Markdown table, and the rule under its header. parse_mail writes
+# both (core.table_text), so the shapes matched here are ones this app emitted.
+CELL_SPLIT = re.compile(r'(?<!\\)\|')
+
+
+def is_row(line):
+    return line.startswith('|') and line.endswith('|') and len(line) > 1
+
+
+def is_rule(line):
+    cells = split_cells(line)
+    return bool(cells) and all(cell == '---' for cell in cells)
+
+
+def split_cells(line):
+    """The cells of a Markdown row, with the escape core.squash() put on a pipe undone."""
+    return [cell.strip().replace(r'\|', '|') for cell in CELL_SPLIT.split(line)[1:-1]]
+
+
+def table_at(lines, index):
+    """(rows, the line after) for a table starting here, or None.
+
+    A header, the rule under it and at least one row: all three, because a mail may
+    well write a line of its own that begins and ends with a pipe, and drawing a grid
+    round that would be the parser inventing a table the sender never sent.
+    """
+    if index + 2 >= len(lines) or not is_row(lines[index]) or not is_rule(lines[index + 1]):
+        return None
+    rows, at = [split_cells(lines[index])], index + 2
+    while at < len(lines) and is_row(lines[at]) and not is_rule(lines[at]):
+        rows.append(split_cells(lines[at]))
+        at += 1
+    return (rows, at) if len(rows) > 1 else None
+
+
+def body_blocks(text):
+    """원문 as ('text', str) and ('table', rows) blocks, so a table is drawn as one.
+
+    The mail's own HTML is never rendered: what is drawn back is the text parse_mail
+    already made of it, which is why the panel needs no sanitising of its own.
+    """
+    blocks, plain, lines = [], [], [line.strip() for line in str(text or '').split('\n')]
+
+    def flush():
+        while plain and not plain[-1]:
+            plain.pop()
+        if plain:
+            blocks.append(('text', '\n'.join(plain)))
+        plain.clear()
+
+    index = 0
+    while index < len(lines):
+        found = table_at(lines, index)
+        if found:
+            flush()
+            blocks.append(('table', found[0]))
+            index = found[1]
+        else:
+            if plain or lines[index]:
+                plain.append(lines[index])
+            index += 1
+    flush()
+    return blocks
+
+
 def board(rows, todos):
     """{state: [card]} for the kanban. Mail-derived cards and manual ones look alike.
 
@@ -1832,6 +1908,41 @@ def section(title, *, top=True):
     from nicegui import ui
     ui.label(title).classes('ma-head__title') \
         .style('margin:%s 0 8px' % ('16px' if top else '0'))
+
+
+def body_panel(text):
+    """원문, with the mail's tables drawn as tables again.
+
+    Built out of elements rather than a string of HTML: the cells go in through
+    ui.label, so nothing here can carry markup the sender wrote — the panel needs no
+    sanitiser because it never holds the mail's own HTML in the first place.
+    """
+    from nicegui import ui
+    blocks = body_blocks(text)
+    if not blocks:
+        ui.label('(본문 없음)').style(f'display:block;color:{SUBTLE};font-size:12.5px')
+        return
+    for kind, content in blocks:
+        if kind == 'table':
+            head, rows = content[0], content[1:]
+            # ma-scroll for its thumb: a table wider than the panel has to say so,
+            # and the mail decides how many columns it has.
+            with ui.element('div').classes('ma-sheet__wrap ma-scroll'):
+                with ui.element('table').classes('ma-sheet'):
+                    with ui.element('thead'), ui.element('tr'):
+                        for cell in head:
+                            with ui.element('th'):
+                                ui.label(cell)
+                    with ui.element('tbody'):
+                        for row in rows:
+                            with ui.element('tr'):
+                                for cell in row:
+                                    with ui.element('td'):
+                                        ui.label(cell or '')
+        else:
+            ui.label(content).style(f'display:block;color:{SUBTLE};font-size:12.5px;'
+                                    'white-space:pre-wrap;text-align:left;line-height:1.75;'
+                                    'overflow-wrap:anywhere')
 
 
 def card(title=None, icon=None, flush=False):
@@ -3579,10 +3690,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                         # layout here, which parks a short body in the middle of the box.
                         with ui.element('div').classes('ma-sunken ma-scroll') \
                                 .style('display:block;max-height:340px;width:100%'):
-                            ui.label(view['body'] or '(본문 없음)') \
-                                .style(f'display:block;color:{SUBTLE};font-size:12.5px;'
-                                       'white-space:pre-wrap;text-align:left;line-height:1.75;'
-                                       'overflow-wrap:anywhere')
+                            body_panel(view['body'])
                         # The memos written about this mail. They live in the same
                         # table as the 메모 화면's and are edited the same way here —
                         # this is what a memo can do that a 할 일 card cannot, so it
