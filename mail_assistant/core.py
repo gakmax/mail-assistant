@@ -945,6 +945,35 @@ class Store:
             self.db.executemany('UPDATE mail SET handled=? WHERE id=?',
                                 ((state, ident) for ident in ids))
 
+    def attachments(self, ident):
+        """이 메일의 첨부 목록. 이름만이 아니라 크기와 순번까지."""
+        row = self.db.execute('SELECT raw FROM mail WHERE id=?', (ident,)).fetchone()
+        if row is None:
+            return []
+        try:
+            return attachments_of(row['raw'])
+        except Exception:
+            # 첨부를 못 읽는다고 메일을 못 여는 것은 아니다. 목록만 비어 있다.
+            return []
+
+    def save_attachment(self, ident, index, folder):
+        """첨부 한 개를 folder 아래에 꺼내 놓고 그 경로를 돌려준다.
+
+        `folder / ident / name`: 메일마다 제 폴더를 갖는 것이 두 메일의 '견적서.xlsx'가
+        서로를 덮어쓰지 않는 유일한 방법이고, ident는 우리가 만든 24자 hex라 이름을
+        지어낸 발신자가 닿을 수 없는 한 겹이기도 하다.
+        """
+        row = self.db.execute('SELECT raw FROM mail WHERE id=?', (ident,)).fetchone()
+        if row is None:
+            return None
+        name, payload = attachment_bytes(row['raw'], index)
+        if name is None:
+            return None
+        target = Path(folder) / safe_name(ident, 'mail') / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)
+        return target
+
     def detail(self, ident):
         return self.db.execute('SELECT * FROM mail WHERE id=?', (ident,)).fetchone()
 
@@ -1166,6 +1195,80 @@ def address_of(sender):
         return match.group(1).lower()
     text = str(sender or '').strip()
     return text.lower() if '@' in text and ' ' not in text else ''
+
+
+# 저장할 때 자르는 파일 이름 길이. Windows의 MAX_PATH를 다 쓰지 않으려는 것이고,
+# 붙는 폴더 이름(메일 id 24자)까지 세어 넉넉히 남긴다.
+NAME_LIMIT = 120
+# 파일 이름에 쓸 수 없거나, 써서는 안 되는 글자. 경로 구분자가 여기 있는 것이 핵심이다 —
+# 첨부 이름은 보낸 사람이 쓴 문자열이고, '../../autoexec.bat'도 이름이다.
+BAD_NAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+# Windows가 확장자와 무관하게 장치로 잡는 이름들. CON.txt로 저장하면 파일이 생기지 않는다.
+DEVICE_NAMES = {'con', 'prn', 'aux', 'nul', *(f'com{n}' for n in range(1, 10)),
+                *(f'lpt{n}' for n in range(1, 10))}
+
+
+def safe_name(name, fallback='첨부파일'):
+    """첨부 이름을 저장해도 되는 파일 이름으로. 보낸 사람이 쓴 문자열이라는 것이 전부다.
+
+    Path separators, '..', device names and control characters all go: the name comes
+    out of a mail header, so it is the one string in this app an outsider chooses and
+    this app then hands to the filesystem. Everything unusable becomes `fallback`
+    rather than an error — a mail with a hostile attachment name is still a mail the
+    reader wants to open.
+    """
+    text = BAD_NAME.sub('_', str(name or '')).strip().strip('.')
+    # '..'는 위 치환을 통과한다: 점은 이름에 쓸 수 있는 글자다.
+    if not text or set(text) <= {'.'}:
+        return fallback
+    stem, dot, suffix = text.rpartition('.')
+    if (stem or text).lower() in DEVICE_NAMES:
+        text = '_' + text
+    if len(text) > NAME_LIMIT:
+        stem, dot, suffix = text.rpartition('.')
+        keep = NAME_LIMIT - len(dot + suffix)
+        text = (stem[:max(1, keep)] + dot + suffix) if dot else text[:NAME_LIMIT]
+    return text
+
+
+def attachments_of(raw):
+    """[{'index','name','size','type'}] — 이름만이 아니라 크기까지, raw에서 바로.
+
+    parse_mail()의 `attachments`는 이름의 목록이고 이미 저장된 JSON 안에 그 모양으로
+    들어 있다. 여기서 바꾸면 예전 메일이 전부 어긋나므로, 크기와 순번이 필요한 쪽은
+    raw를 다시 읽는다 — raw는 언제나 남아 있고, 이것은 첨부를 열 때만 부르는 길이다.
+    """
+    message = BytesParser(policy=policy.default).parsebytes(raw)
+    found = []
+    for index, part in enumerate(message.iter_attachments()):
+        try:
+            payload = part.get_content()
+        except Exception:
+            payload = part.get_payload(decode=True) or b''
+        if isinstance(payload, str):
+            payload = payload.encode('utf-8', 'replace')
+        found.append({'index': index, 'name': part.get_filename() or '(이름 없음)',
+                      'size': len(payload) if isinstance(payload, bytes) else 0,
+                      'type': part.get_content_type()})
+    return found
+
+
+def attachment_bytes(raw, index):
+    """(저장해도 되는 이름, 바이트). 범위를 벗어난 순번은 (None, None).
+
+    Reads raw rather than anything stored: an attachment is the one part of a mail this
+    app never copied out, which is also why nothing had to migrate for this to work.
+    """
+    message = BytesParser(policy=policy.default).parsebytes(raw)
+    for position, part in enumerate(message.iter_attachments()):
+        if position != index:
+            continue
+        payload = part.get_payload(decode=True)
+        if payload is None:
+            content = part.get_content()
+            payload = content.encode('utf-8', 'replace') if isinstance(content, str) else b''
+        return safe_name(part.get_filename()), payload
+    return None, None
 
 
 def display_name(sender):

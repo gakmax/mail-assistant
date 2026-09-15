@@ -19,6 +19,7 @@ from mail_assistant.core import (ANALYZING, FAILED, HANDLED, HEADERS, NO_RETRY,
                                  WAITING, PROGRESS, day_bounds, filter_rows,
                                  local_text, parse_mail, row_view, sql_text, state_of,
                                  thread_key, message_ids, address_of, display_name,
+                                 safe_name, NAME_LIMIT, attachments_of, attachment_bytes,
                                  table_text, text_of_html, workbook_rows)
 from mail_assistant.excel import (Excel, ExcelUpdateError, append_missing, ensure_table,
                                   error_detail, first_column, repair_generated_header,
@@ -448,6 +449,115 @@ class ThreadStoreTests(unittest.TestCase):
                 # 자기 자신은 맥락이 아니다: received<? 가 그것을 자른다.
                 self.assertEqual(store.thread_before(self.ACCOUNT, row['thread'],
                                                      store.detail(root)['received']), [])
+            finally:
+                store.db.close()
+
+
+class AttachmentTests(unittest.TestCase):
+    """첨부 꺼내기 — 바이트는 처음부터 raw 안에 있었고, 이름만 화면에 있었다."""
+
+    ACCOUNT = 'acct'
+
+    def test_a_name_from_a_header_can_never_reach_a_directory(self):
+        """첨부 이름은 이 앱에서 바깥 사람이 고르는 유일한 문자열이고, 파일시스템에 닿는다."""
+        for hostile in ('../../../etc/passwd', r'..\..\windows\system32\x.dll',
+                        'C:/Windows/x.dll', '..', '.', '/etc/shadow'):
+            got = safe_name(hostile)
+            self.assertNotIn('/', got, hostile)
+            self.assertNotIn('\\', got, hostile)
+            self.assertNotIn(':', got, hostile)
+            self.assertFalse(got.startswith('.'), hostile)
+            self.assertEqual(Path(got).name, got, hostile)
+
+    def test_a_windows_device_name_is_moved_out_of_the_way(self):
+        """CON.txt로 저장하면 확장자와 무관하게 파일이 생기지 않는다."""
+        self.assertEqual(safe_name('CON.txt'), '_CON.txt')
+        self.assertEqual(safe_name('nul'), '_nul')
+        self.assertEqual(safe_name('content.txt'), 'content.txt')
+
+    def test_an_unusable_name_becomes_a_usable_one_rather_than_an_error(self):
+        """적대적인 이름을 붙인 메일도 읽는 사람이 열고 싶어 하는 메일이다."""
+        self.assertEqual(safe_name(''), '첨부파일')
+        self.assertEqual(safe_name('...'), '첨부파일')
+        self.assertEqual(safe_name(None), '첨부파일')
+
+    def test_a_long_name_keeps_its_extension(self):
+        got = safe_name('가' * 300 + '.xlsx')
+        self.assertTrue(got.endswith('.xlsx'))
+        self.assertLessEqual(len(got), NAME_LIMIT)
+
+    def mail(self, files):
+        message = EmailMessage()
+        message['From'] = 'kim@buyer.example'
+        message['Subject'] = '견적 첨부'
+        message.set_content('확인 바랍니다')
+        for name, payload in files:
+            message.add_attachment(payload, maintype='application',
+                                   subtype='octet-stream', filename=name)
+        return message.as_bytes()
+
+    def test_the_list_carries_size_and_order_not_just_names(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            try:
+                ident = store.add(self.ACCOUNT, 'u1',
+                                  self.mail([('견적서.xlsx', b'x' * 82000),
+                                             ('발주서.pdf', b'y' * 512)]))
+                items = store.attachments(ident)
+                self.assertEqual([item['name'] for item in items],
+                                 ['견적서.xlsx', '발주서.pdf'])
+                self.assertEqual([item['index'] for item in items], [0, 1])
+                self.assertEqual([item['size'] for item in items], [82000, 512])
+            finally:
+                store.db.close()
+
+    def test_an_attachment_is_written_under_its_own_mail(self):
+        """두 메일의 '견적서.xlsx'가 서로를 덮어쓰지 않는 유일한 방법이다."""
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            try:
+                first = store.add(self.ACCOUNT, 'u1',
+                                  self.mail([('견적서.xlsx', '첫번째'.encode())]))
+                second = store.add(self.ACCOUNT, 'u2',
+                                   self.mail([('견적서.xlsx', '두번째'.encode())]))
+                out = Path(folder) / 'attachments'
+                one = store.save_attachment(first, 0, out)
+                two = store.save_attachment(second, 0, out)
+                self.assertNotEqual(one, two)
+                self.assertEqual(one.read_bytes(), '첫번째'.encode())
+                self.assertEqual(two.read_bytes(), '두번째'.encode())
+                self.assertEqual(one.parent.name, first)
+            finally:
+                store.db.close()
+
+    def test_a_hostile_filename_is_written_inside_the_folder_it_was_given(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            try:
+                ident = store.add(self.ACCOUNT, 'u1',
+                                  self.mail([('../../../escaped.txt', b'no')]))
+                out = (Path(folder) / 'attachments').resolve()
+                path = store.save_attachment(ident, 0, out).resolve()
+                self.assertTrue(str(path).startswith(str(out)), path)
+            finally:
+                store.db.close()
+
+    def test_a_number_nobody_sent_is_not_a_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            try:
+                ident = store.add(self.ACCOUNT, 'u1', self.mail([('a.txt', b'x')]))
+                self.assertIsNone(store.save_attachment(ident, 7, Path(folder) / 'out'))
+                self.assertIsNone(store.save_attachment('nosuchmail', 0, Path(folder) / 'out'))
+            finally:
+                store.db.close()
+
+    def test_a_mail_with_no_attachment_says_so_quietly(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            try:
+                ident = store.add(self.ACCOUNT, 'u1', self.mail([]))
+                self.assertEqual(store.attachments(ident), [])
             finally:
                 store.db.close()
 

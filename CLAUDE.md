@@ -440,6 +440,23 @@ is set by the things that change a list column (처리 상태, 다시 분석, �
 else. Refreshing while the dialog is open is the same work done where nobody can see
 it, behind a dialog that covers the rows.
 
+**An attachment's filename is the one string an outsider hands to the filesystem.**
+The bytes were in `raw` all along — nothing migrated for 첨부 꺼내기 to work, which is
+what keeping `raw` earns a second time — but the *name* comes out of a header a sender
+wrote, and `Store.save_attachment()` puts it on disk. `core.safe_name()` is the whole
+defence: path separators and control characters are replaced, leading dots stripped so
+`..` cannot survive, Windows device names (`CON`, `NUL`, `LPT1` — which swallow a file
+whatever the extension) pushed out of the way, and the length capped with the extension
+kept. Anything left unusable becomes 첨부파일 rather than raising, because a mail with a
+hostile attachment name is still a mail the reader wants to open. Two more things hold
+it: each mail extracts under **its own `id`** (our own 24 hex characters, so two
+senders' `견적서.xlsx` cannot overwrite each other and the sender cannot reach the
+folder name either), and the screen deliberately shows the **sender's** name while only
+`safe_name()`'s version touches the disk — a test asserts both halves. `webui.open_file()`
+is `os.startfile` in one place now that 설정's 엑셀 열기 and this share it; the helper
+never reads the file, and `ATTACH_NOTE` says out loud that attachments are not sent to
+Codex, because 'the app analysed my mail' invites exactly that question.
+
 **A 거래처 is an address, never a display name.** `core.address_of()` — moved there
 from `excel.py`, where it began as the `mailto:` link's helper, because core cannot
 import a screen — lowercases and keys on the address, and `sender_addr` is the column

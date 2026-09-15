@@ -2288,6 +2288,49 @@ def thread_strip(rows, token):
                     ui.label(row['state']).classes('ma-today__kind')
 
 
+# 꺼낸 첨부가 놓이는 폴더 이름. 데이터 폴더 아래이고, 메일마다 제 하위 폴더를 갖는다.
+ATTACH_DIR = 'attachments'
+# 첨부는 이 앱이 만든 것이 아니라 남이 보낸 파일이고, 여는 것은 Windows다. 화면이
+# 그 사실을 한 번 말해 두는 자리 — 도우미는 첨부를 분석에 보내지도, 열어 보지도 않는다.
+ATTACH_NOTE = '첨부는 분석에 보내지 않습니다. 꺼낸 파일은 데이터 폴더에 남습니다'
+SIZE_UNITS = (('GB', 1024 ** 3), ('MB', 1024 ** 2), ('KB', 1024), ('B', 1))
+
+
+def open_file(path, label):
+    """이 PC의 기본 프로그램으로 연다. 서버가 이 PC라는 것이 이 앱의 전제다.
+
+    Moved out of the 설정 page's own reveal() when 첨부 needed it too: two copies of a
+    bare os.startfile in a try would have been two places to forget the notify.
+    """
+    from nicegui import ui
+    try:
+        os.startfile(str(path))
+    except Exception as exc:
+        ui.notify(f'{label}을 열지 못했습니다: {type(exc).__name__}: {exc}')
+
+
+def size_text(count):
+    """'82KB'. 첨부를 열기 전에 알고 싶은 것은 이름과 이것 둘뿐이다."""
+    number = max(0, int(count or 0))
+    for unit, step in SIZE_UNITS:
+        if number >= step:
+            value = number / step
+            return f'{value:.1f}{unit}' if step > 1 and value < 10 else f'{round(value)}{unit}'
+    return '0B'
+
+
+def attachment_rows(items):
+    """첨부 한 줄씩. 이름은 메일이 쓴 그대로 보여 주고, 저장은 safe_name()이 한다.
+
+    두 이름을 다르게 두는 것이 일부러다: 화면은 보낸 사람이 붙인 이름을 말해야 하고,
+    파일시스템에 닿는 이름은 그 사람이 고를 수 있는 것이 아니어야 한다.
+    """
+    return [{'index': item['index'], 'name': item['name'],
+             'size': size_text(item['size']), 'type': item['type'],
+             'empty': not item['size']}
+            for item in items]
+
+
 # 거래처 화면이 한 번에 그리는 카드 수. 더 있으면 검색으로 좁힌다 — 200장을 그리는
 # 것은 그리는 쪽보다 읽는 쪽이 먼저 포기하는 일이다.
 SENDER_SHOWN = 60
@@ -4634,6 +4677,25 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 ui.notify(f'{language} 원문을 한국어로 옮겼습니다.'.lstrip())
                 panel.refresh()
 
+            async def open_attachment(index):
+                """첨부 하나를 데이터 폴더로 꺼내고 Windows에게 열게 한다.
+
+                꺼내는 것은 io_bound: raw에서 파일을 뽑아 디스크에 쓰는 일이고, 그동안
+                이벤트 루프가 다른 페이지를 계속 그려야 한다. 도우미가 파일을 읽지는
+                않는다 — 여는 것은 언제나 이 PC의 프로그램이다.
+                """
+                try:
+                    path = await nicerun.io_bound(store(directory).save_attachment,
+                                                  view['id'], index,
+                                                  directory / ATTACH_DIR)
+                except Exception as exc:
+                    ui.notify(f'첨부를 꺼내지 못했습니다: {type(exc).__name__}: {exc}')
+                    return
+                if path is None:
+                    ui.notify('첨부를 찾지 못했습니다. 원문이 손상되었을 수 있습니다.')
+                    return
+                open_file(path, '첨부')
+
             def attach():
                 """A blank memo on this mail, with the caret already in it.
 
@@ -4775,17 +4837,30 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                                                  '올라가지 않습니다. 일정 화면에서 직접 '
                                                  '추가할 수 있습니다.') \
                                             .classes('ma-meta__item')
-                        if view['attachments']:
+                        files = attachment_rows(store(directory).attachments(view['id']))
+                        if files:
                             with ui.element('div').classes('ma-part'):
                                 with ui.element('div').classes('ma-part__head'):
                                     ui.icon('attach_file').style(f'color:{MUTED}')
                                     ui.label('첨부').classes('ma-part__label')
-                                with ui.element('div').classes('ma-meta'):
-                                    for name in view['attachments']:
-                                        with ui.element('div').classes('ma-tag') \
-                                                .style(tag_style(SUBTLE) + ';gap:3px'):
-                                            ui.icon('attach_file').style('font-size:13px')
-                                            ui.label(name)
+                                    ui.space()
+                                    ui.label(f'{len(files)}개').classes('ma-meta__item')
+                                for item in files:
+                                    with ui.element('div').classes('ma-today__row'):
+                                        ui.icon('description') \
+                                            .style(f'color:{MUTED};font-size:15px;flex:none')
+                                        ui.label(item['name']).classes('ma-today__title') \
+                                            .style(f'color:{INK}').tooltip(item['type'])
+                                        ui.space()
+                                        ui.label(item['size']).classes('ma-today__kind')
+                                        ui.button(icon='open_in_new',
+                                                  on_click=lambda _, n=item['index']:
+                                                  open_attachment(n)) \
+                                            .props('flat dense round size=sm') \
+                                            .tooltip('꺼내서 열기')
+                            with ui.element('div').classes('ma-meta') \
+                                    .style('margin-top:-4px;margin-bottom:8px'):
+                                ui.label(ATTACH_NOTE).classes('ma-meta__item')
                     with ui.element('div'):
                         # Same row height as 분석 결과 beside it: this one holds a
                         # button and that one does not, and a heading 3px lower than
@@ -6041,10 +6116,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 ui.notify('실행 중이 아닙니다.')
 
         def reveal(path, label):
-            try:
-                os.startfile(str(path))          # local app: the server is this PC
-            except Exception as exc:
-                ui.notify(f'{label}을 열지 못했습니다: {type(exc).__name__}: {exc}')
+            open_file(path, label)
 
         async def test():
             if not services:

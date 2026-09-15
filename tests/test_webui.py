@@ -47,6 +47,7 @@ from mail_assistant.webui import (CARD_TONES, COST_TONES, DEFAULT_LIST, FONT_FIL
                                   calendar_events, card_target, countdown_text, run_view,
                                   FAILED_CARD, WAITING, WAIT_LATE, WAIT_NOTE, wait_age,
                                   THREAD_SHOWN, thread_view, thread_line, thread_clip,
+                                  ATTACH_NOTE, size_text, attachment_rows,
                                   SENDER_SHOWN, SENDER_SORTS, sender_rows, sender_sort,
                                   sender_search, sender_line,
                                   board, board_counts, card_hint, card_rows,
@@ -268,6 +269,30 @@ class WaitingCardTests(unittest.TestCase):
         """POP3로는 보낸 메일을 볼 수 없다 — 그 사실이 화면에 있어야 한다."""
         self.assertIn('완료 표시', WAIT_NOTE)
         self.assertGreater(WAIT_LATE, 0)
+
+
+class AttachmentRowTests(unittest.TestCase):
+    """첨부 줄 — 열기 전에 알고 싶은 것은 이름과 크기 둘뿐이다."""
+
+    def test_size_reads_the_way_a_file_manager_writes_it(self):
+        self.assertEqual(size_text(0), '0B')
+        self.assertEqual(size_text(512), '512B')
+        self.assertEqual(size_text(82000), '80KB')
+        self.assertEqual(size_text(1536), '1.5KB')
+        self.assertEqual(size_text(5 * 1024 ** 2), '5.0MB')
+        self.assertEqual(size_text(None), '0B')
+
+    def test_the_screen_shows_the_name_the_sender_wrote(self):
+        """저장하는 이름과 보여 주는 이름은 일부러 다르다: 파일시스템에 닿는 쪽만
+        보낸 사람이 고를 수 없어야 한다."""
+        rows = attachment_rows([{'index': 0, 'name': '../견적서.xlsx', 'size': 2048,
+                                 'type': 'application/vnd.ms-excel'}])
+        self.assertEqual(rows[0]['name'], '../견적서.xlsx')
+        self.assertEqual(rows[0]['size'], '2.0KB')
+        self.assertFalse(rows[0]['empty'])
+
+    def test_the_note_says_the_helper_does_not_read_them(self):
+        self.assertIn('분석에 보내지 않습니다', ATTACH_NOTE)
 
 
 class SenderCardTests(unittest.TestCase):
