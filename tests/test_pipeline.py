@@ -2852,14 +2852,30 @@ class WorkerBatchTests(unittest.TestCase):
 class GiveUpTests(unittest.TestCase):
     """영원한 재시도를 끊되, 한도 소진을 '메일 전체 포기'로 바꾸지는 않는다."""
 
+    # 지난 실패의 시각. 진짜 순서에서는 실패와 그 뒤의 성공 사이에 백오프가 5분에서 한
+    # 시간 흐르지만, 테스트는 전부 한 틱 안에서 끝난다 — 그리고 Windows의 시계는 약
+    # 15ms마다 움직이므로 failed_at과 analyzed_at이 같은 문자열이 되어, 실패한 곳은
+    # 리눅스가 아니라 CI의 Windows 레그였다. received가 rowid tie-break를 필요로 하는
+    # 것과 같은 시계다. 그래서 지난 실패를 분명히 앞에 둔다.
+    BEFORE = '2020-01-01T00:00:00+00:00'
+
+    def opened(self, directory):
+        """열고 나서 반드시 닫는다. 단언이 먼저 터지면 Windows가 mail.db를 붙들고 있다."""
+        store = Store(directory / 'mail.db')
+        self.addCleanup(store.db.close)
+        return store
+
     def prepared(self, folder, attempts):
         """실패를 `attempts`번 쌓은 메일 하나, 그리고 두 번째 메일 하나."""
         directory = Path(folder)
-        store = Store(directory / 'mail.db')
+        store = self.opened(directory)
         first = store.add(account_key(CONFIG), 'stuck', mail())
         second = store.add(account_key(CONFIG), 'other', mail())
         for _ in range(attempts):
             store.failed(first, '분석 실패', 0)
+        if attempts:
+            store.db.execute('UPDATE mail SET failed_at=? WHERE id=?', (self.BEFORE, first))
+            store.db.commit()
         return directory, store, first, second
 
     def cycle(self, directory):
@@ -2886,14 +2902,13 @@ class GiveUpTests(unittest.TestCase):
             directory, store, first, second = self.prepared(folder, MAX_ATTEMPTS - 1)
             # 이 메일이 마지막으로 실패한 *뒤에* 다른 메일이 분석에 성공했다.
             store.analyzed(second, parse_mail(mail()), RESULT)
-            store.db.close()
+            store.db.close()          # 워커가 같은 파일을 연다
             messages = self.cycle(directory)
-            store = Store(directory / 'mail.db')
+            store = self.opened(directory)
             row = store.detail(first)
             self.assertEqual(row['retry_at'], NO_RETRY)
             self.assertIn('더 시도하지 않습니다', row['error'])
             self.assertIn('분석 포기', ' / '.join(messages))
-            store.db.close()
 
     def test_a_quota_outage_never_puts_the_queue_down(self):
         """아무것도 성공하지 못했다면 한도나 로그인 쪽이고, 그것은 메일의 잘못이 아니다."""
@@ -2902,11 +2917,10 @@ class GiveUpTests(unittest.TestCase):
             directory, store, first, _ = self.prepared(folder, MAX_ATTEMPTS - 1)
             store.db.close()
             self.cycle(directory)
-            store = Store(directory / 'mail.db')
+            store = self.opened(directory)
             row = store.detail(first)
             self.assertLess(row['retry_at'], NO_RETRY)
             self.assertGreater(row['retry_at'], time.time())
-            store.db.close()
 
     def test_다시_분석_is_still_the_way_back_in(self):
         from mail_assistant.worker import MAX_ATTEMPTS
@@ -2915,26 +2929,24 @@ class GiveUpTests(unittest.TestCase):
             store.analyzed(second, parse_mail(mail()), RESULT)
             store.db.close()
             self.cycle(directory)
-            store = Store(directory / 'mail.db')
+            store = self.opened(directory)
             self.assertEqual(store.reset([first]), 1)
             row = store.detail(first)
             self.assertEqual(row['attempts'], 0)
             self.assertEqual(row['failed_at'], '')
             self.assertEqual([one['id'] for one in
                               store.pending(account_key(CONFIG), time.time())], [first])
-            store.db.close()
 
     def test_analyzed_since_is_what_tells_the_two_apart(self):
         with tempfile.TemporaryDirectory() as folder:
             directory, store, first, second = self.prepared(folder, 1)
             stamp = store.detail(first)['failed_at']
-            self.assertTrue(stamp)
+            self.assertEqual(stamp, self.BEFORE)
             self.assertFalse(store.analyzed_since(account_key(CONFIG), stamp))
             store.analyzed(second, parse_mail(mail()), RESULT)
             self.assertTrue(store.analyzed_since(account_key(CONFIG), stamp))
             # 한 번도 실패한 적 없는 메일에는 물어볼 것이 없다.
             self.assertFalse(store.analyzed_since(account_key(CONFIG), ''))
-            store.db.close()
 
 
 class ConsoleTests(unittest.TestCase):

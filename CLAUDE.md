@@ -964,8 +964,13 @@ whole queue would be marked 포기. So the give-up needs both halves: the mail f
 **alone** (`len(group) == 1`, which `group_mails()` guarantees for anything that has
 failed before) *and* `Store.analyzed_since(account, row['failed_at'])` — something else
 was analysed successfully since this mail's last failure. `failed_at` is a column for
-that comparison alone. NO_RETRY and 다시 분석 are the way back in, exactly as they are
-for `Unanalyzable`.
+that comparison alone, and it is a strict `>`: a Windows clock ticks about every 15ms,
+so two stamps written in the same instant are the *same string*, and `>` then declines
+to give up — which is the safe direction of that error. A test cannot rely on real time
+for it, and the one that tried failed only on the CI Windows leg; `GiveUpTests` writes
+an explicitly older `failed_at`, which is also what the real sequence looks like, since
+a backoff of five minutes to an hour separates a failure from the next attempt.
+NO_RETRY and 다시 분석 are the way back in, exactly as they are for `Unanalyzable`.
 
 **A body over `BODY_LIMIT` is clipped, and the clip is said in three places.**
 20,000자 — about 11,000 tokens, and the value 번역 and 초안 already use. What makes
