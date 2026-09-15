@@ -10,11 +10,16 @@ FIELDS = (('email', '메일 계정'), ('password', '메일 전용 비밀번호')
           ('port', 'SSL 포트'), ('interval', '확인 간격(초, 최소 60)'), ('workbook', '엑셀 파일'),
           ('model', 'Codex 모델'))
 
-# The radio row that opens the free-text box. Never written to config.json: the box's
-# own value is, so a saved model is always a plain slug the CLI can take.
-CUSTOM = '__custom__'
-DEFAULT_MODEL = ('', '기본값', 'Codex CLI가 정한 모델을 그대로 씁니다.')
-CUSTOM_MODEL = (CUSTOM, '직접 입력', '목록에 없는 모델 이름을 직접 적습니다.')
+DEFAULT_MODEL = {'value': '', 'name': '기본값', 'power': '', 'cost': '',
+                 'hint': 'Codex CLI가 정한 모델을 그대로 씁니다.'}
+# 성능·사용량 as words rather than slugs: the person choosing a model here reads mail
+# for a living and has no reason to know what a 'gpt-5.6-luna' costs. The cache carries
+# no price and no speed — what it carries is `priority`, the order Codex itself lists
+# them in, most capable first — so these are a position in that order and the caption
+# under the dropdown says exactly that. Nothing here is claimed as Codex's own answer.
+GRADES = (('성능 높음', '사용량 많음'), ('성능 보통', '사용량 보통'), ('가볍고 빠름', '사용량 적음'))
+GRADE_NOTE = ('성능·사용량 표시는 Codex가 알려준 모델 순서를 옮긴 것입니다. '
+              '실제 사용량은 메일 길이와 분석 횟수에 따라 달라집니다.')
 # Codex writes this beside its own config whenever it runs, and it holds the models
 # *this account* may use. Reading it beats shipping a list: the slugs turn over every
 # few weeks, and a stale one fails every analysis with '모델을 지원하지 않습니다'.
@@ -89,11 +94,13 @@ def model_choices(data):
     """[(slug, name, description)] from Codex's cache. Pure, so a shape change is testable.
 
     Only 'list' models are offered: the cache also carries hidden internal ones the
-    account cannot select, and a radio button that always fails is worse than none.
+    account cannot select, and an entry that always fails is worse than none. The order
+    is Codex's own `priority` — most capable first — because model_rows() turns a row's
+    place in this list into the 성능·사용량 words beside it.
     """
     models = (data or {}).get('models') if isinstance(data, dict) else None
-    rows = []
-    for entry in models or ():
+    found = []
+    for index, entry in enumerate(models or ()):
         if not isinstance(entry, dict) or entry.get('visibility') != 'list':
             continue
         slug = str(entry.get('slug') or '').strip()
@@ -103,9 +110,25 @@ def model_choices(data):
         # the half a user can compare against a Codex error message. Codex's own blurb
         # follows when it has one — third-party data, like a mail subject.
         blurb = str(entry.get('description') or '').strip()
-        rows.append((slug, str(entry.get('display_name') or slug),
-                     f'{slug} · {blurb}' if blurb else slug))
-    return rows
+        rank = entry.get('priority')
+        found.append(((rank if isinstance(rank, (int, float)) else float('inf'), index),
+                      (slug, str(entry.get('display_name') or slug),
+                       f'{slug} · {blurb}' if blurb else slug)))
+    # index is the tie-break, so a cache with no priority at all keeps its own order.
+    return [row for _, row in sorted(found, key=lambda pair: pair[0])]
+
+
+def model_traits(index, total):
+    """('성능 보통', '사용량 보통') — where this model sits in the list, in words.
+
+    Relative and never absolute: the top of the list gets the top words and the bottom
+    gets the bottom ones, whatever Codex happens to be offering this week. A list of one
+    is given the middle pair, because there is nothing to compare it against.
+    """
+    if total <= 1:
+        return GRADES[len(GRADES) // 2]
+    step = int(index * (len(GRADES) - 1) / (total - 1) + 0.5)
+    return GRADES[max(0, min(step, len(GRADES) - 1))]
 
 
 def read_models(path=None):
@@ -118,18 +141,28 @@ def read_models(path=None):
 
 
 def model_rows(models, current=''):
-    """The radio rows: 기본값, one per model Codex offers, then 직접 입력.
+    """The dropdown: [{'value','name','power','cost','hint'}], 기본값 first.
 
-    A model saved before it left the cache keeps a row of its own, so opening 설정
-    never silently reselects something else.
+    There is no 직접 입력 row any more. Typing a slug was the developer's answer to a
+    list that might be missing something, and what it actually produced was a box that
+    accepted any word at all — a retired name fails *every* analysis, with nothing on
+    screen to explain it. A model saved before it left the cache still keeps a row of
+    its own, so opening 설정 never silently reselects something else.
     """
-    rows = [DEFAULT_MODEL] + [(slug, name, hint) for slug, name, hint in models]
+    rows = [dict(DEFAULT_MODEL)]
+    total = len(models)
+    for index, (slug, name, hint) in enumerate(models):
+        power, cost = model_traits(index, total)
+        rows.append({'value': slug, 'name': name, 'power': power, 'cost': cost,
+                     'hint': hint})
     saved = str(current or '').strip()
-    if saved and not any(slug == saved for slug, _, _ in rows):
-        rows.append((saved, saved, '지금 설정된 모델입니다. Codex 목록에는 없습니다.'))
-    return rows + [CUSTOM_MODEL]
+    if saved and not any(row['value'] == saved for row in rows):
+        rows.append({'value': saved, 'name': saved, 'power': '', 'cost': '',
+                     'hint': '지금 설정된 모델입니다. Codex 목록에는 없습니다.'})
+    return rows
 
 
-def model_value(choice, typed):
-    """What the radio and the box together mean for config.json."""
-    return str(typed or '').strip() if choice == CUSTOM else str(choice or '').strip()
+def model_label(row):
+    """'GPT-5.6-Luna · 가볍고 빠름 · 사용량 적음' — the one line a closed dropdown shows."""
+    return ' · '.join([row['name']] + [word for word in (row.get('power'), row.get('cost'))
+                                       if word])

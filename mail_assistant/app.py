@@ -22,10 +22,12 @@ from .excel import mailto
 from .hub import line_text
 from .overview import overview
 from .report import remember_secret, report
-from .settings import CUSTOM, FIELDS, model_rows, model_value, normalize, read_models
+from .settings import (FIELDS, GRADE_NOTE, model_label, model_rows, normalize,
+                       read_models)
 from .style import ACCENT, CALM, DASH_BLUE, DASH_GREEN, DASH_RED, SOON, TODAY_FILL, tk_color
 # Size and one sentence: webui imports no toolkit at module level, and both windows
 # should open at the same size — and say the same thing when 다시 분석 was refused.
+from .services import DRAFT_TONES, DRAFT_WAYS
 from .webui import WINDOW_MIN, reanalyze_text, window_size
 
 ICONS = {'start': '▶', 'stop': '■', 'now': '⟳', 'excel': '▤', 'test': '⇄', 'settings': '⚙',
@@ -265,6 +267,25 @@ class App:
         self.draft = tk.Text(detail, height=5, wrap='word', font=('맑은 고딕', 9),
                              relief='solid', borderwidth=1)
         self.draft.pack(fill='both', expand=True)
+        # 초안 만들기: analysis no longer writes a draft, so this is where one comes
+        # from here too. The web screens draw the same two lists (services.DRAFT_*).
+        maker = ttk.Frame(detail)
+        maker.pack(fill='x', pady=(8, 0))
+        ttk.Label(maker, text='말투', style='Card.TLabel').pack(side='left')
+        self.draft_tone = ttk.Combobox(maker, values=list(DRAFT_TONES), state='readonly',
+                                       width=9)
+        self.draft_tone.current(0)
+        self.draft_tone.pack(side='left', padx=(4, 10))
+        ttk.Label(maker, text='방향', style='Card.TLabel').pack(side='left')
+        self.draft_way = ttk.Combobox(maker, values=list(DRAFT_WAYS), state='readonly',
+                                      width=11)
+        self.draft_way.current(0)
+        self.draft_way.pack(side='left', padx=(4, 10))
+        self.draft_button = ttk.Button(maker, text=f"{ICONS['retry']} 초안 만들기",
+                                       style='Action.TButton', command=self.make_draft)
+        self.draft_button.pack(side='left')
+        ttk.Label(maker, text='받은 메일과 같은 언어로 씁니다. 지금 쓰인 초안은 바뀝니다.',
+                  style='Card.TLabel').pack(side='left', padx=(10, 0))
         actions = ttk.Frame(detail)
         actions.pack(fill='x', pady=(8, 0))
         self.handle_button = ttk.Button(actions, text='처리 완료로 표시', style='Action.TButton',
@@ -426,6 +447,53 @@ class App:
         text.insert('1.0', header + parsed['body'])
         text.configure(state='disabled')
 
+    def make_draft(self):
+        """답변 초안 한 통. Codex's own slot, so it goes through background().
+
+        The draft replaces whatever is in the box — see Store.set_reply_draft() — so
+        the edit in progress is dropped rather than saved over the answer on its way.
+        """
+        row = self.row_of(self.selected)
+        if row is None:
+            return
+        if not row['result']:
+            self.log('분석이 끝난 뒤에 초안을 만들 수 있습니다.')
+            return
+        if not self.services.get('draft'):
+            self.log('이 환경에서는 초안을 만들 수 없습니다.')
+            return
+        ident, result = row['id'], json.loads(row['result'])
+        try:
+            parsed = json.loads(row['parsed']) if row['parsed'] else parse_mail(row['raw'])
+        except Exception as exc:
+            self.log(f'본문을 읽지 못했습니다: {type(exc).__name__}: {exc}')
+            return
+        view = {'subject': row['subject'], 'sender': row['sender'],
+                'received': row['received'], 'body': parsed.get('body', ''),
+                'summary': result.get('summary', ''),
+                'requests': result.get('requests', ''),
+                'action': result.get('next_action', '')}
+        tone, way = self.draft_tone.get(), self.draft_way.get()
+        self.draft_button.state(['disabled'])
+        self.log(f'초안을 만드는 중입니다({tone} · {way}). 분석이 돌고 있으면 그 뒤에 처리됩니다.')
+        self.background('draft',
+                        lambda: (ident, self.services['draft'](view, tone, way, self.config)),
+                        self.store_draft)
+
+    def store_draft(self, result):
+        self.draft_button.state(['!disabled'])
+        if isinstance(result, Exception):
+            self.log(f'초안을 만들지 못했습니다: {result}')
+            return
+        ident, (subject, text) = result
+        if not self.store().set_reply_draft(ident, subject, text):
+            self.log('분석이 끝난 뒤에 초안을 만들 수 있습니다.')
+            return
+        # The box is refilled from the database, which is where the new draft is.
+        self.draft_source = None
+        self.log('초안을 만들었습니다.')
+        self.refresh()
+
     def reanalyze(self):
         row = self.row_of(self.selected)
         if row is None:
@@ -573,26 +641,35 @@ class App:
                    command=self.test_typed).pack(side='left', padx=8)
 
     def build_models(self, parent, index, variable):
-        """Radio buttons over the models Codex itself says this account can use.
+        """A dropdown over the models Codex itself says this account can use.
 
         `variable` stays the one the rest of the form reads, so typed() and
-        save_settings() never learn that this field stopped being an entry box.
+        save_settings() never learn that this field stopped being an entry box. The
+        labels carry 성능·사용량 for the same reason the web screen's do, and there is
+        no 직접 입력 box any more: a typed slug Codex has retired fails every analysis.
         """
         box = ttk.Frame(parent)
         box.grid(row=index, column=1, sticky='ew', pady=5)
-        self.model_choice = tk.StringVar(value=variable.get())
-        self.model_typed = tk.StringVar(value='')
+        rows = model_rows(read_models(), variable.get())
+        labels = {model_label(row): row for row in rows}
+        self.model_choice = tk.StringVar(
+            value=next((model_label(row) for row in rows if row['value'] == variable.get()),
+                       model_label(rows[0])))
 
         def apply(*_):
-            variable.set(model_value(self.model_choice.get(), self.model_typed.get()))
-            entry.configure(state='normal' if self.model_choice.get() == CUSTOM else 'disabled')
+            row = labels.get(self.model_choice.get()) or rows[0]
+            variable.set(row['value'])
+            note.configure(text=row['hint'])
 
-        for value, label, _ in model_rows(read_models(), variable.get()):
-            ttk.Radiobutton(box, text=label, value=value, variable=self.model_choice,
-                            command=apply).pack(anchor='w')
-        entry = ttk.Entry(box, textvariable=self.model_typed, width=36)
-        entry.pack(anchor='w', pady=(3, 0))
-        self.model_typed.trace_add('write', apply)
+        # readonly, not normal: the list is the whole answer, and a combobox somebody
+        # can type into is the free-text box this replaced, wearing a different hat.
+        picker = ttk.Combobox(box, textvariable=self.model_choice, state='readonly',
+                              values=list(labels), width=46)
+        picker.pack(anchor='w')
+        picker.bind('<<ComboboxSelected>>', apply)
+        note = ttk.Label(box, text='', wraplength=420, foreground='#52525b')
+        note.pack(anchor='w', pady=(3, 0))
+        ttk.Label(box, text=GRADE_NOTE, wraplength=420, foreground='#8a8a94').pack(anchor='w')
         apply()
 
     def pick_workbook(self):

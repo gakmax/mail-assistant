@@ -72,11 +72,13 @@ def main(argv=()):
     print(f'데이터 폴더 {directory}', flush=True)
     # services.py imports win32 inside its functions, so this dict builds anywhere and
     # only the calls fail off Windows — which the pages report rather than crash on.
-    services = {'login_state': helpers.login_state, 'check_connection': helpers.check_connection,
+    services = {'draft': helpers.draft,
+                'login_state': helpers.login_state, 'check_connection': helpers.check_connection,
                 'read_password': helpers.read_password, 'save_password': helpers.save_password,
                 'delete_password': helpers.delete_password,
                 'codex_command': helpers.codex_command,
-                'codex_environment': helpers.codex_environment}
+                'codex_environment': helpers.codex_environment,
+                'codex_usage': helpers.codex_usage}
     can_start, handle = claim_worker()
     if not can_start:
         print('메일 도우미 창이 이미 실행 중입니다. 화면은 열지만 여기서 수집을 시작할 수는 '

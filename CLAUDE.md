@@ -17,7 +17,7 @@ that break silently if you don't know them.
 ## Commands
 
 ```bash
-python -m unittest discover -s tests -v    # from the repo root; 595 tests, all platforms
+python -m unittest discover -s tests -v    # from the repo root; 675 tests, all platforms
 ```
 
 ```powershell
@@ -80,11 +80,44 @@ should touch `config.json` from outside the GUI.
 `%USERPROFILE%\.codex\models_cache.json` — the file the CLI itself writes on every
 run — and offers only the entries marked `visibility: list`. Hardcoding slugs was
 tried and thrown away: the ones a ChatGPT account may use turn over every few weeks
-(every `gpt-5.1-codex*` name was already refused by the API by the time the radio was
+(every `gpt-5.1-codex*` name was already refused by the API by the time the picker was
 written), and a stale default fails *every* analysis with nothing on screen to explain
-it. So a missing cache offers 기본값 and 직접 입력 only, `model_rows()` keeps a row for
-whatever is saved even after Codex stops listing it, and `field_errors` rejects a model
-with a space in it because the value becomes one `--model` argument.
+it. So a missing cache offers 기본값 alone, `model_rows()` keeps a row for whatever is
+saved even after Codex stops listing it, and `field_errors` still rejects a model with a
+space in it because the value becomes one `--model` argument.
+
+**직접 입력 is gone, and 성능·사용량 are a position in Codex's own order.** The free-text
+box was the developer's answer to a list that might be missing something, and what it
+actually shipped was a box that took any word at all — a name Codex has retired fails
+every analysis, quietly, which is the exact failure the cache is read to avoid. What
+replaced it is one `ui.select` (a ttk `Combobox`, `state='readonly'`, in the fallback)
+whose rows read 'GPT-5.6-Luna · 가볍고 빠름 · 사용량 적음', because the person choosing
+here reads mail for a living and has no reason to know what a slug costs. The cache
+carries no price and no speed field; it carries `priority`, the order Codex lists them
+in, so `model_choices()` sorts by it and `model_traits(index, total)` turns a row's
+*place* into the two words — relative, never absolute, whatever is on offer this week.
+`GRADE_NOTE` says that out loud under the dropdown rather than letting the words read as
+Codex's own answer, a model Codex has stopped listing carries no words at all, and
+`webui.COST_TONES` colours only the 사용량 half (a test holds it against `GRADES`) for
+the reason 분석 결과 spends its accent on two blocks of four.
+
+**Codex 사용량 comes from the app-server, and it is the one Codex call outside the
+slot.** The CLI knows what is left of the account's quota and `codex exec` is the one
+place it will not say so: `--ephemeral` writes no rollout (which is the point — a
+rollout would put mail bodies on disk under `~/.codex/sessions`), and the exec `--json`
+stream carries token counts and no rate limits. So `services.codex_usage()` opens one
+short-lived `codex app-server` over stdio, sends `initialize` and
+`account/rateLimits/read`, and kills it in a `finally` — a server left running is one
+orphan per beat. Three things follow. It does **not** take `codex_slot()`: that
+semaphore exists because analysis, 상담 and the briefing share one quota, and this is
+the only call that spends none — while also being the thing a reader most wants while a
+240-second analysis holds the slot. It is read on `USAGE_SECONDS`, not on the shell's
+five-second beat, and `Meter`'s own gate and lock are what keep ten open pages to one
+process between them. And a quota nobody has managed to read draws **nothing** — not
+0%, not '?' — which is `badge_text()`'s rule for a zero and `recheck()`'s for a check
+that never reached GitHub. `usage.snapshot()` reads 'out of messages' from the
+backend's own `rateLimitReachedType`/`ordinaryUsageAllowed` and never off 100%: a
+percentage is a measurement and the permission is an answer.
 
 **'분석 중' is a column on the mail, not a log line.** `Store.mark_analyzing()` writes
 `analyzing` before `services.analyze()` and the worker's `finally` clears it — every
@@ -236,6 +269,43 @@ rail keeps the badge's **number**: '아이콘만' was never 'and no count', whic
 comes back as `::after` on the row's own `data-name` — the page's own tooltip, as on the
 calendar, rather than a native `title` — and that one line is why `.ma-side` turns
 `overflow:visible` in the rail.
+
+**Nothing in `rail_css()` may be `display:none`, and the badge is absolute in both
+widths.** The fold is one gesture and the sidebar animates its `width`, so every rule
+the rail changes has to be a value the wide sidebar can travel *to*: the labels
+collapse by `max-width:0` rather than vanishing on the first frame; the icons are
+centred by `padding-left` rather than `justify-content`, which cannot be animated to
+and so jumped the icon to the middle of a still-wide row; `.ma-side__group` carries a
+pinned `SIDE_GROUP` height because no height animates from `auto`, and rolls up into
+its own `border-top` rather than swapping a background; and `.ma-badge` is
+`position:absolute` in the wide sidebar too, because a box that is in the row's flow
+one frame and on the icon's shoulder the next teleports 150px left while the sidebar
+it belongs to is still moving. One curve and one duration for all of it (`SIDE_EASE`),
+or it reads as several things happening rather than one. A test holds each of those.
+
+**원문's 복사 copies what is on screen, and `turn()` is what keeps it honest.**
+One button for both readings rather than one each: 복사 can only mean the panel that is
+showing. Switching readings is a visibility swap with no rebuild, so the tooltip is
+moved by `set_text()` inside `turn()` — an element method, which needs no client — and
+what goes on the clipboard is the text as it was written, never `body_panel()`'s HTML,
+for the reason 상담's 답변 복사 copies `text` and not `rich_text(text)`.
+
+**`.ma-chatwrap` is sized to the frame, and `CHAT_CHROME` is that arithmetic.**
+The thread was `min(58vh, 470px)` and stopped ~200px short of the bottom of a window
+that opens at `WINDOW`. It is `calc(100vh - CHAT_CHROME)` now — the header band (56px
+and its hairline) plus `.ma-page`'s own 20px/56px padding, measured off the real frame
+— with `.ma-thread` a flex column and `.ma-chat` the one thing in it that grows. Below
+the 900px breakpoint the two cards stack and the height goes back to a number, because
+stacked they are taller than any window. Change `.ma-page`'s padding and this constant
+is what goes stale; a test holds the two together.
+
+**The 대시보드's 수집 기록 is shut, and its state lives outside the refreshable.**
+`run_block` is rebuilt on every `REFRESH_SECONDS` beat, so the open/shut choice cannot
+live in `run_strip()` — `home()` owns the dict and hands it in, exactly as `window`
+owns the 마감 toggle. The fold itself is `grid-template-rows:0fr → 1fr` and a class
+swap in the handler, never a `refresh()`: a height cannot animate from `auto`, and the
+rebuild is what the animation would be thrown away by. The chevron is absent when
+there is no message and no log, for the reason an empty badge draws nothing.
 
 **The fold button lives on the sidebar, and in the rail it is the mark's own square.**
 It sat in the header band until 0.8.2, which put the control a page away from the thing
@@ -795,6 +865,50 @@ directory, which a per-user frozen install cannot rely on.
 resolves Codex with `shutil.which()` from the user's PATH, and npm's global
 prefix lives in the user profile. An elevated install reports
 "Codex CLI가 없습니다" with no obvious cause.
+
+**`services.codex_json()` is the one `codex exec` this app makes.** Analysis, 상담,
+the briefing and 번역 differ in what they send and in what they say when it fails; the
+sandbox flags, the `--model` splice, the one slot, the 240-second process timeout and
+the rule that stdout is never persisted were four copies of the same twenty-five lines
+and are now one. A new caller passes a prefix, a prompt, a payload, a schema and its
+own Korean failure sentence — and nothing else, because everything else is the part
+that must not drift.
+
+**분석은 답변 초안을 쓰지 않는다, and a made one goes into `reply_draft`.** The
+analysis's prompt now says `reply_draft는 항상 빈 문자열` while still judging
+`reply_needed` and `reply_subject` — the review queue and the 검토 전 초안 card stand on
+those two, not on the draft, so nothing downstream moved. A draft nobody asked for is a
+draft written in a voice nobody chose, and it cost a slot the next mail's analysis
+wanted. `Store.set_reply_draft()` writes the answer into the stored result's own
+`reply_draft` rather than into `draft_edit`, because `review_queue()` reads that column
+as '사람이 손댔다' and a draft nobody has read yet belongs in the queue. It *clears*
+`draft_edit`, which is the one place in this app where text a person typed is thrown
+away: the screens show `draft_edit or reply_draft`, so leaving an edit would store a
+draft nobody could see. That is why the button reads 초안 새로 만들기 when the box is
+not empty, and why nothing on a timer may ever call this.
+
+**`DRAFT_TONES` and `DRAFT_WAYS` live in `services.py`, and the value is the
+instruction.** The toggles in `webui.draft_maker()`, the comboboxes in `app.py` and the
+prompt read one list, the way `core.STATES` and `STATE_SQL` are held together — a test
+holds them equal. The first entry of each (기본, 메일에 맞춰) sends an *empty*
+instruction rather than the word itself: '기본 말투로 쓰세요' is a constraint a model
+invents a meaning for. A 방향 goes as a whole sentence (`DRAFT_WAY_ASKS`) because '거절'
+alone reads as what the mail is about rather than as what the reply should do.
+
+**번역 is on demand, and `looks_foreign()` only chooses which tab opens.** The Korean
+of a foreign mail is a second Codex run on the same single slot, so it is not in
+`analyze()`: doing it for every collected mail doubles what that slot has to get
+through before anything is on screen at all. The button is offered on every mail and
+drawn `outline` rather than `flat` when `core.looks_foreign()` says the body is
+somebody else's language — a letters-only ratio, so a 수주 mail of part numbers and
+prices is still Korean, and so is a Korean mail with an English thread quoted under
+it. Nothing is *claimed* from that guess: no banner says 한국어가 아닙니다, because it
+would be wrong about exactly those two. The answer is kept on the mail (`translated`,
+`translated_from`) because it costs a Codex run to make again, and a body over
+`TRANSLATE_LIMIT` is refused rather than clipped — half a mail translated is worse
+than none, since nothing on screen could say which half. 원문 and 한글 번역 are two
+elements whose visibility is swapped, never a `refresh()`: the figures are in the
+original, and the reader's place in it is what a rebuild would cost.
 
 **Mail content must not leave the machine except to Codex.** `services.analyze()`
 deliberately discards Codex stdout/stderr on failure, `report.py` scrubs

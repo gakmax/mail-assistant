@@ -27,12 +27,15 @@ from mail_assistant.dashboard import (PRIORITIES, SHEET as DASHBOARD, UPCOMING_R
                                       UPCOMING_TOP, blocks, describe, update_dashboard, upcoming)
 from mail_assistant.excel import address_of, link_to_draft, link_to_mail, mail_rows, mailto
 from mail_assistant.overview import overview, past_due
-from mail_assistant.settings import (CUSTOM, field_errors, model_choices, model_rows,
-                                     model_value, normalize, read_models)
+from mail_assistant.settings import (GRADES, field_errors, model_choices, model_label,
+                                     model_rows, model_traits, normalize, read_models)
 from mail_assistant.services import check_connection, connection_steps, login_state
 from mail_assistant.style import STYLE_VERSION, URGENT, apply_style
-from mail_assistant.services import (analyze, chat_reply, chat_schema, fetch_mail,
-                                      read_password, save_password)
+from mail_assistant.services import (DRAFT_BODY_LIMIT, DRAFT_TONES, DRAFT_WAYS,
+                                      TRANSLATE_LIMIT, analyze, briefing, chat_reply,
+                                      chat_schema, draft, draft_schema, fetch_mail,
+                                      read_password, save_password, translate,
+                                      translate_schema)
 
 
 CONFIG = {'host': 'pop3s.hiworks.com', 'port': 995, 'email': 'test@example.com', 'model': ''}
@@ -1315,14 +1318,15 @@ class FieldErrorTests(unittest.TestCase):
 
 
 class ModelChoiceTests(unittest.TestCase):
-    """The radio is built from Codex's own cache, so a retired slug cannot linger."""
+    """The dropdown is built from Codex's own cache, so a retired slug cannot linger."""
 
     CACHE = {'models': [
         {'slug': 'gpt-6-astra', 'display_name': 'GPT-6-Astra', 'visibility': 'list',
-         'description': '가장 뛰어난 모델'},
+         'description': '가장 뛰어난 모델', 'priority': 1},
         {'slug': 'gpt-reserve', 'display_name': 'GPT-Reserve', 'visibility': 'hide',
          'description': '숨김'},
-        {'slug': 'gpt-5.6-luna', 'display_name': 'GPT-5.6-Luna', 'visibility': 'list'},
+        {'slug': 'gpt-5.6-luna', 'display_name': 'GPT-5.6-Luna', 'visibility': 'list',
+         'priority': 8},
     ]}
 
     def test_only_the_models_the_account_may_pick_are_offered(self):
@@ -1340,23 +1344,53 @@ class ModelChoiceTests(unittest.TestCase):
             with self.subTest(data=data):
                 self.assertEqual(model_choices(data), [])
 
-    def test_the_rows_open_with_the_default_and_close_with_the_custom_box(self):
+    def test_the_rows_open_with_the_default_and_offer_nothing_to_type_into(self):
         rows = model_rows(model_choices(self.CACHE))
-        self.assertEqual(rows[0][0], '')
-        self.assertEqual(rows[-1][0], CUSTOM)
+        self.assertEqual(rows[0]['value'], '')
+        # 직접 입력 is gone: every row is a slug Codex itself just listed.
+        self.assertEqual([row['value'] for row in rows],
+                         ['', 'gpt-6-astra', 'gpt-5.6-luna'])
 
     def test_a_saved_model_codex_no_longer_lists_keeps_its_own_row(self):
         rows = model_rows(model_choices(self.CACHE), 'gpt-5.1-codex')
-        self.assertIn('gpt-5.1-codex', [value for value, _, _ in rows])
+        self.assertIn('gpt-5.1-codex', [row['value'] for row in rows])
 
     def test_a_saved_model_codex_still_lists_is_not_repeated(self):
         rows = model_rows(model_choices(self.CACHE), 'gpt-6-astra')
-        self.assertEqual([value for value, _, _ in rows].count('gpt-6-astra'), 1)
+        self.assertEqual([row['value'] for row in rows].count('gpt-6-astra'), 1)
 
-    def test_the_custom_row_saves_the_box_and_the_others_save_themselves(self):
-        self.assertEqual(model_value(CUSTOM, ' gpt-9 '), 'gpt-9')
-        self.assertEqual(model_value('gpt-6-astra', 'ignored'), 'gpt-6-astra')
-        self.assertEqual(model_value('', ''), '')
+    def test_codex_own_priority_decides_the_order_the_traits_are_read_off(self):
+        cache = {'models': [
+            {'slug': 'light', 'visibility': 'list', 'priority': 9},
+            {'slug': 'heavy', 'visibility': 'list', 'priority': 2},
+        ]}
+        self.assertEqual([slug for slug, _, _ in model_choices(cache)], ['heavy', 'light'])
+
+    def test_a_cache_with_no_priority_at_all_keeps_the_order_it_was_written_in(self):
+        cache = {'models': [{'slug': 'first', 'visibility': 'list'},
+                            {'slug': 'second', 'visibility': 'list'}]}
+        self.assertEqual([slug for slug, _, _ in model_choices(cache)], ['first', 'second'])
+
+    def test_the_traits_run_from_the_top_of_the_list_to_the_bottom(self):
+        self.assertEqual(model_traits(0, 3), GRADES[0])
+        self.assertEqual(model_traits(1, 3), GRADES[1])
+        self.assertEqual(model_traits(2, 3), GRADES[-1])
+        # Two models are the two ends, not the top and the middle.
+        self.assertEqual((model_traits(0, 2), model_traits(1, 2)), (GRADES[0], GRADES[-1]))
+
+    def test_one_model_is_given_the_middle_because_there_is_no_comparison(self):
+        self.assertEqual(model_traits(0, 1), GRADES[len(GRADES) // 2])
+
+    def test_every_offered_model_says_what_it_costs_and_the_default_does_not(self):
+        rows = model_rows(model_choices(self.CACHE))
+        self.assertEqual(model_label(rows[0]), '기본값')
+        self.assertEqual(model_label(rows[1]), 'GPT-6-Astra · 성능 높음 · 사용량 많음')
+        self.assertEqual(model_label(rows[-1]), 'GPT-5.6-Luna · 가볍고 빠름 · 사용량 적음')
+
+    def test_a_model_codex_stopped_listing_carries_no_trait_it_cannot_support(self):
+        row = model_rows(model_choices(self.CACHE), 'gpt-5.1-codex')[-1]
+        self.assertEqual((row['power'], row['cost']), ('', ''))
+        self.assertEqual(model_label(row), 'gpt-5.1-codex')
 
     def test_a_missing_cache_is_an_empty_list_and_never_an_exception(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -1509,6 +1543,260 @@ class ChatReplyTests(unittest.TestCase):
         shape = chat_schema()
         self.assertEqual(shape['required'], ['reply'])
         self.assertFalse(shape['additionalProperties'])
+
+
+class DraftTests(unittest.TestCase):
+    """답변 초안: 말투와 방향을 골라서, 그리고 부르지 않으면 만들지 않는다."""
+
+    MAIL = {'subject': 'Quotation request', 'sender': 'john@globaltrade.example',
+            'received': '2026-09-15 11:37', 'body': 'Please quote 200 units.',
+            'summary': '견적 요청', 'requests': '단가와 납기', 'action': '견적 회신'}
+
+    def run_draft(self, written=None, returncode=0, tone='', way='', mail=None):
+        seen = {}
+
+        def fake_run(command, **kwargs):
+            seen['command'] = command
+            seen['input'] = kwargs.get('input', '')
+            target = command[command.index('-o') + 1]
+            if written is not None:
+                Path(target).write_text(json.dumps(written, ensure_ascii=False),
+                                        encoding='utf-8')
+            return types.SimpleNamespace(returncode=returncode, stdout='', stderr='')
+
+        with patch('mail_assistant.services.codex_command', return_value=['codex']), \
+             patch('mail_assistant.services.subprocess.run', side_effect=fake_run):
+            try:
+                answer = draft(mail or self.MAIL, tone, way, {'model': 'gpt-5'})
+            except Exception as exc:
+                return seen, exc
+        return seen, answer
+
+    def sent(self, seen):
+        """The payload as Codex received it, which is the only place it is."""
+        return json.loads(seen['input'][seen['input'].index('{'):])
+
+    def test_the_subject_and_the_body_both_come_back(self):
+        seen, answer = self.run_draft({'subject': 'Re: Quotation request',
+                                       'draft': '확인 후 회신드리겠습니다.'})
+        self.assertEqual(answer, ('Re: Quotation request', '확인 후 회신드리겠습니다.'))
+
+    def test_the_chosen_tone_and_direction_reach_the_prompt(self):
+        seen, _ = self.run_draft({'subject': 's', 'draft': 'd'},
+                                 tone='간결하게', way='거절')
+        payload = self.sent(seen)
+        self.assertIn('간결하게', payload['tone'])
+        # 거절 goes as a sentence, not as the bare word: a model reads '거절' alone
+        # as what the mail is about rather than as what the reply should do.
+        self.assertIn('받아들이기 어렵다', payload['way'])
+
+    def test_the_free_choices_ask_for_nothing_at_all(self):
+        """'기본 말투로 쓰세요' is a constraint a model will invent a meaning for."""
+        seen, _ = self.run_draft({'subject': 's', 'draft': 'd'},
+                                 tone=DRAFT_TONES[0], way=DRAFT_WAYS[0])
+        payload = self.sent(seen)
+        self.assertEqual((payload['tone'], payload['way']), ('', ''))
+
+    def test_every_direction_the_screen_offers_has_a_sentence(self):
+        for way in DRAFT_WAYS[1:]:
+            seen, _ = self.run_draft({'subject': 's', 'draft': 'd'}, way=way)
+            self.assertTrue(self.sent(seen)['way'], way)
+
+    def test_the_reply_is_written_in_the_language_the_mail_came_in(self):
+        seen, _ = self.run_draft({'subject': 's', 'draft': 'd'})
+        self.assertIn('받은 메일과 같은 언어로', seen['input'])
+        self.assertIn('서명과 연락처는 넣지 마세요', seen['input'])
+
+    def test_the_body_goes_in_on_stdin_and_is_clipped(self):
+        mail = dict(self.MAIL, body='a' * (DRAFT_BODY_LIMIT + 500))
+        seen, _ = self.run_draft({'subject': 's', 'draft': 'd'}, mail=mail)
+        self.assertEqual(len(self.sent(seen)['body']), DRAFT_BODY_LIMIT)
+        self.assertNotIn('Quotation request', ' '.join(seen['command']))
+
+    def test_a_failure_says_nothing_about_stdout(self):
+        seen, error = self.run_draft(None, returncode=1)
+        self.assertIsInstance(error, RuntimeError)
+        self.assertIn('초안을 만들지 못했습니다', str(error))
+
+    def test_the_schema_allows_only_a_subject_and_a_draft(self):
+        shape = draft_schema()
+        self.assertEqual(shape['required'], ['subject', 'draft'])
+        self.assertFalse(shape['additionalProperties'])
+
+
+class AnalysisDraftTests(unittest.TestCase):
+    """분석은 더 이상 초안을 쓰지 않는다 — 말투를 아무도 고르지 않았기 때문."""
+
+    def test_the_analysis_is_told_to_leave_the_draft_empty(self):
+        seen = {}
+
+        def execute(command, **kwargs):
+            seen['input'] = kwargs['input']
+            Path(command[command.index('-o') + 1]).write_text(json.dumps(RESULT),
+                                                              encoding='utf-8')
+            return subprocess.CompletedProcess(command, 0)
+
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            store.add(account_key(CONFIG), 'new', mail())
+            row = store.pending(account_key(CONFIG), 0)[0]
+            with patch('mail_assistant.services.codex_command', return_value=['codex']), \
+                 patch('mail_assistant.services.subprocess.run', side_effect=execute):
+                analyze(row, CONFIG)
+            store.db.close()
+        self.assertIn('reply_draft는 항상 빈 문자열', seen['input'])
+        # 답장이 필요한지와 제목은 그대로 판단한다 — 큐가 그것으로 서 있다.
+        self.assertIn('reply_needed=false', seen['input'])
+
+
+class ReplyDraftStoreTests(unittest.TestCase):
+    """만든 초안은 분석 안으로 들어간다. draft_edit은 사람의 자리로 남는다."""
+
+    def store(self, folder):
+        store = Store(Path(folder) / 'mail.db')
+        account = account_key(CONFIG)
+        ident = store.add(account, 'uid-1', mail())
+        store.analyzed(ident, {'sender': 'a@b.c', 'subject': '견적', 'attachments': []},
+                       dict(RESULT, reply_draft='', reply_needed=False))
+        return store, ident
+
+    def test_the_draft_lands_in_the_analysis_and_not_in_the_edit(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store, ident = self.store(folder)
+            self.assertTrue(store.set_reply_draft(ident, 'Re: 견적', '회신드리겠습니다.'))
+            row = store.detail(ident)
+            result = json.loads(row['result'])
+            self.assertEqual(result['reply_draft'], '회신드리겠습니다.')
+            self.assertEqual(result['reply_subject'], 'Re: 견적')
+            # 사람이 손댔다는 표시가 아니므로 검토 큐에 그대로 남는다.
+            self.assertEqual(row['draft_edit'], '')
+            store.db.close()
+
+    def test_a_new_draft_replaces_the_one_in_the_box(self):
+        """The screen shows draft_edit or reply_draft, so an edit left in place would
+        store a draft nobody could see. 초안 새로 만들기 is what the button says."""
+        with tempfile.TemporaryDirectory() as folder:
+            store, ident = self.store(folder)
+            store.set_draft(ident, '사람이 고쳐 쓴 초안')
+            store.set_reply_draft(ident, '', '새로 만든 초안')
+            row = store.detail(ident)
+            self.assertEqual(row['draft_edit'], '')
+            self.assertEqual(json.loads(row['result'])['reply_draft'], '새로 만든 초안')
+            store.db.close()
+
+    def test_asking_for_a_draft_is_the_answer_to_답장이_필요한가(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store, ident = self.store(folder)
+            store.set_reply_draft(ident, '', '회신드리겠습니다.')
+            self.assertTrue(json.loads(store.detail(ident)['result'])['reply_needed'])
+            store.db.close()
+
+    def test_a_mail_with_no_analysis_yet_is_told_so_rather_than_written_to(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            ident = store.add(account_key(CONFIG), 'uid-1', mail())
+            self.assertFalse(store.set_reply_draft(ident, 'Re:', '초안'))
+            self.assertFalse(store.set_reply_draft('없는 id', 'Re:', '초안'))
+            store.db.close()
+
+
+class TranslateTests(unittest.TestCase):
+    """해외 메일 한 통을 한국어로, on the same hardened invocation analysis uses."""
+
+    def run_translate(self, written=None, returncode=0, body='Dear Sir, please quote.'):
+        seen = {}
+
+        def fake_run(command, **kwargs):
+            seen['command'] = command
+            seen['input'] = kwargs.get('input', '')
+            target = command[command.index('-o') + 1]
+            if written is not None:
+                Path(target).write_text(json.dumps(written, ensure_ascii=False),
+                                        encoding='utf-8')
+            return types.SimpleNamespace(returncode=returncode, stdout='', stderr='')
+
+        with patch('mail_assistant.services.codex_command', return_value=['codex']), \
+             patch('mail_assistant.services.subprocess.run', side_effect=fake_run):
+            try:
+                answer = translate(body, 'Quotation request', {'model': 'gpt-5'})
+            except Exception as exc:
+                return seen, exc
+        return seen, answer
+
+    def test_the_language_and_the_korean_both_come_back(self):
+        seen, answer = self.run_translate({'language': '영어', 'korean': '견적을 요청드립니다.'})
+        self.assertEqual(answer, ('영어', '견적을 요청드립니다.'))
+
+    def test_the_sandbox_flags_are_the_same_as_analysis(self):
+        seen, _ = self.run_translate({'language': '영어', 'korean': '번역'})
+        command = seen['command']
+        self.assertEqual(command[command.index('--sandbox') + 1], 'read-only')
+        self.assertIn('features.shell_tool=false', command)
+        self.assertIn('--ephemeral', command)
+        self.assertEqual(command[command.index('--model') + 1], 'gpt-5')
+
+    def test_the_body_goes_in_on_stdin_and_never_on_the_command_line(self):
+        seen, _ = self.run_translate({'language': '영어', 'korean': '번역'})
+        self.assertNotIn('Dear Sir', ' '.join(seen['command']))
+        self.assertIn('Dear Sir', seen['input'])
+        self.assertIn('신뢰하지 않는', seen['input'])
+        self.assertIn('도구를 사용하지 마세요', seen['input'])
+
+    def test_the_figures_are_told_to_stay_as_they_were_written(self):
+        """A translated price or part number is the one thing worth nothing at all."""
+        seen, _ = self.run_translate({'language': '영어', 'korean': '번역'})
+        for kept in ('금액', '품번', '날짜'):
+            self.assertIn(kept, seen['input'])
+
+    def test_a_failure_says_nothing_about_stdout(self):
+        seen, error = self.run_translate(None, returncode=1)
+        self.assertIsInstance(error, RuntimeError)
+        self.assertIn('번역하지 못했습니다', str(error))
+
+    def test_a_body_too_long_is_refused_rather_than_clipped(self):
+        """Half a mail translated is worse than none: nothing would say which half."""
+        seen, error = self.run_translate({'language': '영어', 'korean': 'x'},
+                                         body='a' * (TRANSLATE_LIMIT + 1))
+        self.assertIsInstance(error, RuntimeError)
+        self.assertIn('초과', str(error))
+        self.assertNotIn('command', seen)          # Codex was never asked
+
+    def test_an_empty_body_is_not_sent_either(self):
+        seen, error = self.run_translate({'language': '영어', 'korean': 'x'}, body='   ')
+        self.assertIsInstance(error, RuntimeError)
+        self.assertNotIn('command', seen)
+
+    def test_the_schema_allows_only_the_two_fields(self):
+        shape = translate_schema()
+        self.assertEqual(shape['required'], ['language', 'korean'])
+        self.assertFalse(shape['additionalProperties'])
+
+
+class CodexInvocationTests(unittest.TestCase):
+    """The one `codex exec` every call in this app makes, and what each says when it fails."""
+
+    def test_every_caller_goes_through_the_same_flags(self):
+        seen = []
+
+        def fake_run(command, **kwargs):
+            seen.append(command)
+            Path(command[command.index('-o') + 1]).write_text('{}', encoding='utf-8')
+            return types.SimpleNamespace(returncode=1, stdout='', stderr='')
+
+        callers = ((lambda: translate('hello', '', {}), '번역하지 못했습니다'),
+                   (lambda: chat_reply('질문', config={}), 'Codex 응답을 받지 못했습니다'),
+                   (lambda: briefing({}, {}), '브리핑을 만들지 못했습니다'))
+        with patch('mail_assistant.services.codex_command', return_value=['codex']), \
+             patch('mail_assistant.services.subprocess.run', side_effect=fake_run):
+            for call, said in callers:
+                with self.assertRaises(RuntimeError) as caught:
+                    call()
+                # Each caller names what it was doing; none of them quotes stdout.
+                self.assertIn(said, str(caught.exception))
+        for command in seen:
+            self.assertEqual(command[command.index('--sandbox') + 1], 'read-only')
+            self.assertIn('--ignore-user-config', command)
+            self.assertIn('--output-schema', command)
 
 
 class MailtoTests(unittest.TestCase):

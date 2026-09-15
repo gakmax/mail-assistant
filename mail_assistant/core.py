@@ -170,6 +170,35 @@ class TextHTML(HTMLParser):
 TABLE_SHAPE = (2, 2)   # columns, rows
 
 
+# 한글 음절과 자모: the syllables a mail is written in, and the bare letters a
+# keyboard leaves behind. A Korean mail is mostly this; an English one has none of it.
+HANGUL = ((0xAC00, 0xD7A3), (0x1100, 0x11FF), (0x3130, 0x318F))
+
+
+def korean_ratio(text):
+    """한글 letters as a share of the letters in `text`, ignoring digits and marks.
+
+    Letters only: a quotation full of part numbers, prices and dates is not a Korean
+    mail because the digits outnumber the words, and a Korean one is still Korean
+    with an English signature under it.
+    """
+    letters = [ch for ch in str(text or '') if ch.isalpha()]
+    if not letters:
+        return 1.0
+    korean = sum(1 for ch in letters if any(low <= ord(ch) <= high for low, high in HANGUL))
+    return korean / len(letters)
+
+
+# Under this a mail reads as somebody else's language rather than as a Korean mail
+# with a quoted English thread under it, which is the common shape here.
+FOREIGN_BELOW = 0.2
+
+
+def looks_foreign(text):
+    """Is this a mail 번역 should be offered for? A judgement, and the screen says so."""
+    return korean_ratio(text) < FOREIGN_BELOW
+
+
 def squash(text):
     """A cell as one line: a Markdown row cannot carry the newlines a cell may hold."""
     return ' '.join(str(text).split()).replace('|', r'\|')
@@ -285,7 +314,11 @@ class Store:
                      # The worker's own marker, and the one card the kanban was told
                      # to forget. Both belong to a mail, so both are columns on it.
                      ('analyzing', "TEXT NOT NULL DEFAULT ''"),
-                     ('todo_hidden', 'INTEGER NOT NULL DEFAULT 0'))
+                     ('todo_hidden', 'INTEGER NOT NULL DEFAULT 0'),
+                     # 한글 번역, kept beside the mail it belongs to: it is asked for
+                     # once, read many times, and costs a Codex run to make again.
+                     ('translated', "TEXT NOT NULL DEFAULT ''"),
+                     ('translated_from', "TEXT NOT NULL DEFAULT ''"))
         with self.db:
             for column, declaration in additions:
                 if column not in present:
@@ -700,6 +733,39 @@ class Store:
     def set_draft(self, ident, text):
         with self.db:
             self.db.execute('UPDATE mail SET draft_edit=? WHERE id=?', (text, ident))
+
+    def set_reply_draft(self, ident, subject, text):
+        """초안 만들기's answer, into the analysis it belongs to.
+
+        Into `reply_draft` and not `draft_edit`, because that is what this is: the
+        analysis's own draft, which `review_queue()` reads as 'nobody has been here
+        yet'. `reply_needed` goes true with it — asking for a draft is the answer to
+        that question, however the analysis had judged it.
+
+        `draft_edit` is cleared, and that is the one place in this app where text a
+        person typed is thrown away. It is what the press asked for: the screen shows
+        `draft_edit or reply_draft`, so leaving an edit in place would store a draft
+        nobody could see, and the button says 초안 새로 만들기 when there is something
+        to replace. Nothing here runs on a timer.
+        """
+        row = self.db.execute('SELECT result FROM mail WHERE id=?', (ident,)).fetchone()
+        if row is None or not row['result']:
+            return False
+        result = json.loads(row['result'])
+        result['reply_draft'] = text or ''
+        result['reply_needed'] = True
+        if subject:
+            result['reply_subject'] = subject
+        with self.db:
+            self.db.execute("UPDATE mail SET result=?, draft_edit='' WHERE id=?",
+                            (json.dumps(result, ensure_ascii=False), ident))
+        return True
+
+    def set_translation(self, ident, language, text):
+        """The Korean of a foreign mail, and the language it was written in."""
+        with self.db:
+            self.db.execute('UPDATE mail SET translated=?, translated_from=? WHERE id=?',
+                            (text or '', language or '', ident))
 
     def reset(self, ids, reanalyze=False):
         """Clear the backoff so the next cycle picks these up again; count what moved.

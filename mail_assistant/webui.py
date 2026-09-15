@@ -18,16 +18,19 @@ from pathlib import Path
 from . import __version__
 from .calendar_sheet import COLORS, parse_day, plain_title
 from .core import (ANALYZING, FAILED, HANDLED, LIST_LIMIT, PROGRESS, ROOM_MARK, SORTS,
-                   STATES, Store, account_key, event_row_id, is_event_key, local_text, now,
-                   parse_mail, row_view, state_of)
+                   STATES, Store, account_key, event_row_id, is_event_key, local_text,
+                   looks_foreign, now, parse_mail, row_view, state_of)
 from .dashboard import CATEGORIES, PRIORITIES, describe
 from .excel import mailto
 from .hub import line_text
 from .overview import (BRIEF_HOUR, DUE_DAYS, RECENT_DAYS, UPCOMING, overview, past_due,
                        results, review_queue, trend)
-from .settings import (CUSTOM, DEFAULTS, FIELDS, NO_MODELS, field_errors, model_rows,
-                       model_value, normalize, read_models)
+from .services import DRAFT_TONES, DRAFT_WAYS
+from .settings import (DEFAULTS, FIELDS, GRADE_NOTE, NO_MODELS, field_errors, model_label,
+                       model_rows, normalize, read_models)
 from .style import CALM, DASH_GREEN, LINK, NEUTRAL, SOON, URGENT, css_color
+from .usage import (CALM as USAGE_CALM, FULL as USAGE_FULL, WARN as USAGE_WARN,
+                    Meter as UsageMeter)
 # The one module here that is not a screen's: update.py is stdlib-only, so the
 # beat's interval can be shared with app.py without either importing a toolkit.
 from .update import WATCH_SECONDS
@@ -62,6 +65,20 @@ REFRESH_SECONDS = 5.0
 # pulse — but repaints at once when another screen says it changed (Hub.touch).
 LIVE_SECONDS = 1.0
 RUN_LINES = 8
+# The 사용량 chip's own beat, and the one-shot that fills it when a page opens. The
+# number moves when an analysis runs — minutes apart, never seconds — and the read is
+# a process launch, so it is nothing like the five-second repaint beside it. Meter's
+# own gate is what actually decides; this only says how soon after it opens somebody
+# hears, exactly as WATCH_SECONDS does for the update check.
+USAGE_SECONDS = 120.0
+USAGE_FIRST = 1.5
+# Three states and no green: a quota that is fine is not an achievement to light up,
+# it is the absence of news — the same reason the 분석 실패 card is missing at 0.
+USAGE_TONES = {USAGE_CALM: MUTED, USAGE_WARN: css_color(SOON), USAGE_FULL: css_color(URGENT)}
+# The 사용량 half of settings.GRADES, in colour. 성능 stays grey on purpose: somebody
+# opening this list is choosing what it will cost them, and two accented chips on one
+# row is the 분석 결과 wall of headings again. A test holds this against GRADES.
+COST_TONES = {'사용량 많음': css_color(SOON), '사용량 보통': SUBTLE, '사용량 적음': OK}
 # The frame opens at this size, not at pywebview's 800x600: 대시보드 is a two-column
 # layout and 메일 is a table with six columns, and both start inside a scrollbar at
 # the default. WINDOW_MIN is as small as the layout still reads at.
@@ -93,7 +110,21 @@ SIDE_RAIL = 64
 # WINDOW_MIN is 1080 wide and the 메일 table has six columns: below this the labels go
 # back to the content, which is what shoot.ps1 caught them being squeezed out of.
 SIDE_BREAK = 1200
-# Past this a badge is a shape rather than a number, and the sidebar has one width.
+# The fold is one gesture, so everything that moves with it shares one curve and one
+# duration: a width that slides while its labels blink reads as two things happening.
+SIDE_EASE = '.22s cubic-bezier(.4,0,.2,1)'
+# Said once, under the two pickers: both are things the reader would otherwise have
+# to press the button to find out.
+DRAFT_NOTE = '받은 메일과 같은 언어로 씁니다. 서명과 연락처는 넣지 않습니다.'
+# A heading row that may carry a dense control — the 원문/한글 번역 toggle is the
+# tallest of them — beside one that carries nothing but the heading.
+HEAD_ROW = 30
+# .ma-side__group is a heading in the sidebar and a 1px rule in the rail, and no height
+# animates from auto — this is what the heading measures, pinned so that it can.
+SIDE_GROUP = 35
+# The 상담 page fills the frame rather than sitting in the top of it: .ma-bar (56px and
+# its hairline) plus .ma-page's own 20px/56px padding is everything above and below it.
+CHAT_CHROME = 57 + 20 + 56
 NAV_BADGE_MAX = 99
 # Monday first, and never through strftime: Windows encodes a format string with the
 # locale codec, so a Korean pattern raises UnicodeEncodeError off a Korean PC.
@@ -201,13 +232,17 @@ def rail_css(scope):
     """
     return """
 {scope} .ma-side {{ width:{rail}px; padding:14px 8px 18px; overflow:visible; }}
-{scope} .ma-side__words, {scope} .ma-side__label {{ display:none; }}
-{scope} .ma-side__brand {{ justify-content:center; }}
-{scope} .ma-side__item {{ justify-content:center; padding:8px 0; }}
+/* Collapsed to nothing, never display:none: a width cannot animate away from a box
+   that stopped existing, and the fold is meant to read as one movement. */
+{scope} .ma-side__words, {scope} .ma-side__label {{ max-width:0; opacity:0; }}
+/* Centred with padding rather than justify-content, for the same reason: the icon
+   then travels to the middle of the rail as the rail narrows, instead of jumping
+   there on the first frame and waiting for the width to catch up. */
+{scope} .ma-side__item {{ padding:8px 0 8px {icon}px; }}
 /* The mark and the 펼치기 button take the same square, and the hover swaps them: a
    rail has one row's width at the top and the logo and the way out of the rail both
    want it. Anything narrower than a press is a press people miss. */
-{scope} .ma-side__top {{ justify-content:center; position:relative; padding:4px 0 10px; }}
+{scope} .ma-side__top {{ position:relative; padding:4px 0 10px {mark}px; }}
 {scope} .ma-side__fold {{
   position:absolute; left:50%; top:1px; transform:translateX(-50%);
   opacity:0; pointer-events:none;
@@ -216,14 +251,18 @@ def rail_css(scope):
 {scope} .ma-side__top:hover .ma-side__fold {{ opacity:1; pointer-events:auto; }}
 /* The heading has no room for its word, but the grouping it marks is still worth a
    line: four questions read as four, where nine bare icons read as nine. */
+/* The heading rolls up into its own rule: the height shrinks, the text is clipped
+   away by the overflow it already has, and the border is the line that is left. */
 {scope} .ma-side__group {{
-  height:1px; padding:0; margin:9px 12px 7px; font-size:0; overflow:hidden;
-  background:var(--line);
+  height:1px; padding:0; margin:9px 12px 7px; color:transparent;
+  border-top-color:var(--line);
 }}
 /* The count stays a count: 아이콘만 was never 'and no number'. It rides on the icon's
    shoulder, because there is no row left for it to sit at the end of. */
+/* Absolute in both widths (see .ma-badge), so the count slides up onto the icon's
+   shoulder with the row rather than teleporting there on the first frame. */
 {scope} .ma-badge {{
-  position:absolute; top:2px; right:4px; margin:0; padding:0 3px;
+  top:2px; right:4px; padding:0 3px;
   min-width:15px; height:15px; line-height:13px; font-size:9.5px;
   background:var(--brand); border-color:var(--card); color:#fff;
 }}
@@ -240,7 +279,10 @@ def rail_css(scope):
 }}
 {scope} .ma-side__item:hover::after {{ opacity:1; }}
 {scope} .ma-side__fold .q-icon {{ transform:rotate(180deg); }}
-""".format(scope=scope, rail=SIDE_RAIL)
+""".format(scope=scope, rail=SIDE_RAIL,
+           # Centred by arithmetic, because that is what a length can animate to:
+           # the rail's own padding is 8px a side, which leaves this much beside it.
+           icon=(SIDE_RAIL - 16 - 18) // 2, mark=(SIDE_RAIL - 16 - 28) // 2)
 
 
 # One stylesheet, injected once per page by shell(). Everything below is a token or a
@@ -284,12 +326,14 @@ body {{
   border-right:1px solid var(--line);
   position:sticky; top:0; height:100vh; overflow-y:auto;
   display:flex; flex-direction:column; padding:14px 10px 18px;
+  transition:width {SIDE_EASE}, padding {SIDE_EASE};
 }}
 /* 접기 sits on the sidebar it folds, not in the header band across the page: the
    button and the thing it moves are then one gesture, and the band keeps its width
    for what is actually state. */
 .ma-side__top {{
   display:flex; align-items:center; gap:4px; padding:4px 4px 8px;
+  transition:padding {SIDE_EASE};
 }}
 .ma-side__brand {{
   display:flex; align-items:center; gap:9px; flex:1; min-width:0;
@@ -301,32 +345,54 @@ body {{
   background:var(--brand); color:#fff; flex:none;
 }}
 .ma-side__mark svg {{ width:16px; height:16px; display:block; }}
-.ma-side__words {{ display:flex; flex-direction:column; min-width:0; }}
+/* max-width and not display: the name has to shrink with the rail rather than
+   vanish under it, and overflow is what keeps it from spilling on the way. */
+.ma-side__words {{
+  display:flex; flex-direction:column; min-width:0; max-width:160px; overflow:hidden;
+  transition:max-width {SIDE_EASE}, opacity .14s ease;
+}}
 .ma-side__name {{
   font-size:13.5px; font-weight:700; letter-spacing:-.01em; white-space:nowrap;
 }}
 .ma-side__ver {{ font-size:10.5px; color:var(--muted); }}
+/* A pinned height, because the rail turns this heading into a 1px rule and a height
+   cannot animate away from auto. The border is transparent until it is the rule. */
 .ma-side__group {{
   font-size:10.5px; font-weight:700; letter-spacing:.06em;
   color:var(--muted); padding:13px 10px 5px;
+  height:{SIDE_GROUP}px; box-sizing:border-box; overflow:hidden;
+  border-top:1px solid transparent;
+  transition:height {SIDE_EASE}, padding {SIDE_EASE}, margin {SIDE_EASE},
+             color .14s ease, border-top-color .14s ease;
 }}
 .ma-side__item {{
   position:relative; display:flex; align-items:center; gap:9px;
   padding:7px 10px; border-radius:9px; text-decoration:none;
   color:var(--subtle); font-size:13px; font-weight:500;
-  transition:background .12s ease, color .12s ease;
+  transition:background .12s ease, color .12s ease, padding {SIDE_EASE};
 }}
 .ma-side__item:hover {{ background:var(--sunken); color:var(--ink); }}
 .ma-side__item.is-live {{
   background:var(--brand-soft); color:var(--brand); font-weight:600;
 }}
 .ma-side__item .q-icon {{ font-size:18px; flex:none; }}
-.ma-side__label {{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+.ma-side__label {{
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:160px;
+  transition:max-width {SIDE_EASE}, opacity .14s ease;
+}}
+/* Out of the flow in both widths: in the row it sits at the end and in the rail on
+   the icon's shoulder, and only a box that is positioned either way can travel
+   between the two. Nothing in PAGES is long enough to run under it. */
 .ma-badge {{
-  margin-left:auto; flex:none; min-width:19px; height:19px; padding:0 6px;
+  position:absolute; right:10px; top:7px;
+  min-width:19px; height:19px; padding:0 6px;
   border-radius:999px; background:var(--sunken); border:1px solid var(--line);
   color:var(--muted); font-size:10.5px; font-weight:700; line-height:17px;
   text-align:center;
+  transition:right {SIDE_EASE}, top {SIDE_EASE}, min-width {SIDE_EASE},
+             height {SIDE_EASE}, padding {SIDE_EASE}, font-size {SIDE_EASE},
+             line-height {SIDE_EASE}, background .14s ease, border-color .14s ease,
+             color .14s ease;
 }}
 .ma-side__item.is-live .ma-badge {{
   background:var(--brand); border-color:var(--brand); color:#fff;
@@ -564,6 +630,10 @@ a.ma-kpi:hover {{
 .ma-field:first-child {{ margin-top:0; }}
 .ma-radio {{ display:block; margin:0 0 2px -6px; }}
 .ma-radio .q-radio__label {{ font-size:13px; color:var(--ink); }}
+/* The 모델 dropdown. Quasar sizes a select's text for a form somebody fills in all
+   day; this one is read far more often than it is changed, so the closed control
+   matches the card's own body text rather than shouting one size larger. */
+.ma-select .q-field__native {{ font-size:13px; color:var(--ink); font-weight:600; }}
 .ma-alert {{
   display:flex; gap:7px; align-items:flex-start; border-radius:9px; padding:9px 11px;
   color:var(--urgent); background:rgba(192,0,0,.06); border:1px solid rgba(192,0,0,.14);
@@ -607,6 +677,9 @@ a.ma-kpi:hover {{
   color:var(--brand); border-radius:999px; margin:0 18px 4px !important;
   width:auto !important;
 }}
+/* The same bar inside a card that already has its own padding — the 18px above is
+   for a flush card, where the bar has to keep clear of the edge itself. */
+.ma-progress--inline {{ margin:8px 0 4px !important; width:100% !important; }}
 .ma-duelist {{ display:block; padding-bottom:8px; }}
 /* 할 일 tally: three numbers wide enough to read at a glance from across the page. */
 .ma-tally {{ display:flex; gap:0; padding:12px 18px 10px; }}
@@ -750,10 +823,41 @@ a.ma-kpi:hover {{
 .ma-wall__head .q-icon {{ font-size:14px; }}
 .ma-wall__rule {{ flex:1 1 auto; height:1px; background:var(--line); }}
 
+/* 초안 만들기: its own heading, its own fold, and the two pickers. The control sits
+   on the block it opens for the reason 접기 sits on the sidebar — one gesture. */
+.ma-maker {{
+  display:block; background:var(--sunken); border:1px solid var(--hair);
+  border-radius:10px; padding:8px 10px; margin-bottom:8px;
+}}
+.ma-maker__top {{ display:flex; align-items:center; gap:7px; }}
+.ma-maker__title {{ font-size:12.5px; font-weight:700; color:var(--ink); }}
+.ma-maker__row {{
+  display:flex; align-items:center; gap:9px; flex-wrap:wrap; margin-top:8px;
+}}
+.ma-maker__label {{
+  flex:none; width:30px; font-size:11px; font-weight:600; color:var(--muted);
+}}
+
+/* A block that opens and shuts in place. grid-template-rows and not height: a
+   height cannot animate from auto, and the thing being folded here is a log whose
+   length changes on every beat. The child carries the overflow, or the rows it is
+   clipped to would be drawn over whatever is below. */
+.ma-fold {{
+  display:grid; grid-template-rows:0fr;
+  transition:grid-template-rows {SIDE_EASE};
+}}
+.ma-fold.is-open {{ grid-template-rows:1fr; }}
+.ma-fold > * {{ overflow:hidden; min-height:0; }}
+.ma-fold__mark {{ transition:transform {SIDE_EASE}; }}
+.ma-fold__mark.is-open {{ transform:rotate(180deg); }}
+
 /* 상담: the two speakers differ by side and by ground, never by side alone.
    Quasar's q-chat-message brings its own palette and a little tail; the rules below
    are scoped to .ma-chat so nothing else on the site inherits the override. */
-.ma-chat {{ height:min(58vh, 470px); width:100%; }}
+/* The thread takes whatever the frame has left, rather than a figure of its own:
+   .ma-chatwrap is sized to the window below, and this is the one thing in the card
+   that should grow. min-height keeps it a thread on a window too short to fill. */
+.ma-chat {{ flex:1 1 auto; min-height:180px; width:100%; }}
 /* nicegui pads the scroll content and lets it shrink-wrap, so on a narrow window the
    padding alone is wider than the area and the whole thread scrolls sideways.
    The right gutter clears Quasar's overlay thumb: a sent bubble is margin-left:auto
@@ -794,11 +898,20 @@ a.ma-kpi:hover {{
 
 /* 상담: the thread list beside the thread. One column on a narrow window, where a
    250px sidebar would leave the bubbles no room at all. */
-.ma-chatwrap {{ display:flex; gap:14px; align-items:stretch; width:100%; }}
+/* Sized to the frame, not to a number: the window opens at webui.WINDOW and the
+   card used to stop 200px short of the bottom of it. CHAT_CHROME is everything above
+   and below this page — the header band and .ma-page's own padding — so the thread
+   ends where the page does and nothing scrolls behind it. */
+.ma-chatwrap {{
+  display:flex; gap:14px; align-items:stretch; width:100%;
+  height:calc(100vh - {CHAT_CHROME}px); min-height:420px;
+}}
 .ma-rooms {{ flex:0 0 252px; min-width:0; display:flex; flex-direction:column; padding:0; }}
-.ma-thread {{ flex:1 1 auto; min-width:0; }}
+.ma-thread {{ flex:1 1 auto; min-width:0; display:flex; flex-direction:column; }}
 @media (max-width:900px) {{
-  .ma-chatwrap {{ flex-direction:column; }}
+  /* Stacked, the two cards are taller than any window: let the page scroll again. */
+  .ma-chatwrap {{ flex-direction:column; height:auto; min-height:0; }}
+  .ma-chat {{ height:min(58vh, 470px); flex:none; }}
   .ma-rooms {{ flex:none; width:100%; }}
   .ma-rooms__list {{ max-height:220px; }}
 }}
@@ -806,7 +919,7 @@ a.ma-kpi:hover {{
   display:flex; align-items:center; gap:8px; padding:12px 12px 6px;
 }}
 .ma-rooms__find {{ padding:0 12px 8px; width:100%; }}
-.ma-rooms__list {{ flex:1 1 auto; max-height:min(58vh, 470px); padding:0 6px 8px; }}
+.ma-rooms__list {{ flex:1 1 auto; min-height:0; padding:0 6px 8px; }}
 .ma-room {{
   border-radius:10px; padding:8px 10px; cursor:pointer; display:block;
   border:1px solid transparent;
@@ -1920,6 +2033,52 @@ def detail_events(events):
     return shaped
 
 
+def draft_picks(saved=None):
+    """마지막에 고른 말투와 방향, 또는 기본값. A value this build no longer offers
+    falls back rather than being drawn as a toggle with nothing selected."""
+    saved = saved or {}
+    return {'tone': saved.get('tone') if saved.get('tone') in DRAFT_TONES else DRAFT_TONES[0],
+            'way': saved.get('way') if saved.get('way') in DRAFT_WAYS else DRAFT_WAYS[0]}
+
+
+def draft_input(view):
+    """초안 만들기에 보내는 것: 메일 자체와, 분석이 이미 읽어 둔 것.
+
+    The body goes in as it was written, not as its 한글 번역: the reply is meant to be
+    in the sender's own language, and a translation is one more thing between the two.
+    """
+    return {'subject': view['subject'], 'sender': view['sender'],
+            'received': view['received'], 'body': view['body'],
+            'summary': view['summary'], 'requests': view['requests'],
+            'action': view['action']}
+
+
+def row_value(row, key, fallback=''):
+    """A column that a row may not carry, for the shaping that runs off a fake row.
+
+    Store.migrate() adds every column the app needs, so a real row has them all; the
+    tests and the Excel side build rows of their own and must not have to.
+    """
+    try:
+        value = row[key]
+    except (IndexError, KeyError, TypeError):
+        return fallback
+    return fallback if value is None else value
+
+
+# Said on the button rather than in a banner over the mail: whether a body is
+# foreign is a judgement this app makes from its letters, and a sentence claiming it
+# would be wrong about a Korean mail with a long English thread quoted under it.
+TRANSLATE_TIP = ('본문을 한국어로 옮깁니다. 분석과 같은 Codex 한 자리를 쓰므로 '
+                 '분석 중이면 그 뒤에 처리됩니다.')
+
+
+def translated_note(language):
+    """번역문 위에 붙는 한 줄. What it was, and what it cannot be trusted for."""
+    source = f'{language} 원문을' if language else '원문을'
+    return f'{source} Codex가 옮긴 것입니다. 금액·수량·날짜·품번은 원문에서 확인하세요.'
+
+
 def detail_view(row):
     """Everything the detail panel shows, shaped without touching nicegui."""
     result = json.loads(row['result']) if row['result'] else {}
@@ -1938,6 +2097,12 @@ def detail_view(row):
         'events': list(result.get('events', [])),
         'attachments': list(parsed.get('attachments', [])),
         'body': tidy_body(parsed.get('body', '')),
+        # 해외영업 메일: what was stored the one time it was asked for, and whether the
+        # mail reads as somebody else's language in the first place. The second is what
+        # decides which of the two the panel opens on — not the button being there.
+        'translated': row_value(row, 'translated'),
+        'language': row_value(row, 'translated_from'),
+        'foreign': looks_foreign(tidy_body(parsed.get('body', ''))),
         'draft': row['draft_edit'] or result.get('reply_draft', ''),
         'reply_subject': result.get('reply_subject', '') or f"Re: {row['subject']}",
         'analysed': bool(result),
@@ -2613,9 +2778,27 @@ def lamp(running, stopping=False):
     return (OK, '실행 중') if running else (MUTED, '중지됨')
 
 
-def run_strip(summary, token=None):
+def run_strip(summary, token=None, state=None):
+    """수집 as the 대시보드 shows it: one line, and the log behind a fold.
+
+    The log is shut unless somebody opened it — it is the longest block in that column
+    and the least often read, and the question this card is on the 대시보드 to answer
+    is 실행 중 or 중지됨, which is the line that stays. `state` is the reader's own
+    choice and belongs to the page, because the card is rebuilt on every beat.
+    """
     from nicegui import ui
+    state = state if state is not None else {'open': False}
     tone, _ = lamp(summary['running'], summary['stopping'])
+    folded = bool(summary['message'] or summary['lines'])
+    live = ' is-open' if state['open'] else ''
+
+    def fold():
+        """A class swap and nothing else: a refresh here would rebuild the animation."""
+        state['open'] = not state['open']
+        for element in (shut, mark):
+            element.classes(add='is-open') if state['open'] \
+                else element.classes(remove='is-open')
+
     with card():
         with ui.element('div').classes('ma-head').style('margin-bottom:6px'):
             ui.element('div').classes('ma-dot').style(f'background:{tone}')
@@ -2624,16 +2807,29 @@ def run_strip(summary, token=None):
             if token:
                 ui.link('실행 화면 열기', href('/run', token)) \
                     .style(f'color:{BRAND};font-size:12px;text-decoration:none')
-        with ui.element('div').classes('ma-meta').style('margin-bottom:10px'):
+            if folded:
+                # Nothing to open is nothing to offer, which is the rule an empty badge
+                # and the absent 분석 실패 card already follow.
+                opener = ui.button(on_click=fold).props('flat dense round size=sm') \
+                    .style(f'color:{MUTED}').tooltip('최근 기록 보기·숨기기')
+                with opener:
+                    mark = ui.icon('expand_more').classes('ma-fold__mark' + live)
+        with ui.element('div').classes('ma-meta') \
+                .style('margin-bottom:10px' if folded else ''):
             for label, value in summary['stamps'].items():
                 ui.label(f'{label} {value}').classes('ma-meta__item')
-        if summary['message']:
-            ui.label(summary['message']).style(f'color:{INK};font-size:12.5px;margin-bottom:8px')
-        if summary['lines']:
-            with ui.element('div').classes('ma-sunken ma-scroll ma-log') \
-                    .style('max-height:180px;width:100%'):
-                for text in summary['lines']:
-                    ui.label(text).style('white-space:pre-wrap;overflow-wrap:anywhere')
+        if not folded:
+            return
+        shut = ui.element('div').classes('ma-fold' + live)
+        with shut, ui.element('div'):
+            if summary['message']:
+                ui.label(summary['message']) \
+                    .style(f'color:{INK};font-size:12.5px;margin-bottom:8px')
+            if summary['lines']:
+                with ui.element('div').classes('ma-sunken ma-scroll ma-log') \
+                        .style('max-height:180px;width:100%'):
+                    for text in summary['lines']:
+                        ui.label(text).style('white-space:pre-wrap;overflow-wrap:anywhere')
 
 
 # Drawn, not fetched: the mark has to be there on a PC with no network and behind a
@@ -2685,6 +2881,21 @@ def bar_status(state):
     return {'text': '수집 멈춤', 'tone': MUTED, 'beat': False}
 
 
+def usage_chip(view):
+    """The header's answer to '한도가 얼마나 남았나'. `view` is usage.Meter.view().
+
+    Drawn only once Codex has actually answered: a quota this app has not managed to
+    read is not a quota at 0%, which is the rule badge_text() follows for a zero and
+    recheck() follows for a check that never reached GitHub.
+    """
+    view = view or {}
+    lines = [line for line in (view.get('lines') or []) if line]
+    return {'text': str(view.get('text') or ''),
+            'tone': USAGE_TONES.get(view.get('level'), MUTED),
+            'tip': '\n'.join(lines),
+            'shown': bool(view.get('known') and view.get('text'))}
+
+
 def update_pill(offer):
     """'새 버전 0.5.1', or ''. The header only ever says there is one; 실행 says what
     it costs and is where the button lives."""
@@ -2692,7 +2903,7 @@ def update_pill(offer):
     return f'새 버전 {version}' if version else ''
 
 
-def shell(current, token, chrome=None, watch=None):
+def shell(current, token, chrome=None, watch=None, usage=None):
     """The sidebar, the header band and the page area, identical on every page.
 
     `chrome` is one callable returning {'counts', 'state', 'offer'} — one call per tick
@@ -2704,6 +2915,10 @@ def shell(current, token, chrome=None, watch=None):
     `watch` is the update re-check, on its own much slower beat. It lives here rather
     than on the 대시보드 because this is the one thing every page has, and an app that
     is open all day is exactly the one that never sees a launch-time check again.
+
+    `usage` is the Codex 사용량 read, on a beat of its own for the same reason: the
+    answer to '분석이 왜 안 되지' is often 'this account is out of messages until 14:16',
+    and that is a thing to be able to see rather than to deduce from a failure line.
     """
     from contextlib import contextmanager
     from nicegui import ui
@@ -2722,8 +2937,8 @@ def shell(current, token, chrome=None, watch=None):
         latest = chrome() if chrome is not None else {}
         marks = {}
 
-        def paint(state, line):
-            """Everything about the chip and the pill that is not their text. Bound
+        def paint(state, line, quota):
+            """Everything about the chips and the pill that is not their text. Bound
             late on purpose: the elements below do not exist yet when this is read."""
             dot.style(f"background:{state['tone']}")
             if state['beat']:
@@ -2732,6 +2947,9 @@ def shell(current, token, chrome=None, watch=None):
                 chip.classes(remove='is-live')
             chip.set_visibility(bool(state['text']))
             pill.set_visibility(bool(line))
+            spark.style(f"background:{quota['tone']}")
+            band.style(f"color:{quota['tone']}" if quota['tone'] != MUTED else '')
+            band.set_visibility(quota['shown'])
 
         with ui.element('div').classes('ma-shell'):
             with ui.element('aside').classes('ma-side'):
@@ -2779,6 +2997,18 @@ def shell(current, token, chrome=None, watch=None):
                             .tooltip('뒤로')
                         ui.label(titles.get(current, '')).classes('ma-bar__title')
                         ui.space()
+                        quota = usage_chip(latest.get('usage'))
+                        band = ui.element('div').classes('ma-chip')
+                        with band:
+                            spark = ui.element('div').classes('ma-chip__dot') \
+                                .style(f"background:{quota['tone']}")
+                            gauge = ui.label(quota['text'])
+                            # One tooltip, whose text the tick rewrites: the two windows
+                            # and the reset clock are the whole answer, and a chip that
+                            # spelled them out would be wider than the title beside it.
+                            note = ui.tooltip(quota['tip']).props('anchor="bottom middle" '
+                                                                 'self="top middle"') \
+                                .style('white-space:pre-line;text-align:left')
                         shown = bar_status(latest.get('state'))
                         chip = ui.element('div').classes('ma-chip')
                         with chip:
@@ -2789,7 +3019,7 @@ def shell(current, token, chrome=None, watch=None):
                         with ui.link(target=href('/run', token)).classes('ma-pill') as pill:
                             ui.icon('system_update_alt')
                             offer = ui.label(line)
-                        paint(shown, line)
+                        paint(shown, line, quota)
                 with ui.element('main').classes('ma-page') as page:
                     yield page
 
@@ -2805,10 +3035,14 @@ def shell(current, token, chrome=None, watch=None):
                     label.set_visibility(bool(text))
             state = bar_status(data.get('state'))
             found = update_pill(data.get('offer'))
-            if state['text'] != word.text or found != offer.text:
+            quota = usage_chip(data.get('usage'))
+            if (state['text'] != word.text or found != offer.text
+                    or quota['text'] != gauge.text):
                 word.set_text(state['text'])
                 offer.set_text(found)
-                paint(state, found)
+                gauge.set_text(quota['text'])
+                note.set_text(quota['tip'])
+                paint(state, found, quota)
 
         async def look():
             """A version found while somebody is working: the pill and one line.
@@ -2830,6 +3064,12 @@ def shell(current, token, chrome=None, watch=None):
             ui.timer(REFRESH_SECONDS, tick)
         if watch is not None:
             ui.timer(WATCH_SECONDS, look)
+        if usage is not None:
+            # Once just after the page is drawn, and then on its own beat. Every page
+            # load asks, and all but the first are a no-op: Meter.watch() answers from
+            # the reading it already has while that reading is fresh.
+            ui.timer(USAGE_FIRST, usage, once=True)
+            ui.timer(USAGE_SECONDS, usage)
 
     return frame()
 
@@ -3108,7 +3348,97 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
     def revision():
         return hub.revision if hub is not None else 0
 
+    # 초안 만들기 ------------------------------------------------------
+
+    def draft_maker(view, opened, after):
+        """말투와 방향을 골라 답변 초안을 만드는 칸. 메일 상세와 초안 화면이 같은 것을 쓴다.
+
+        Analysis no longer writes a draft, so this is where one comes from. It carries
+        its own heading and its own fold, exactly as the sidebar's 접기 sits on the
+        sidebar: the control and the thing it opens are then one gesture, and a page
+        that wants a maker places one element rather than three.
+        """
+        picks = draft_picks(app.storage.user.get('draft'))
+        busy = {'now': False}
+        state = {'open': bool(opened)}
+        live = ' is-open' if opened else ''
+
+        def fold():
+            """A class swap and nothing else — see run_strip()."""
+            state['open'] = not state['open']
+            for element in (shut, mark):
+                element.classes(add='is-open') if state['open'] \
+                    else element.classes(remove='is-open')
+
+        async def make():
+            if busy['now']:
+                return
+            if not view['analysed']:
+                ui.notify('분석이 끝난 뒤에 초안을 만들 수 있습니다.')
+                return
+            busy['now'] = True
+            go.props('loading')
+            ui.notify('초안을 만드는 중입니다. 분석이 돌고 있으면 그 뒤에 처리됩니다.')
+            try:
+                subject, text = await nicerun.io_bound(
+                    helpers.draft, draft_input(view), picks['tone'], picks['way'], config)
+            except Exception as exc:
+                go.props(remove='loading')
+                ui.notify(str(exc) or f'초안을 만들지 못했습니다: {type(exc).__name__}')
+                return
+            finally:
+                busy['now'] = False
+            if not store(directory).set_reply_draft(view['id'], subject, text):
+                go.props(remove='loading')
+                ui.notify('분석이 끝난 뒤에 초안을 만들 수 있습니다.')
+                return
+            # The next mail is usually answered in the same voice as this one.
+            app.storage.user['draft'] = dict(picks)
+            bump()      # 검토 전 초안 is a 대시보드 card, and this is what moves it
+            ui.notify('새 초안으로 바꿨습니다. 고쳐 쓰면 그대로 저장됩니다.'
+                      if view['draft'] else '초안을 만들었습니다. 고쳐 쓰면 그대로 저장됩니다.')
+            after()     # refresh last: it deletes the button this is running in
+
+        with ui.element('div').classes('ma-maker'):
+            with ui.element('div').classes('ma-maker__top'):
+                ui.icon('auto_awesome').style(f'color:{BRAND};font-size:16px')
+                ui.label('AI로 초안 만들기').classes('ma-maker__title')
+                ui.label('말투와 방향을 고르세요.').classes('ma-meta__item')
+                ui.space()
+                opener = ui.button(on_click=fold).props('flat dense round size=sm') \
+                    .style(f'color:{MUTED}').tooltip('펼치기·접기')
+                with opener:
+                    mark = ui.icon('expand_more').classes('ma-fold__mark' + live)
+            shut = ui.element('div').classes('ma-fold' + live)
+            with shut, ui.element('div'):
+                for key, label, options in (('tone', '말투', DRAFT_TONES),
+                                            ('way', '방향', DRAFT_WAYS)):
+                    with ui.element('div').classes('ma-maker__row'):
+                        ui.label(label).classes('ma-maker__label')
+                        ui.toggle({name: name for name in options}, value=picks[key],
+                                  on_change=lambda event, which=key:
+                                  picks.__setitem__(which, event.value)) \
+                            .props('no-caps dense unelevated toggle-color=primary') \
+                            .classes('ma-seg')
+                with ui.element('div').classes('ma-maker__row'):
+                    ui.label(DRAFT_NOTE).classes('ma-meta__item')
+                    ui.space()
+                    # The label is the warning: there is no other place in this app
+                    # where text a person typed is replaced, so the button has to say
+                    # so before it is pressed rather than after.
+                    go = ui.button('초안 새로 만들기' if view['draft'] else '초안 만들기',
+                                   icon='auto_awesome', on_click=make) \
+                        .props('unelevated dense no-caps')
+                    if view['draft']:
+                        go.tooltip('지금 쓰인 초안을 새로 만든 초안으로 바꿉니다.')
+
     # 사이드바 ---------------------------------------------------------
+
+    # One meter for the process, not one per page: it holds the reading every screen
+    # draws, and its own gate is what keeps ten open tabs to one read between them.
+    # `services` decides whether it can ask at all, so off Windows — or with no Codex
+    # on PATH — the chip is simply absent rather than reading 0%.
+    meter = UsageMeter((services or {}).get('codex_usage'))
 
     chrome_cache = {'counts': {}, 'revision': None, 'at': 0.0}
 
@@ -3138,7 +3468,10 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                         list(opened.todos(account)) if account else [])
         return {'counts': chrome_cache['counts'],
                 'state': hub.state() if hub is not None else None,
-                'offer': updater.offer if updater is not None else None}
+                'offer': updater.offer if updater is not None else None,
+                # Already read and shaped: the chip repaints from the meter's last
+                # answer, and the asking is watch_usage()'s own slow beat.
+                'usage': meter.view()}
 
     async def watch_update():
         """The shell's slow beat. None when there is nothing new, which is most beats.
@@ -3152,9 +3485,20 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             return None
         return await nicerun.io_bound(updater.watch)
 
+    async def watch_usage():
+        """The 사용량 beat. Blocking, so it goes through io_bound like every other call.
+
+        `Meter.watch()` has its own gate and its own lock, so several open pages beating
+        together cost one read between them — the same arrangement that keeps the update
+        check from asking GitHub once per page.
+        """
+        return await nicerun.io_bound(meter.watch)
+
     def page_shell(current):
         """The shell every page opens with, wired to this build's hub and updater."""
-        return shell(current, token, chrome, watch_update if updater is not None else None)
+        return shell(current, token, chrome,
+                     watch_update if updater is not None else None,
+                     watch_usage if meter.read is not None else None)
 
     async def install():
         """Stop collecting, then bring the server down so main() can run Setup.
@@ -3309,6 +3653,63 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             ui.timer(0.4, lambda: block.refresh() if updater.state == WORKING else None)
         return block
 
+    def usage_panel():
+        """The Codex 사용량 card on 실행: the header chip, spelled out.
+
+        The chip in the band is one number and a tooltip; this is where the two windows,
+        the reset clock and the plan are written down, because a tooltip is not something
+        a reader finds when they are looking for why analysis stopped. 지금 확인 says the
+        in-between things with set_text() on a label outside the refreshable, exactly as
+        업데이트's own 지금 확인 learned to.
+        """
+        def say(text):
+            note.set_text(text)
+            note.set_visibility(bool(text))
+
+        async def again():
+            if meter.read is None:
+                ui.notify('이 환경에서는 Codex 사용량을 확인할 수 없습니다.')
+                return
+            say('확인하는 중입니다…')
+            # look(), not watch(): a button press is the one read that must not be
+            # answered out of the cache it is pressed to get past.
+            await nicerun.io_bound(meter.look)
+            say('')                  # whatever happened is in the card's own lines now
+            ui.notify(meter.message or '사용량을 다시 읽었습니다.')
+            block.refresh()          # last: it deletes the button this is running in
+
+        @ui.refreshable
+        def block():
+            view = meter.view()
+            if meter.read is None:
+                empty('이 환경에서는 Codex 사용량을 확인할 수 없습니다.')
+                return
+            if not view['known']:
+                empty('아직 사용량을 읽지 못했습니다. 아래 버튼으로 확인하세요.')
+            else:
+                tone = USAGE_TONES.get(view['level'], MUTED)
+                with ui.element('div').classes('ma-row').style('border:none;padding:0'):
+                    ui.label(view['text']).style(f'color:{tone};font-size:15px;'
+                                                 'font-weight:700;letter-spacing:-.01em')
+                # color=None, or nicegui adds Quasar's own text-primary class and the
+                # bar is brand blue however urgent the number in front of it is.
+                ui.linear_progress(view['percent'] / 100, show_value=False, color=None) \
+                    .classes('ma-progress ma-progress--inline') \
+                    .props('size=6px rounded').style(f'color:{tone}')
+                for line in view['lines']:
+                    ui.label(line).classes('ma-meta__item').style('margin:2px 0 0 2px')
+            with ui.element('div').classes('ma-row').style('border:none;padding:10px 0 0'):
+                ui.label('분석·상담·브리핑이 모두 이 한도를 함께 씁니다.') \
+                    .classes('ma-meta__item')
+                ui.space()
+                ui.button('지금 확인', icon='refresh', on_click=again) \
+                    .props('flat dense no-caps text-color=secondary')
+
+        block()
+        note = ui.label('').classes('ma-meta__item').style('margin-top:2px')
+        note.set_visibility(False)
+        return block
+
     # 대시보드 ---------------------------------------------------------
 
     @ui.page('/')
@@ -3318,6 +3719,9 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             return
 
         window = {'days': DUE_DAYS}
+        # 수집 기록 is shut until somebody opens it, and stays open across the beat that
+        # rebuilds the card — which is the only reason this is not a local of run_strip.
+        log_open = {'open': False}
         latest = {}
 
         def read():
@@ -3384,7 +3788,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
         @ui.refreshable
         def run_block():
             if hub is not None:
-                run_strip(run_summary(hub, directory, config), token)
+                run_strip(run_summary(hub, directory, config), token, log_open)
 
         @ui.refreshable
         def summary_row():
@@ -3535,6 +3939,10 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
         wanted = {'ids': []}        # what the 삭제 confirmation is standing over
         touched = {'now': False}    # did the open mail change anything the list shows
         fresh = {'id': None}        # the memo 메모 붙이기 just made, to open with the caret
+        # 원문 or 한글 번역, and whether Codex is being waited on. Outside panel(),
+        # which is rebuilt by 처리 완료, 다시 분석 and every memo written on the mail.
+        reading = {'tab': '', 'busy': False}
+        drafting = {'open': False}  # has the reader opened 초안 만들기 for this mail
         # The table is rebuilt by the second now, and a rebuild is what clears q-table's
         # checkboxes. `live` carries the ticked ids and the last painted signature
         # across that rebuild, so a poll that finds nothing new does nothing at all.
@@ -3552,6 +3960,10 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             changed is painted when it closes.
             """
             remember(selected=ident)
+            # A different mail is a different reading: the tab is chosen again below
+            # from what that mail is, not carried over from the one just closed.
+            reading['tab'] = ''
+            drafting['open'] = False
             panel.refresh()
             detail.open()
 
@@ -3779,6 +4191,11 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     empty('메일을 찾을 수 없습니다. 목록에서 다시 선택하세요.')
                 return
             view = detail_view(row)
+            if not reading['tab']:
+                # 번역이 있고 원문이 한국어가 아니면 번역부터: that mail was opened to
+                # be read, and the original is one press away either way.
+                reading['tab'] = ('korean' if view['translated'] and view['foreign']
+                                  else 'origin')
 
             def copy():
                 # Not awaited: nicegui 3's clipboard.write() returns None, and
@@ -3807,6 +4224,63 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 bump()
                 panel.refresh()
                 ui.notify('할 일 판에 다시 올렸습니다.')
+
+            def showing():
+                """The text the panel is showing, which is what 복사 copies."""
+                return (view['translated'] if reading['tab'] == 'korean'
+                        else view['body'])
+
+            def take():
+                # Not awaited: nicegui 3's clipboard.write() returns None.
+                ui.clipboard.write(showing())
+                ui.notify(('번역을 클립보드에 복사했습니다.' if reading['tab'] == 'korean'
+                           else '원문을 클립보드에 복사했습니다.'))
+
+            def made():
+                """A draft has just been written into the analysis. Keep the pickers
+                open: the second press is usually another voice for the same mail."""
+                drafting['open'] = True
+                touched['now'] = True       # 상태 카드와 초안 수가 함께 움직인다
+                panel.refresh()
+
+            def turn(tab):
+                """Which of the two readings is on screen. Visibility, never a refresh:
+                the other one is already built and a rebuild would cost the scroll."""
+                reading['tab'] = tab if view['translated'] else 'origin'
+                origin.set_visibility(reading['tab'] != 'korean')
+                korean.set_visibility(reading['tab'] == 'korean')
+                # set_text on an element that outlives the switch, never a refresh.
+                told.set_text('번역 복사' if reading['tab'] == 'korean' else '원문 복사')
+
+            async def render():
+                """Ask Codex for the Korean once, and keep it with the mail.
+
+                On the same one slot as analysis, so this may wait minutes behind a
+                mail being analysed — which is what the notice says out loud rather
+                than leaving a button spinning for no stated reason.
+                """
+                if reading['busy']:
+                    return
+                reading['busy'] = True
+                ask.props('loading')
+                ui.notify('번역을 요청했습니다. 분석이 돌고 있으면 그 뒤에 처리됩니다.')
+                try:
+                    language, text = await nicerun.io_bound(
+                        helpers.translate, view['body'], view['subject'], config)
+                except Exception as exc:
+                    ask.props(remove='loading')
+                    ui.notify(str(exc) or f'번역하지 못했습니다: {type(exc).__name__}')
+                    return
+                finally:
+                    reading['busy'] = False
+                store(directory).set_translation(view['id'], language, text)
+                reading['tab'] = 'korean'
+                # Last, as ever: refresh() deletes the button this handler is running
+                # in, and anything under ui. after it has no client left to resolve.
+                # 영어 원문을, not 영어을(를): a particle chosen by hand is one that
+                # is wrong half the time, and the noun after it takes the same one.
+                ui.notify(f'{language} 원문을 한국어로 옮겼습니다.'.lstrip())
+                panel.refresh()
 
             def attach():
                 """A blank memo on this mail, with the caret already in it.
@@ -3872,7 +4346,9 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                         ui.label(view['error']).style('font-size:12px')
                 with grid(minimum=320, gap=22).style('margin-top:16px;align-items:start'):
                     with ui.element('div'):
-                        section('분석 결과', top=False)
+                        with ui.element('div').classes('ma-head') \
+                                .style(f'margin-bottom:8px;min-height:{HEAD_ROW}px'):
+                            ui.label('분석 결과').classes('ma-head__title')
                         if not view['analysed']:
                             empty('아직 분석되지 않았습니다.')
                         for part in analysis_blocks(view):
@@ -3937,12 +4413,54 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                                             ui.icon('attach_file').style('font-size:13px')
                                             ui.label(name)
                     with ui.element('div'):
-                        section('원문', top=False)
+                        # Same row height as 분석 결과 beside it: this one holds a
+                        # button and that one does not, and a heading 3px lower than
+                        # its neighbour is the sort of thing only a screenshot shows.
+                        with ui.element('div').classes('ma-head') \
+                                .style(f'margin-bottom:8px;min-height:{HEAD_ROW}px'):
+                            ui.label('원문').classes('ma-head__title')
+                            ui.space()
+                            if view['translated']:
+                                # Two readings of one mail, so a toggle and not a
+                                # second panel below: the numbers are in the original
+                                # and nobody should have to scroll past one to reach it.
+                                ui.toggle({'origin': '원문', 'korean': '한글 번역'},
+                                          value=reading['tab'],
+                                          on_change=lambda event: turn(event.value)) \
+                                    .props('no-caps dense unelevated '
+                                           'toggle-color=primary').classes('ma-seg')
+                                ask = ui.button(icon='autorenew', on_click=render) \
+                                    .props('flat dense round size=sm') \
+                                    .style(f'color:{MUTED}').tooltip('다시 번역')
+                            else:
+                                # Offered for every mail and pressed for a few: the
+                                # tone is what says which this one looks like, because
+                                # 한국어가 아닙니다 is a guess and this is not.
+                                ask = ui.button('한글 번역', icon='translate',
+                                                on_click=render) \
+                                    .props(('outline' if view['foreign'] else 'flat')
+                                           + ' dense no-caps').tooltip(TRANSLATE_TIP)
+                            # One button for both readings: it copies whichever is on
+                            # screen, which is the only thing 복사 can mean here.
+                            with ui.button(icon='content_copy', on_click=take) \
+                                    .props('flat dense round size=sm') \
+                                    .style(f'color:{MUTED}'):
+                                told = ui.tooltip('')
                         # display:block on purpose: a bare div inherits a centring flex
                         # layout here, which parks a short body in the middle of the box.
-                        with ui.element('div').classes('ma-sunken ma-scroll') \
-                                .style('display:block;max-height:340px;width:100%'):
+                        origin = ui.element('div').classes('ma-sunken ma-scroll') \
+                            .style('display:block;max-height:340px;width:100%')
+                        with origin:
                             body_panel(view['body'])
+                        korean = ui.element('div').classes('ma-sunken ma-scroll') \
+                            .style('display:block;max-height:340px;width:100%')
+                        if view['translated']:
+                            with korean:
+                                ui.label(translated_note(view['language'])) \
+                                    .classes('ma-meta__item') \
+                                    .style('display:block;margin-bottom:8px')
+                                body_panel(view['translated'])
+                        turn(reading['tab'])
                         # The memos written about this mail. They live in the same
                         # table as the 메모 화면's and are edited the same way here —
                         # this is what a memo can do that a 할 일 card cannot, so it
@@ -3970,6 +4488,11 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     ui.space()
                     ui.button('초안 복사', icon='content_copy', on_click=copy) \
                         .props('flat dense no-caps')
+                # Open when there is nothing in the box, and kept open after a
+                # generation: the first draft is the one most often asked for again
+                # in another voice, and shutting it would hide the pickers to do it.
+                if view['analysed']:
+                    draft_maker(view, drafting['open'] or not view['draft'], made)
                 draft = ui.textarea(value=view['draft']).classes('w-full')
                 draft.props('outlined autogrow debounce=800')
 
@@ -4268,6 +4791,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
         account = account_of(config)
         chosen = {'id': request.query_params.get('id')}
         live = {'ids': ()}
+        made = {'open': False}      # 초안 만들기 opened for the mail being looked at
 
         def queue_ids():
             rows = list(store(directory).unedited_drafts(account)) if account else []
@@ -4280,13 +4804,15 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             live['ids'] = tuple(item['id'] for item in data['queue'])
             if not data['queue']:
                 with card():
-                    empty('검토할 초안이 없습니다. 답변이 필요한 메일이 분석되면 여기에 모입니다.')
+                    empty('답장을 기다리는 메일이 없습니다. 답변이 필요한 메일이 분석되면 '
+                          '여기에 모입니다.')
                 return
             view = data['current']
 
             def step(delta):
                 ids = [item['id'] for item in data['queue']]
                 chosen['id'] = ids[(data['index'] + delta) % len(ids)]
+                made['open'] = False        # another mail, another draft
                 queue.refresh()
 
             def copy():
@@ -4298,6 +4824,13 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 store(directory).set_handled(view['id'], HANDLED)
                 bump()
                 chosen['id'] = None
+                made['open'] = False
+                queue.refresh()
+
+            def remade():
+                """A draft was just written for this mail. The queue keeps it — only a
+                draft a *person* has touched leaves — so this is a repaint, not a step."""
+                made['open'] = True
                 queue.refresh()
 
             with card():
@@ -4322,8 +4855,11 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     ui.label(view['requests']).style(f'color:{INK};font-size:13px;'
                                                      'white-space:pre-wrap;line-height:1.65')
                 with ui.element('div').classes('ma-head').style('margin:16px 0 6px'):
-                    ui.label('생성된 초안').classes('ma-head__title')
+                    ui.label('답변 초안').classes('ma-head__title')
                     ui.label('입력을 멈추면 자동 저장됩니다.').classes('ma-meta__item')
+                # The queue is 답장이 필요한 메일 now rather than 이미 쓰인 초안, so the
+                # maker belongs here as much as it does in the mail itself.
+                draft_maker(view, made['open'] or not view['draft'], remade)
                 draft = ui.textarea(value=view['draft']).classes('w-full')
                 draft.props('outlined autogrow debounce=800')
 
@@ -4348,8 +4884,9 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                         .classes('ma-meta__item').style('text-decoration:none')
 
         with page_shell('/drafts'):
-            ui.label('답변이 필요한데 아직 손대지 않은 초안입니다. 입력을 멈추면 자동 저장되고, '
-                     '저장하면 검토 완료로 간주해 목록에서 빠집니다.').classes('ma-lede')
+            ui.label('답장이 필요한데 아직 손대지 않은 메일입니다. 말투와 방향을 골라 초안을 '
+                     '만들고, 고쳐 쓰면 자동 저장되며 저장한 메일은 목록에서 빠집니다.') \
+                .classes('ma-lede')
             with ui.element('div').classes('ma-alert ma-alert--warn') \
                     .style('margin-bottom:12px') as notice:
                 ui.icon('mark_email_unread').style('font-size:16px')
@@ -5073,7 +5610,9 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                               on_click=lambda: reveal(directory, '데이터 폴더')) \
                         .props('flat dense no-caps text-color=secondary')
             body()
-            with ui.element('div').style('margin-top:14px'):
+            with grid(minimum=300).style('margin-top:14px'):
+                with card('Codex 사용량', 'speed'):
+                    usage_panel()
                 with card('업데이트', 'system_update_alt'):
                     update_panel()
             ui.timer(LIVE_SECONDS, body.refresh)
@@ -5095,7 +5634,6 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
         # radio button naming a retired one fails every analysis.
         models = read_models()
         rows = model_rows(models, values['model'])
-        picked = {'choice': values['model'], 'typed': ''}
 
         def validate():
             errors = field_errors(values)
@@ -5202,14 +5740,9 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             report_block.refresh()
 
         def choose(value):
-            picked['choice'] = value
-            values['model'] = model_value(value, picked['typed'])
+            """The dropdown is the whole answer now: whatever it holds is a Codex slug."""
+            values['model'] = str(value or '')
             model_note.refresh()
-            validate()
-
-        def typed(text):
-            picked['typed'] = text or ''
-            values['model'] = model_value(picked['choice'], picked['typed'])
             validate()
 
         with page_shell('/settings'):
@@ -5237,22 +5770,38 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                         with ui.element('div').classes('ma-alert').style('margin-bottom:10px'):
                             ui.icon('info_outline').style('font-size:16px')
                             ui.label(NO_MODELS).style('font-size:12px')
-                    ui.radio({value: label for value, label, _ in rows},
-                             value=picked['choice'],
-                             on_change=lambda event: choose(event.value)) \
-                        .props('dense').classes('ma-radio')
+                    ui.select({row['value']: model_label(row) for row in rows},
+                              value=values['model'],
+                              on_change=lambda event: choose(event.value)) \
+                        .props('dense outlined options-dense') \
+                        .classes('w-full ma-select')
 
                     @ui.refreshable
                     def model_note():
-                        hint = next((text for value, _, text in rows
-                                     if value == picked['choice']), '')
-                        if hint:
-                            ui.label(hint).classes('ma-meta__item').style('margin:0 0 2px 2px')
-                        if picked['choice'] == CUSTOM:
-                            box = ui.input(label='모델 이름', value=picked['typed'],
-                                           placeholder='예: gpt-5.6-luna').classes('w-full')
-                            box.props('dense outlined stack-label').style('margin-top:6px')
-                            box.on_value_change(lambda event: typed(event.value))
+                        """The row the dropdown is holding, written out under it.
+
+                        The chips are the same two words the closed dropdown shows, and
+                        only 사용량 carries a colour: that is the half somebody is
+                        choosing for, and accenting both would accent neither — the same
+                        arithmetic 분석 결과 spends its accent by.
+                        """
+                        row = next((item for item in rows
+                                    if item['value'] == values['model']), rows[0])
+                        cost = COST_TONES.get(row['cost'], SUBTLE)
+                        with ui.element('div').classes('ma-sunken') \
+                                .style('margin-top:10px;padding:10px 12px'):
+                            with ui.element('div').style('display:flex;gap:6px;'
+                                                         'align-items:center;flex-wrap:wrap'):
+                                ui.label(row['name']).style(f'color:{INK};font-size:13px;'
+                                                            'font-weight:700')
+                                tag(row['power'], SUBTLE)
+                                tag(row['cost'], cost, soft_of(cost))
+                            if row['hint']:
+                                ui.label(row['hint']).classes('ma-meta__item') \
+                                    .style('margin:6px 0 0;overflow-wrap:anywhere')
+                        if row['power'] or row['cost']:
+                            ui.label(GRADE_NOTE).classes('ma-meta__item') \
+                                .style('margin:6px 0 0 2px')
 
                     model_note()
                     notes['model'] = ui.label('').classes('ma-meta__item') \

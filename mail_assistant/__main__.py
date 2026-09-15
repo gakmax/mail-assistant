@@ -75,12 +75,12 @@ def read_config(config_path, workbook):
 def helper_services():
     """The calls the screens make into Windows. Kept next to webmain's copy on purpose:
     each entry point says out loud what it hands the screens."""
-    from .services import (check_connection, codex_command, codex_environment, delete_password,
-                           login_state, read_password, save_password)
-    return {'login_state': login_state, 'check_connection': check_connection,
+    from .services import (check_connection, codex_command, codex_environment, codex_usage,
+                           delete_password, draft, login_state, read_password, save_password)
+    return {'draft': draft, 'login_state': login_state, 'check_connection': check_connection,
             'read_password': read_password, 'save_password': save_password,
             'delete_password': delete_password, 'codex_command': codex_command,
-            'codex_environment': codex_environment}
+            'codex_environment': codex_environment, 'codex_usage': codex_usage}
 
 
 def open_native(directory, config, config_path, hub, updater, autostart, complaint):

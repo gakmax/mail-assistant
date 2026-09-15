@@ -12,17 +12,26 @@ from pathlib import Path
 
 from mail_assistant.core import (ANALYZING, EVENT_MARK, FAILED, HANDLED, PROGRESS, SORTS,
                                  Store, account_key, event_key, event_row_id, is_event_key,
-                                 text_of_html)
+                                 korean_ratio, looks_foreign, text_of_html)
 from mail_assistant.dashboard import PRIORITIES
+from mail_assistant.settings import GRADES
+from mail_assistant.style import URGENT, css_color
+from mail_assistant.usage import (CALM as USAGE_CALM, FULL as USAGE_FULL,
+                                  WARN as USAGE_WARN, snapshot as usage_snapshot,
+                                  view as usage_view)
 from mail_assistant.calendar_sheet import MARKERS
 from mail_assistant.hub import Hub
 from mail_assistant.overview import (BRIEF_DRAFTS, BRIEF_EVENTS, BRIEF_HOUR, BRIEF_OPEN,
                                      BRIEF_TEXT, DUE_DAYS, briefing_due, briefing_input,
                                      due_window, failures, oldest_open, overview)
-from mail_assistant.webui import (CARD_TONES, DEFAULT_LIST, FONT_FILE, STATE_TONES, STATUS,
+from mail_assistant.webui import (CARD_TONES, COST_TONES, DEFAULT_LIST, FONT_FILE, MUTED,
+                                  STATE_TONES, STATUS, USAGE_TONES, usage_chip,
                                   THEME, TREND_LABELS,
                                   NAV_BADGE_MAX, NAV_GROUPS, PAGES, RAIL_BOOT, RAIL_KEY,
-                                  RAIL_TOGGLE, SIDE_BREAK, SIDE_RAIL,
+                                  RAIL_TOGGLE, SIDE_BREAK, SIDE_EASE, SIDE_GROUP, SIDE_RAIL,
+                                  CHAT_CHROME, translated_note, row_value,
+                                  DRAFT_NOTE, DRAFT_TONES, DRAFT_WAYS,
+                                  draft_input, draft_picks,
                                   SIDE_WIDE, badge_text, bar_status, nav_counts, nav_rows,
                                   rail_css,
                                   update_pill,
@@ -61,12 +70,12 @@ CONFIG = {'host': 'pop3s.hiworks.com', 'port': 995, 'email': 'me@corp.example'}
 TODAY = datetime.date(2026, 9, 11)
 
 
-def mail(subject='제목', sender='sender@example.com'):
+def mail(subject='제목', sender='sender@example.com', body='본문'):
     message = EmailMessage()
     message['From'] = sender
     message['Subject'] = subject
     message['Date'] = 'Fri, 11 Sep 2026 10:00:00 +0900'
-    message.set_content('본문')
+    message.set_content(body)
     return message.as_bytes()
 
 
@@ -1772,14 +1781,42 @@ class RailTests(unittest.TestCase):
         self.assertIn(rail_css('html.ma-rail'), THEME)
         self.assertIn(rail_css('html:not(.ma-wide)'), THEME)
 
-    def test_the_rail_hides_the_label_and_keeps_the_count(self):
-        hidden = ' '.join(selector for selector, rule in self.rules().items()
-                          if 'display:none' in rule)
-        self.assertIn('.ma-side__label', hidden)
-        self.assertNotIn('.ma-badge', hidden)
+    def test_the_rail_collapses_the_label_rather_than_deleting_it(self):
+        """display:none cannot animate, and the fold has to read as one movement."""
+        rules = self.rules()
+        label = rules['html.ma-rail .ma-side__words, html.ma-rail .ma-side__label']
+        self.assertIn('max-width:0', label)
+        for selector, rule in rules.items():
+            self.assertNotIn('display:none', rule, selector)
         # A count that became a dot would be the notification the badge is there for,
         # with the number the reader asked for taken back out.
-        self.assertNotIn('font-size:0', self.rules()['html.ma-rail .ma-badge'])
+        self.assertNotIn('font-size:0', rules['html.ma-rail .ma-badge'])
+
+    def test_the_rail_is_reached_by_moving_and_never_by_jumping(self):
+        """Every property the rail changes is one the wide sidebar can animate to.
+
+        The two that were not are the ones this is here for: a label that was
+        display:none blinked out on the first frame, and a badge that was in the row's
+        flow one moment and on the icon's shoulder the next teleported 150px left
+        while the sidebar it belongs to was still sliding shut.
+        """
+        rules = self.rules()
+        self.assertIn(f'height:{SIDE_GROUP}px', THEME)         # …and 1px in the rail
+        self.assertIn('height:1px', rules['html.ma-rail .ma-side__group'])
+        self.assertNotIn('position:', rules['html.ma-rail .ma-badge'])
+        for moved in ('.ma-side {', '.ma-side__item {', '.ma-side__label {',
+                      '.ma-side__group {', '.ma-badge {'):
+            declarations = THEME.split(moved)[1].split('}')[0]
+            self.assertIn(SIDE_EASE, declarations, moved)
+
+    def test_the_rail_centres_its_icons_with_a_length(self):
+        """justify-content cannot be animated to; padding can, so the icon travels."""
+        rules = self.rules()
+        for selector in ('html.ma-rail .ma-side__item', 'html.ma-rail .ma-side__top'):
+            self.assertNotIn('justify-content', rules[selector], selector)
+        # The rail is 8px padded either side, so this is the icon's own half-gap.
+        self.assertIn(f'padding:8px 0 8px {(SIDE_RAIL - 16 - 18) // 2}px',
+                      rules['html.ma-rail .ma-side__item'])
 
     def test_the_name_survives_the_label_as_the_rows_own_tooltip(self):
         self.assertIn('content:attr(data-name)', rail_css('html.ma-rail'))
@@ -1927,6 +1964,45 @@ class UpdatePillTests(unittest.TestCase):
                          '새 버전 0.5.1')
 
 
+class UsageChipTests(unittest.TestCase):
+    """The header's 사용량 chip. usage.py decides the words; this decides the paint."""
+
+    def test_a_quota_nobody_has_read_draws_no_chip_at_all(self):
+        for view in (None, {}, usage_view({})):
+            self.assertFalse(usage_chip(view)['shown'])
+
+    def test_a_reading_is_shown_with_both_windows_behind_it(self):
+        chip = usage_chip(usage_view(usage_snapshot(
+            {'rateLimits': {'primary': {'usedPercent': 32, 'windowDurationMins': 300},
+                            'secondary': {'usedPercent': 20, 'windowDurationMins': 10080}}})))
+        self.assertTrue(chip['shown'])
+        self.assertEqual(chip['text'], 'Codex 사용량 32%')
+        self.assertIn('주간 한도 20% 사용', chip['tip'])
+
+    def test_a_calm_quota_is_grey_and_a_spent_one_is_the_urgent_hue(self):
+        calm = usage_chip(usage_view(usage_snapshot(
+            {'rateLimits': {'primary': {'usedPercent': 10}}})))
+        self.assertEqual(calm['tone'], MUTED)
+        spent = usage_chip(usage_view(usage_snapshot(
+            {'rateLimits': {'primary': {'usedPercent': 100},
+                            'rateLimitReachedType': 'rate_limit_reached'}})))
+        self.assertEqual(spent['tone'], css_color(URGENT))
+        self.assertEqual(spent['text'], 'Codex 한도 도달')
+
+    def test_every_level_the_meter_can_report_has_a_colour(self):
+        self.assertEqual(set(USAGE_TONES), {USAGE_CALM, USAGE_WARN, USAGE_FULL})
+
+
+class ModelPickerTests(unittest.TestCase):
+    """The 설정 dropdown's own paint, held against the words settings.py hands it."""
+
+    def test_the_usage_half_of_every_grade_carries_a_colour(self):
+        self.assertEqual(set(COST_TONES), {cost for _, cost in GRADES})
+
+    def test_the_dropdown_has_a_rule_of_its_own_rather_than_inline_sizes(self):
+        self.assertIn('.ma-select', THEME)
+
+
 
 class AnalysisBlockTests(unittest.TestCase):
     """분석 결과's parts: reading order, nothing empty, accent only where it means something."""
@@ -1954,6 +2030,146 @@ class AnalysisBlockTests(unittest.TestCase):
     def test_every_accent_the_parts_name_has_a_colour(self):
         for _, _, _, accent in ANALYSIS_PARTS:
             self.assertIn(accent, PART_TONES)
+
+
+class TranslationTests(unittest.TestCase):
+    """해외영업 메일: which reading the panel opens on, and what it says about itself."""
+
+    def row(self, folder, subject, body, translated=('', '')):
+        store = Store(Path(folder) / 'mail.db')
+        account = account_key(CONFIG)
+        ident = store.add(account, 'uid-1', mail(subject, 'john@globaltrade.example', body))
+        store.analyzed(ident, {'sender': 'john@globaltrade.example', 'subject': subject,
+                               'body': body, 'attachments': []}, result())
+        if any(translated):
+            store.set_translation(ident, *translated)
+        view = detail_view(store.detail(ident))
+        store.db.close()
+        return view
+
+    def test_an_english_mail_is_the_one_the_button_is_offered_for(self):
+        with tempfile.TemporaryDirectory() as folder:
+            view = self.row(folder, 'Quotation request',
+                            'Dear Sir, please quote 200 units of SKU-4410 by 30 October.')
+            self.assertTrue(view['foreign'])
+            self.assertEqual((view['translated'], view['language']), ('', ''))
+
+    def test_a_korean_mail_with_an_english_signature_is_still_korean(self):
+        with tempfile.TemporaryDirectory() as folder:
+            view = self.row(folder, '견적 요청',
+                            '9월 20일까지 견적서를 보내주시기 바랍니다. 확인 부탁드립니다.\n\n'
+                            'Best regards,\nJohn Miller\nGlobalTrade B.V.')
+            self.assertFalse(view['foreign'])
+
+    def test_a_stored_translation_comes_back_with_the_language_it_came_from(self):
+        with tempfile.TemporaryDirectory() as folder:
+            view = self.row(folder, 'Quotation request', 'Dear Sir, please quote.',
+                            translated=('영어', '견적을 요청드립니다.'))
+            self.assertEqual(view['translated'], '견적을 요청드립니다.')
+            self.assertEqual(view['language'], '영어')
+
+    def test_the_note_names_the_language_and_what_not_to_trust_it_for(self):
+        self.assertIn('영어 원문을', translated_note('영어'))
+        self.assertIn('금액', translated_note('영어'))
+        # Codex may not have named one, and a sentence beginning ' 원문을' is worse
+        # than one that simply says 원문을.
+        self.assertTrue(translated_note('').startswith('원문을'))
+
+    def test_a_row_written_before_the_column_existed_is_not_a_row_that_lost_it(self):
+        self.assertEqual(row_value({'id': 'x'}, 'translated'), '')
+        self.assertEqual(row_value({'translated': None}, 'translated'), '')
+        self.assertEqual(row_value({'translated': '번역'}, 'translated'), '번역')
+
+
+class DraftMakerTests(unittest.TestCase):
+    """초안 만들기: 어떤 말투로 열리고, 무엇을 Codex에 보내는가."""
+
+    def test_it_opens_on_the_free_choices_when_nothing_was_chosen_before(self):
+        self.assertEqual(draft_picks(), {'tone': DRAFT_TONES[0], 'way': DRAFT_WAYS[0]})
+        self.assertEqual(draft_picks({}), draft_picks(None))
+
+    def test_the_last_choice_is_what_the_next_mail_opens_on(self):
+        self.assertEqual(draft_picks({'tone': '간결하게', 'way': '거절'}),
+                         {'tone': '간결하게', 'way': '거절'})
+
+    def test_a_choice_this_build_no_longer_offers_falls_back(self):
+        """A toggle whose value is not one of its options draws nothing selected."""
+        self.assertEqual(draft_picks({'tone': '단호하게', 'way': '호통'}),
+                         {'tone': DRAFT_TONES[0], 'way': DRAFT_WAYS[0]})
+
+    def test_every_option_the_screen_offers_is_the_services_own_list(self):
+        """The toggle and the prompt read one list, as core.STATES and STATE_SQL do."""
+        from mail_assistant import services
+        self.assertEqual(DRAFT_TONES, services.DRAFT_TONES)
+        self.assertEqual(DRAFT_WAYS, services.DRAFT_WAYS)
+
+    def test_the_mail_goes_as_it_was_written_and_never_as_its_translation(self):
+        """The reply is meant to be in the sender's language; a translation is one
+        more thing between the two."""
+        view = {'subject': 'Quotation request', 'sender': 'john@globaltrade.example',
+                'received': '2026-09-15', 'body': 'Please quote 200 units.',
+                'translated': '200개 견적을 요청드립니다.', 'summary': '견적 요청',
+                'requests': '단가', 'action': '회신'}
+        payload = draft_input(view)
+        self.assertEqual(payload['body'], 'Please quote 200 units.')
+        self.assertNotIn('translated', payload)
+
+    def test_the_two_things_a_reader_would_otherwise_press_to_find_out(self):
+        self.assertIn('같은 언어', DRAFT_NOTE)
+        self.assertIn('서명', DRAFT_NOTE)
+
+    def test_the_maker_carries_its_own_fold(self):
+        """The control sits on the block it opens, as 접기 sits on the sidebar."""
+        self.assertIn('.ma-maker {', THEME)
+        self.assertIn('.ma-maker__row {', THEME)
+
+
+class KoreanRatioTests(unittest.TestCase):
+    """Which mail reads as somebody else's language, counted from its letters."""
+
+    def test_a_korean_mail_is_korean(self):
+        self.assertEqual(korean_ratio('견적서를 보내주세요'), 1.0)
+        self.assertFalse(looks_foreign('견적서를 9월 20일까지 보내주세요.'))
+
+    def test_an_english_mail_is_not(self):
+        self.assertEqual(korean_ratio('Please send the quotation.'), 0.0)
+        self.assertTrue(looks_foreign('Please send the quotation.'))
+
+    def test_figures_and_part_numbers_do_not_make_a_korean_mail_foreign(self):
+        """Letters only: a 수주 mail is mostly digits and digits belong to no language."""
+        self.assertFalse(looks_foreign('수주번호 A26090135 공급가액 90,000 납기 2026-09-15'))
+
+    def test_a_mail_with_no_letters_at_all_is_left_alone(self):
+        self.assertEqual(korean_ratio(''), 1.0)
+        self.assertFalse(looks_foreign(None))
+
+
+class ChatFillTests(unittest.TestCase):
+    """상담 fills the frame it opens in, rather than stopping 200px short of it."""
+
+    def test_the_thread_is_sized_to_the_window_and_not_to_a_number(self):
+        self.assertIn(f'height:calc(100vh - {CHAT_CHROME}px)', THEME)
+
+    def test_the_chrome_it_subtracts_is_the_band_and_the_pages_own_padding(self):
+        """Measured off the frame at webui.WINDOW: 57 + 20 + 56, and nothing else."""
+        self.assertIn('.ma-page { max-width:1240px; margin:0 auto; padding:20px 20px 56px; }',
+                      THEME)
+        self.assertIn('height:56px', THEME)          # .ma-bar__inner, plus its hairline
+        self.assertEqual(CHAT_CHROME, 57 + 20 + 56)
+
+
+class FoldTests(unittest.TestCase):
+    """The 대시보드's 수집 기록, which is shut until somebody asks for it."""
+
+    def test_the_block_opens_by_growing_rather_than_by_appearing(self):
+        rules = THEME.split('.ma-fold {')[1].split('}')[0]
+        self.assertIn('grid-template-rows:0fr', rules)
+        self.assertIn(SIDE_EASE, rules)
+        self.assertIn('.ma-fold.is-open { grid-template-rows:1fr; }', THEME)
+
+    def test_the_clipped_child_is_what_carries_the_overflow(self):
+        """The rows are the fold; a log drawn over what is under it is not folded."""
+        self.assertIn('.ma-fold > * { overflow:hidden; min-height:0; }', THEME)
 
 
 class DetailEventTests(unittest.TestCase):
