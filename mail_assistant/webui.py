@@ -26,8 +26,8 @@ from .hub import line_text
 from .overview import (BRIEF_HOUR, DUE_DAYS, RECENT_DAYS, UPCOMING, overview, past_due,
                        results, review_queue, trend)
 from .services import BODY_LIMIT, DRAFT_TONES, DRAFT_WAYS
-from .settings import (DEFAULTS, FIELDS, GRADE_NOTE, NO_MODELS, field_errors, model_label,
-                       model_rows, normalize, read_models)
+from .settings import (DEFAULTS, FIELDS, GRADE_NOTE, NO_MODELS, RECOMMEND_WHY,
+                       field_errors, model_label, model_rows, normalize, read_models)
 from .style import CALM, DASH_GREEN, LINK, NEUTRAL, SOON, URGENT, css_color
 from .usage import (CALM as USAGE_CALM, FULL as USAGE_FULL, WARN as USAGE_WARN,
                     Meter as UsageMeter)
@@ -2071,6 +2071,16 @@ def row_value(row, key, fallback=''):
 # would be wrong about a Korean mail with a long English thread quoted under it.
 TRANSLATE_TIP = ('본문을 한국어로 옮깁니다. 분석과 같은 Codex 한 자리를 쓰므로 '
                  '분석 중이면 그 뒤에 처리됩니다.')
+
+
+def model_option(row):
+    """'GPT-5.6-Sol · 성능 보통 · 사용량 보통 · 추천' — one line in the open list.
+
+    The mark rides in the text because a q-select option is a string; the closed field
+    shows the same line, which is what a reader wants to see after choosing it.
+    """
+    label = model_label(row)
+    return f'{label} · 추천' if row.get('recommended') else label
 
 
 def clipped_note(total, limit=BODY_LIMIT):
@@ -5793,7 +5803,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                         with ui.element('div').classes('ma-alert').style('margin-bottom:10px'):
                             ui.icon('info_outline').style('font-size:16px')
                             ui.label(NO_MODELS).style('font-size:12px')
-                    ui.select({row['value']: model_label(row) for row in rows},
+                    ui.select({row['value']: model_option(row) for row in rows},
                               value=values['model'],
                               on_change=lambda event: choose(event.value)) \
                         .props('dense outlined options-dense') \
@@ -5819,9 +5829,16 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                                                             'font-weight:700')
                                 tag(row['power'], SUBTLE)
                                 tag(row['cost'], cost, soft_of(cost))
+                                if row.get('recommended'):
+                                    tag('추천', BRAND, BRAND_SOFT)
                             if row['hint']:
                                 ui.label(row['hint']).classes('ma-meta__item') \
                                     .style('margin:6px 0 0;overflow-wrap:anywhere')
+                        # 왜 그것이 추천인지는 고른 줄 아래에 한 번만. 목록 안에서는
+                        # 칩 하나로 충분하고, 여섯 줄에 같은 문장을 여섯 번 쓸 수는 없다.
+                        if row.get('recommended'):
+                            ui.label(RECOMMEND_WHY).classes('ma-meta__item') \
+                                .style('margin:6px 0 0 2px')
                         if row['power'] or row['cost']:
                             ui.label(GRADE_NOTE).classes('ma-meta__item') \
                                 .style('margin:6px 0 0 2px')

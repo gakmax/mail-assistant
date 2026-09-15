@@ -17,7 +17,7 @@ that break silently if you don't know them.
 ## Commands
 
 ```bash
-python -m unittest discover -s tests -v    # from the repo root; 689 tests, all platforms
+python -m unittest discover -s tests -v    # from the repo root; 701 tests, all platforms
 ```
 
 ```powershell
@@ -865,6 +865,30 @@ directory, which a per-user frozen install cannot rely on.
 resolves Codex with `shutil.which()` from the user's PATH, and npm's global
 prefix lives in the user profile. An elevated install reports
 "Codex CLI가 없습니다" with no obvious cause.
+
+**Every call names its own `model_reasoning_effort`, because `--ignore-user-config`
+means nobody else will.** The CLI's own `config.toml` is not read, so without the `-c`
+each call inherits whatever the *model* defaults to — and the cache shows those differ
+(astra and sol default `low`, terra and luna `medium`). A reader who picked 성능 높음
+was silently getting shallower reasoning than one who picked 성능 보통, which makes the
+설정 screen's words describe something other than what runs. `EFFORT_THINK` (medium) is
+for the calls that read a raw mail for the first time — `analyze` above all, where a
+misread relative date flows into the calendar and the Excel 일정 sheet — and
+`EFFORT_READ` (low) for work over what `analyze` has already paid for (the briefing) or
+a mechanical transform (번역). Only those two levels: every listed model supports both,
+and anything higher risks the 240-second timeout, which is the retry path and therefore
+a global backoff.
+
+**추천 is a position in Codex's list, never a slug.** `recommended_slug()` takes the
+median of what the cache offers, so it is recomputed whenever Codex changes what it
+lists and cannot go stale — which is the same reason the list itself is read rather
+than shipped. The median and not the middle *grade*: grades fold five models into three
+bands and a week with only two models offered has no middle band at all, while a list
+of one still has a median. It leans to the stronger side on an even split, because the
+worst failure this app has is a wrong deadline and that is what a light model produces.
+기본값 keeps its row and stays what an unset config means — a PC where Codex has never
+run has no list to choose from — but it is no longer implied to be the best: its hint
+now says out loud that the screen cannot tell you what ran.
 
 **`services.codex_json()` is the one `codex exec` this app makes.** Analysis, 상담,
 the briefing and 번역 differ in what they send and in what they say when it fails; the

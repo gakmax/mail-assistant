@@ -51,13 +51,24 @@ def codex_slot(timeout=None):
         CODEX_LOCK.release()
 
 
-def codex_json(prefix, prompt, payload, shape, failure, config=None, timeout=None):
+# 생각의 깊이. `--ignore-user-config` 때문에 CLI 자신의 config.toml은 읽히지 않으므로,
+# 이것을 주지 않으면 매 호출이 *모델마다 다른* 기본값을 물려받는다 — 캐시를 보면 astra와
+# sol은 low, terra와 luna는 medium이다. 그러면 '성능 높음'을 고른 사람이 '성능 보통'보다
+# 얕게 도는 일이 생기고, 설정 화면의 낱말이 실제로 도는 것과 다른 것을 가리키게 된다.
+# low와 medium만 쓰는 이유: 목록에 오르는 모든 모델이 둘을 지원하고, 그 위는 240초
+# 타임아웃에 걸릴 수 있다 — 타임아웃은 재시도 경로이고 그것은 전체 백오프다.
+EFFORT_READ = 'low'         # 이미 분석된 것을 다시 쓰거나, 기계적으로 옮기는 일
+EFFORT_THINK = 'medium'     # 원문을 처음 읽고 판단해야 하는 일
+
+
+def codex_json(prefix, prompt, payload, shape, failure, config=None, timeout=None,
+               effort=EFFORT_THINK):
     """One schema-constrained `codex exec`, which is every call this app makes.
 
-    The callers differ in what they send and in what they say when it fails; the
-    sandbox flags, the model, the one slot and the rule that stdout is never kept are
-    the same thing four times over, and this is that thing once. `timeout` is how long
-    to wait for the slot, never for the process.
+    The callers differ in what they send, in how hard they need the model to think and
+    in what they say when it fails; the sandbox flags, the model, the one slot and the
+    rule that stdout is never kept are the same thing five times over, and this is that
+    thing once. `timeout` is how long to wait for the slot, never for the process.
     """
     from jsonschema import validate
     config = config or {}
@@ -69,6 +80,7 @@ def codex_json(prefix, prompt, payload, shape, failure, config=None, timeout=Non
             'exec', '--ignore-user-config', '--ignore-rules', '--ephemeral',
             '--sandbox', 'read-only', '--skip-git-repo-check',
             '-c', 'approval_policy="never"', '-c', 'features.shell_tool=false',
+            '-c', f'model_reasoning_effort="{effort}"',
             '-C', directory, '--output-schema', str(written), '-o', str(output), '-',
         ]
         if config.get('model'):
@@ -128,9 +140,10 @@ def chat_reply(question, history=(), mail=None, config=None, timeout=None):
         'history': [{'role': role, 'text': text} for role, text in history][-20:],
         'mail': mail or {},
     }
+    # 원문을 처음 읽고 답해야 하고, 물어본 사람이 화면 앞에서 기다린다.
     return codex_json('mail-chat-', CHAT_PROMPT, payload, chat_schema(),
                       'Codex 응답을 받지 못했습니다. 로그인·사용량 한도·네트워크를 확인하세요.',
-                      config, timeout)['reply']
+                      config, timeout, EFFORT_THINK)['reply']
 
 
 def read_password(email):
@@ -424,9 +437,11 @@ def briefing(payload, config=None, timeout=None):
     mail body: this call rides the same single Codex slot as analysis, and re-sending
     thirty bodies is the 240-second timeout rather than a better briefing.
     """
+    # 입력이 이미 analyze()가 값을 치른 요약과 집계다. 여기서 다시 깊이 생각할 것이 없고,
+    # 이 호출은 아침 아홉 시에 읽지 않은 메일의 줄 앞에서 슬롯을 최대 240초 잡는다.
     return codex_json('mail-briefing-', BRIEF_PROMPT, payload, briefing_schema(),
                       '브리핑을 만들지 못했습니다. 로그인·사용량 한도·네트워크를 확인하세요.',
-                      config, timeout)
+                      config, timeout, EFFORT_READ)
 
 
 # 한 번에 보낼 수 있는 본문의 상한. 240초 안에 답이 돌아오는 선이다. 넘으면 앞부분만
@@ -475,9 +490,11 @@ priority는 명시된 기한과 업무 영향을 근거로 정하고 과장하�
 reply_draft는 항상 빈 문자열로 두세요. 초안은 사용자가 말투와 방향을 골라 따로 만듭니다.
 요청사항이 없으면 requests는 빈 문자열. 스키마에 맞는 JSON만 반환하세요.
 이메일 자료:\n'''
+    # 이 앱에서 가장 판단이 필요한 호출이다: 상대 날짜를 Date 헤더 기준으로 풀고, 인용된
+    # 끝난 일정과 지금 요청을 가른다. 틀린 마감은 달력과 엑셀 일정 시트까지 흘러간다.
     data = codex_json('mail-analysis-', prompt, sent, schema(),
                       'Codex 분석 실패: 로그인·사용량 한도·네트워크를 확인하세요.',
-                      config, timeout)
+                      config, timeout, EFFORT_THINK)
     from datetime import datetime
     for event in data['events']:
         for field in ('start', 'deadline'):
@@ -546,9 +563,10 @@ def draft(mail, tone='', way='', config=None, timeout=None):
     # constraint the model will invent a meaning for.
     payload['tone'] = '' if tone in ('', DRAFT_TONE_FREE) else f'{tone} 씁니다.'
     payload['way'] = '' if way in ('', DRAFT_WAY_FREE) else DRAFT_WAY_ASKS.get(way, '')
+    # 사람이 그대로 보낼 글이고, 거절이나 일정 조율은 이유와 대안을 들어야 한다.
     data = codex_json('mail-draft-', DRAFT_PROMPT, payload, draft_schema(),
                       '초안을 만들지 못했습니다. 로그인·사용량 한도·네트워크를 확인하세요.',
-                      config, timeout)
+                      config, timeout, EFFORT_THINK)
     return data['subject'], data['draft']
 
 
@@ -571,8 +589,9 @@ def translate(text, subject='', config=None, timeout=None):
     if len(body) > TRANSLATE_LIMIT:
         raise RuntimeError(f'본문이 {TRANSLATE_LIMIT:,}자를 초과해 번역할 수 없습니다. '
                            '상담 화면에서 필요한 부분만 물어보세요.')
+    # 옮기는 일이지 판단하는 일이 아니다.
     data = codex_json('mail-translate-', TRANSLATE_PROMPT,
                       {'subject': str(subject or ''), 'body': body}, translate_schema(),
                       '번역하지 못했습니다. 로그인·사용량 한도·네트워크를 확인하세요.',
-                      config, timeout)
+                      config, timeout, EFFORT_READ)
     return data['language'], data['korean']

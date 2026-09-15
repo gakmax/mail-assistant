@@ -11,7 +11,11 @@ FIELDS = (('email', '메일 계정'), ('password', '메일 전용 비밀번호')
           ('model', 'Codex 모델'))
 
 DEFAULT_MODEL = {'value': '', 'name': '기본값', 'power': '', 'cost': '',
-                 'hint': 'Codex CLI가 정한 모델을 그대로 씁니다.'}
+                 # 고르지 않아도 도는 자리이므로 남는다 — Codex가 한 번도 돈 적 없는 PC에는
+                 # 고를 목록 자체가 없다. 다만 무엇이 도는지 화면이 말할 수 없다는 점은
+                 # 숨기지 않는다. 그것이 아래 '추천'이 있는 이유이기도 하다.
+                 'hint': 'Codex CLI가 정한 모델을 그대로 씁니다. '
+                         '어떤 모델이 쓰였는지는 이 화면에 나오지 않습니다.'}
 # 성능·사용량 as words rather than slugs: the person choosing a model here reads mail
 # for a living and has no reason to know what a 'gpt-5.6-luna' costs. The cache carries
 # no price and no speed — what it carries is `priority`, the order Codex itself lists
@@ -20,6 +24,12 @@ DEFAULT_MODEL = {'value': '', 'name': '기본값', 'power': '', 'cost': '',
 GRADES = (('성능 높음', '사용량 많음'), ('성능 보통', '사용량 보통'), ('가볍고 빠름', '사용량 적음'))
 GRADE_NOTE = ('성능·사용량 표시는 Codex가 알려준 모델 순서를 옮긴 것입니다. '
               '실제 사용량은 메일 길이와 분석 횟수에 따라 달라집니다.')
+# 추천은 슬러그가 아니라 *자리*다. 이름을 박아 두면 몇 주 뒤 그 이름이 사라지고 없는
+# 모델을 권하는 화면이 된다 — 하드코딩한 목록을 버린 이유와 같다. 자리는 캐시가 바뀔
+# 때마다 다시 계산되므로 낡을 수가 없다.
+RECOMMEND_WHY = ('이 앱이 모델에게 시키는 일은 메일에서 날짜와 요청을 가려내 정해진 '
+                 '형식으로 옮기는 것입니다. 가장 강한 모델이 필요한 종류의 일이 아니고, '
+                 '가벼운 모델은 상대 날짜를 놓쳐 마감이 틀립니다.')
 # Codex writes this beside its own config whenever it runs, and it holds the models
 # *this account* may use. Reading it beats shipping a list: the slugs turn over every
 # few weeks, and a stale one fails every analysis with '모델을 지원하지 않습니다'.
@@ -141,7 +151,7 @@ def read_models(path=None):
 
 
 def model_rows(models, current=''):
-    """The dropdown: [{'value','name','power','cost','hint'}], 기본값 first.
+    """The dropdown: [{'value','name','power','cost','hint','recommended'}], 기본값 first.
 
     There is no 직접 입력 row any more. Typing a slug was the developer's answer to a
     list that might be missing something, and what it actually produced was a box that
@@ -159,7 +169,24 @@ def model_rows(models, current=''):
     if saved and not any(row['value'] == saved for row in rows):
         rows.append({'value': saved, 'name': saved, 'power': '', 'cost': '',
                      'hint': '지금 설정된 모델입니다. Codex 목록에는 없습니다.'})
+    picked = recommended_slug(models)
+    for row in rows:
+        # 기본값 줄에는 붙지 않는다: 그 줄은 '고르지 않음'이고, 고르지 않은 것을 권할 수는 없다.
+        row['recommended'] = bool(picked) and row['value'] == picked
     return rows
+
+
+def recommended_slug(models):
+    """Codex가 나열한 목록의 한가운데. '' when there is nothing to choose between.
+
+    등급이 아니라 자리로 고르는 이유: 등급은 다섯 모델을 셋으로 접는 계산이고, 둘만
+    올라온 주에는 가운데 등급이 아예 없다. 목록의 중앙값은 한 개짜리 목록에도 있다.
+    홀수로 나뉘지 않으면 더 강한 쪽으로 기운다 — 이 앱에서 가장 나쁜 실패는 틀린 마감이고,
+    그것은 가벼운 모델이 상대 날짜를 놓칠 때 생긴다.
+    """
+    if not models:
+        return ''
+    return models[(len(models) - 1) // 2][0]
 
 
 def model_label(row):

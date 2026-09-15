@@ -14,7 +14,8 @@ from mail_assistant.core import (ANALYZING, EVENT_MARK, FAILED, HANDLED, PROGRES
                                  Store, account_key, event_key, event_row_id, is_event_key,
                                  korean_ratio, looks_foreign, text_of_html)
 from mail_assistant.dashboard import PRIORITIES
-from mail_assistant.settings import GRADES
+from mail_assistant.settings import (GRADES, model_choices, model_rows,
+                                     recommended_slug)
 from mail_assistant.style import URGENT, css_color
 from mail_assistant.usage import (CALM as USAGE_CALM, FULL as USAGE_FULL,
                                   WARN as USAGE_WARN, snapshot as usage_snapshot,
@@ -30,7 +31,7 @@ from mail_assistant.webui import (CARD_TONES, COST_TONES, DEFAULT_LIST, FONT_FIL
                                   NAV_BADGE_MAX, NAV_GROUPS, PAGES, RAIL_BOOT, RAIL_KEY,
                                   RAIL_TOGGLE, SIDE_BREAK, SIDE_EASE, SIDE_GROUP, SIDE_RAIL,
                                   CHAT_CHROME, translated_note, row_value,
-                                  BODY_LIMIT, clipped_note,
+                                  BODY_LIMIT, clipped_note, model_option,
                                   DRAFT_NOTE, DRAFT_TONES, DRAFT_WAYS,
                                   draft_input, draft_picks,
                                   SIDE_WIDE, badge_text, bar_status, nav_counts, nav_rows,
@@ -2134,6 +2135,64 @@ class DraftMakerTests(unittest.TestCase):
         """The control sits on the block it opens, as 접기 sits on the sidebar."""
         self.assertIn('.ma-maker {', THEME)
         self.assertIn('.ma-maker__row {', THEME)
+
+
+class RecommendedModelTests(unittest.TestCase):
+    """추천은 슬러그가 아니라 자리다 — 이름을 박으면 몇 주 뒤 없는 모델을 권하게 된다."""
+
+    def cache(self, count):
+        return {'models': [{'slug': f'm{i}', 'display_name': f'M{i}', 'priority': i,
+                            'visibility': 'list'} for i in range(count)]}
+
+    def rows(self, count, current=''):
+        return model_rows(model_choices(self.cache(count)), current)
+
+    def test_exactly_one_row_carries_the_mark(self):
+        """둘에 붙으면 추천이 아니라 분류가 된다."""
+        for count in range(1, 10):
+            marked = [row for row in self.rows(count) if row['recommended']]
+            self.assertEqual(len(marked), 1, count)
+
+    def test_it_is_the_middle_of_the_list_and_not_the_strongest(self):
+        rows = self.rows(5)
+        picked = next(row for row in rows if row['recommended'])
+        # 다섯 줄이면 목록의 한가운데가 가운데 등급과 만난다.
+        self.assertEqual((picked['power'], picked['cost']), GRADES[len(GRADES) // 2])
+        self.assertNotEqual(picked['value'], rows[1]['value'])   # 성능 높음이 아니다
+
+    def test_a_list_too_short_to_have_a_middle_leans_to_the_stronger(self):
+        """이 앱에서 가장 나쁜 실패는 틀린 마감이고, 가벼운 모델이 상대 날짜를 놓칠 때 난다.
+
+        가운데 *등급*으로 골랐을 때는 둘만 올라온 주에 추천이 사라졌다. 목록의 중앙값은
+        한 개짜리 목록에도 있다.
+        """
+        self.assertEqual(recommended_slug(model_choices(self.cache(2))), 'm0')
+        self.assertEqual(recommended_slug(model_choices(self.cache(1))), 'm0')
+        self.assertEqual(recommended_slug([]), '')
+
+    def test_it_moves_with_whatever_codex_is_listing_this_week(self):
+        """캐시가 바뀌면 다시 계산된다. 낡을 수 있는 이름이 어디에도 없다."""
+        five = next(row for row in self.rows(5) if row['recommended'])['value']
+        nine = next(row for row in self.rows(9) if row['recommended'])['value']
+        self.assertNotEqual(five, nine)
+
+    def test_a_cache_codex_has_never_written_recommends_nothing(self):
+        """고를 것이 없는 화면에서 추천은 고를 수 없는 것을 가리키는 말이 된다."""
+        rows = model_rows([], '')
+        self.assertEqual([row for row in rows if row['recommended']], [])
+        self.assertFalse(rows[0]['recommended'])        # 기본값은 추천이 아니다
+
+    def test_the_default_row_is_kept_and_says_what_it_cannot_say(self):
+        """Codex가 한 번도 돈 적 없는 PC에는 고를 목록 자체가 없으므로 이 줄은 남는다."""
+        row = model_rows([], '')[0]
+        self.assertEqual(row['value'], '')
+        self.assertIn('이 화면에 나오지 않습니다', row['hint'])
+
+    def test_the_open_list_says_it_and_so_does_the_closed_field(self):
+        rows = self.rows(5)
+        picked = next(row for row in rows if row['recommended'])
+        self.assertTrue(model_option(picked).endswith('· 추천'))
+        self.assertFalse(model_option(rows[0]).endswith('· 추천'))
 
 
 class KoreanRatioTests(unittest.TestCase):

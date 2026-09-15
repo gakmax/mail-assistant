@@ -1,3 +1,3 @@
 """POP3 mail → Codex → desktop Excel."""
 
-__version__ = "0.9.1"
+__version__ = "0.9.2"

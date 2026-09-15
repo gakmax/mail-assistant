@@ -33,7 +33,8 @@ from mail_assistant.settings import (GRADES, field_errors, model_choices, model_
 from mail_assistant.services import check_connection, connection_steps, login_state
 from mail_assistant.style import STYLE_VERSION, URGENT, apply_style
 from mail_assistant.services import (BODY_LIMIT, DRAFT_BODY_LIMIT, DRAFT_TONES,
-                                      DRAFT_WAYS, Unanalyzable,
+                                      DRAFT_WAYS, EFFORT_READ, EFFORT_THINK,
+                                      Unanalyzable,
                                       TRANSLATE_LIMIT, analyze, briefing, chat_reply,
                                       chat_schema, draft, draft_schema, fetch_mail,
                                       read_password, save_password, translate,
@@ -1772,6 +1773,61 @@ class TranslateTests(unittest.TestCase):
         shape = translate_schema()
         self.assertEqual(shape['required'], ['language', 'korean'])
         self.assertFalse(shape['additionalProperties'])
+
+
+class ReasoningEffortTests(unittest.TestCase):
+    """생각의 깊이는 앱이 정한다 — 모델이 저마다 들고 있는 기본값에 맡기지 않는다."""
+
+    def effort_of(self, call):
+        seen = {}
+
+        def fake_run(command, **kwargs):
+            seen['command'] = command
+            Path(command[command.index('-o') + 1]).write_text('{}', encoding='utf-8')
+            return types.SimpleNamespace(returncode=1, stdout='', stderr='')
+
+        with patch('mail_assistant.services.codex_command', return_value=['codex']), \
+             patch('mail_assistant.services.subprocess.run', side_effect=fake_run):
+            with self.assertRaises(RuntimeError):
+                call()
+        settings = [value for value in seen['command']
+                    if str(value).startswith('model_reasoning_effort=')]
+        self.assertEqual(len(settings), 1, seen['command'])
+        return settings[0].split('=', 1)[1].strip('"')
+
+    def test_the_call_that_reads_a_mail_for_the_first_time_thinks(self):
+        """틀린 마감은 달력과 엑셀 일정 시트까지 흘러간다."""
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            store.add(account_key(CONFIG), 'one', mail())
+            row = store.pending(account_key(CONFIG), time.time())[0]
+            self.assertEqual(self.effort_of(lambda: analyze(row, CONFIG)), EFFORT_THINK)
+            store.db.close()
+
+    def test_a_question_and_a_draft_think_too(self):
+        self.assertEqual(self.effort_of(lambda: chat_reply('질문', config={})),
+                         EFFORT_THINK)
+        self.assertEqual(self.effort_of(lambda: draft({'body': 'hello'}, config={})),
+                         EFFORT_THINK)
+
+    def test_work_over_what_is_already_analysed_does_not(self):
+        """브리핑의 입력은 analyze()가 이미 값을 치른 요약이고, 번역은 옮기는 일이다."""
+        self.assertEqual(self.effort_of(lambda: briefing({}, {})), EFFORT_READ)
+        self.assertEqual(self.effort_of(lambda: translate('hello', '', {})), EFFORT_READ)
+
+    def test_both_levels_are_ones_every_listed_model_supports(self):
+        """그 위는 240초 타임아웃에 걸릴 수 있고, 타임아웃은 곧 전체 백오프다."""
+        self.assertEqual((EFFORT_READ, EFFORT_THINK), ('low', 'medium'))
+
+    def test_the_clis_own_config_is_still_ignored(self):
+        """--ignore-user-config가 있으므로 이 -c가 유일한 지시다."""
+        self.assertEqual(self.effort_of(lambda: briefing({}, {})), EFFORT_READ)
+        with patch('mail_assistant.services.codex_command', return_value=['codex']), \
+             patch('mail_assistant.services.subprocess.run') as run:
+            run.return_value = types.SimpleNamespace(returncode=1, stdout='', stderr='')
+            with self.assertRaises(RuntimeError):
+                briefing({}, {})
+            self.assertIn('--ignore-user-config', run.call_args[0][0])
 
 
 class CodexInvocationTests(unittest.TestCase):
