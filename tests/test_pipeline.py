@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 import types
+from contextlib import contextmanager
 from email.message import EmailMessage
 from pathlib import Path
 from unittest.mock import call, patch, MagicMock
@@ -693,6 +694,93 @@ class BoardHiddenTests(unittest.TestCase):
             store.set_todo_hidden(ident, False)
             self.assertEqual(store.detail(ident)['todo_hidden'], 0)
             store.db.close()
+
+
+class NoteStoreTests(unittest.TestCase):
+    """메모. The table is new, so nothing here is a migration — only the rules."""
+
+    @contextmanager
+    def opened(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            try:
+                yield store
+            finally:
+                store.db.close()
+
+    def test_pinned_first_then_most_recently_written(self):
+        with self.opened() as store:
+            first = store.add_note('acct', '하나')
+            second = store.add_note('acct', '둘')
+            third = store.add_note('acct', '셋')
+            store.set_note_pinned(first)
+            # Every id in one burst shares a `now()` string, so the order here is
+            # decided by the id tie-break and not by whatever sqlite felt like.
+            self.assertEqual([row['id'] for row in store.notes('acct')],
+                             [first, third, second])
+
+    def test_only_the_text_moves_a_memo_to_the_front(self):
+        with self.opened() as store:
+            first = store.add_note('acct', '하나')
+            second = store.add_note('acct', '둘')
+            store.set_note_color(first, 'green')
+            self.assertEqual([row['id'] for row in store.notes('acct')], [second, first])
+            store.set_note_text(first, '하나 고침')
+            self.assertEqual([row['id'] for row in store.notes('acct')][0], first)
+
+    def test_a_mail_filter_narrows_to_that_mails_own(self):
+        with self.opened() as store:
+            ident = store.add('acct', 'uid-1', mail())
+            attached = store.add_note('acct', '붙임', mail_id=ident)
+            store.add_note('acct', '자유')
+            self.assertEqual([row['id'] for row in store.notes('acct', ident)], [attached])
+            self.assertEqual([row['id'] for row in store.notes('acct', '')],
+                             [row['id'] for row in store.notes('acct')
+                              if not row['mail_id']])
+
+    def test_deleting_a_mail_keeps_the_memo_and_cuts_it_loose(self):
+        """The analysis and the draft came from the mail; a memo is the user's own."""
+        with self.opened() as store:
+            ident = store.add('acct', 'uid-1', mail())
+            note = store.add_note('acct', '박 과장님 견적 건', mail_id=ident)
+            store.delete([ident])
+            rows = list(store.notes('acct'))
+            self.assertEqual([row['id'] for row in rows], [note])
+            self.assertEqual(rows[0]['text'], '박 과장님 견적 건')
+            self.assertEqual(rows[0]['mail_id'], '')
+
+    def test_a_blank_memo_is_swept_and_a_written_one_is_not(self):
+        with self.opened() as store:
+            blank = store.add_note('acct')
+            spaces = store.add_note('acct', '   \n ')
+            written = store.add_note('acct', '적은 것')
+            store.delete_empty_notes('acct')
+            self.assertEqual([row['id'] for row in store.notes('acct')], [written])
+            self.assertNotIn(blank, [row['id'] for row in store.notes('acct')])
+            self.assertNotIn(spaces, [row['id'] for row in store.notes('acct')])
+
+    def test_the_sweep_spares_the_one_just_made(self):
+        with self.opened() as store:
+            store.add_note('acct')
+            keep = store.add_note('acct')
+            store.delete_empty_notes('acct', keep=keep)
+            self.assertEqual([row['id'] for row in store.notes('acct')], [keep])
+
+    def test_the_sweep_stops_at_the_account(self):
+        with self.opened() as store:
+            mine = store.add_note('acct')
+            theirs = store.add_note('other')
+            store.delete_empty_notes('acct')
+            self.assertEqual([row['id'] for row in store.notes('acct')], [])
+            self.assertEqual([row['id'] for row in store.notes('other')], [theirs])
+            self.assertNotEqual(mine, theirs)
+
+    def test_subjects_arrive_in_one_query_and_skip_what_is_gone(self):
+        with self.opened() as store:
+            ident = store.add('acct', 'uid-1', mail())
+            self.assertEqual(store.mail_subjects([ident, 'gone', '', ident]),
+                             {ident: '견적 요청'})
+            self.assertEqual(store.mail_subjects([]), {})
 
 
 class DayWindowTests(unittest.TestCase):

@@ -69,16 +69,17 @@ WINDOW_FLOOR = (640, 480)   # no desktop is smaller; a floor stops a silly scree
 # (path, label, Material icon). The icons ship with Quasar, so nothing is fetched.
 PAGES = (('/', '대시보드', 'dashboard'), ('/mail', '메일', 'mail'), ('/calendar', '일정', 'event'),
          ('/todo', '할 일', 'checklist'), ('/drafts', '초안', 'drafts'),
+         ('/memo', '메모', 'sticky_note_2'),
          ('/chat', '상담', 'forum'), ('/stats', '통계', 'insights'),
          ('/run', '실행', 'play_circle'), ('/settings', '설정', 'settings'))
-# The sidebar's groups, in the order they are drawn. Nine destinations in one flat
-# row read as nine; grouped they read as four questions. 대시보드 keeps no heading —
+# The sidebar's groups, in the order they are drawn. Ten destinations in one flat
+# row read as ten; grouped they read as four questions. 대시보드 keeps no heading —
 # it is where the window opens, and a label over a single item is noise. Only paths
 # live here, so PAGES stays the one list of destinations; a test holds the two equal,
 # because a page added there and forgotten here would be reachable by URL and by
 # nothing else on screen.
 NAV_GROUPS = (('', ('/',)),
-              ('업무', ('/mail', '/calendar', '/todo', '/drafts')),
+              ('업무', ('/mail', '/calendar', '/todo', '/drafts', '/memo')),
               ('도움', ('/chat', '/stats')),
               ('시스템', ('/run', '/settings')))
 # The sidebar with labels, and the same sidebar as icons only. The nine links used to
@@ -121,6 +122,25 @@ STATE_TONES = {HANDLED: css_color(DASH_GREEN), PROGRESS: css_color(LINK),
 # The kanban lane dots. Same three states, same three colours as the 상태 tags above.
 LANE_TONES = {'': css_color(CALM), PROGRESS: css_color(LINK), HANDLED: css_color(DASH_GREEN)}
 
+# 메모 paper. (key, name, ground, edge) — the only palette in this file that is not
+# style.py's, because the window has no 메모 화면 to drift apart from and Excel never
+# sees one. The grounds are deliberately washed out: Windows' own sticker yellow on
+# a #f4f5f7 page, beside a brand blue, is the loudest thing on the screen and every
+# note then shouts equally, which is the same arithmetic as accenting all four
+# 분석 결과 blocks. Colour is the whole of a memo's structure — there is no title, no
+# date field, no state — so it has to stay a quiet signal rather than an alarm.
+NOTE_COLORS = (('yellow', '노랑', '#fdf3d0', '#e8d49a'),
+               ('pink', '분홍', '#fce4ea', '#efb9c8'),
+               ('green', '초록', '#e2f3e8', '#a8d7bb'),
+               ('blue', '파랑', '#e2eefc', '#a9c9f2'),
+               ('purple', '보라', '#ece6fb', '#c3b4ef'),
+               ('gray', '회색', '#eef0f3', '#cdd0d6'))
+DEFAULT_NOTE_COLOR = NOTE_COLORS[0][0]
+# The 메모 화면's three segments. 'mail' is the one that earns the page: a memo that
+# belongs to a mail is the thing 할 일 cannot hold.
+NOTE_FILTERS = (('all', '전체'), ('pin', '고정'), ('mail', '메일에 붙임'))
+# How many pinned memos the 대시보드 shows. The panel is a reminder, not the wall.
+PINNED_ON_HOME = 3
 LOCAL = threading.local()
 
 # Pretendard, served from /vendor like FullCalendar — never a CDN. One variable file
@@ -606,6 +626,78 @@ a.ma-kpi:hover {{
   transition:border-color .14s ease, color .14s ease;
 }}
 .ma-card.is-over .ma-drop {{ border-color:var(--brand); color:var(--brand); }}
+
+/* 메모: paper, and nothing else. A memo has no title, no date field and no state, so
+   the coloured ground and the 3px edge are its entire structure — which is why the
+   grounds in NOTE_COLORS are washed out rather than Windows' own sticker colours.
+   The wall is a grid with align-items:start and not CSS columns: a memo's textarea
+   grows as it is typed into, and with columns that growth pushes the last card of a
+   column into the next one — the layout moving under the person writing, on the one
+   screen that is nothing but text they are in the middle of. A grid leaves gaps
+   instead, which is the trade the kanban lanes already make. */
+.ma-memo {{
+  display:block; position:relative; border-radius:10px; padding:10px 12px 6px;
+  border:1px solid transparent; border-left:3px solid transparent;
+  transition:box-shadow .14s ease;
+}}
+.ma-memo:hover {{
+  box-shadow:0 2px 4px rgba(24,24,27,.05), 0 6px 16px rgba(24,24,27,.08);
+}}
+.ma-memo__body {{
+  display:block; color:var(--ink); font-size:13px; line-height:1.7;
+  white-space:pre-wrap; overflow-wrap:anywhere;
+}}
+/* Quasar's borderless input still brings a control box, a bottom slot for the hint
+   that is not there, and a white ground — all of which sit on top of the paper. */
+.ma-memo .q-field__control {{
+  background:transparent; padding:0; min-height:0;
+}}
+.ma-memo .q-field__control:before, .ma-memo .q-field__control:after {{ display:none; }}
+.ma-memo .q-field__bottom {{ display:none; }}
+.ma-memo .q-field__native {{
+  color:var(--ink); font-size:13px; line-height:1.7; padding:0; min-height:0;
+  overflow-wrap:anywhere;
+}}
+.ma-memo .q-field__native::placeholder {{ color:rgba(24,24,27,.38); }}
+.ma-memo__foot {{
+  display:flex; align-items:center; gap:3px; min-height:26px;
+  margin-top:5px; padding-top:5px; border-top:1px solid rgba(24,24,27,.07);
+}}
+.ma-memo__when {{
+  font-size:10.5px; color:rgba(24,24,27,.46); flex:none;
+  font-variant-numeric:tabular-nums;
+}}
+/* Revealed on hover, like the kanban card's grip: six swatches and two buttons on
+   every card at rest would be more chrome than memo. focus-within keeps them up for
+   a keyboard, which never hovers anything. */
+.ma-memo__acts {{
+  display:flex; align-items:center; gap:2px; margin-left:auto;
+  opacity:0; transition:opacity .14s ease;
+}}
+.ma-memo:hover .ma-memo__acts, .ma-memo:focus-within .ma-memo__acts {{ opacity:1; }}
+.ma-memo__pal {{ display:flex; align-items:center; gap:3px; margin-right:3px; }}
+.ma-sw {{
+  width:15px; height:15px; border-radius:50%; padding:0; cursor:pointer;
+  border:1px solid rgba(24,24,27,.16);
+}}
+.ma-sw.is-live {{ box-shadow:0 0 0 1.5px #fff, 0 0 0 3px var(--ink); }}
+/* The mail a memo belongs to — the one thing 할 일 cannot hold, so it is the one
+   thing on the card besides the text itself. */
+.ma-memo__link {{
+  display:inline-flex; align-items:center; gap:5px; max-width:100%;
+  background:rgba(255,255,255,.62); border:1px solid rgba(24,24,27,.08);
+  border-radius:999px; padding:2px 9px 2px 7px; margin-top:7px;
+  font-size:11px; color:var(--subtle); text-decoration:none; cursor:pointer;
+}}
+.ma-memo__link:hover {{ background:#fff; color:var(--ink); }}
+.ma-memo__link .q-icon {{ font-size:13px; flex:none; opacity:.7; }}
+.ma-memo__link span {{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
+.ma-wall__head {{
+  display:flex; align-items:center; gap:7px; margin:2px 0 9px;
+  font-size:11px; font-weight:700; letter-spacing:.05em; color:var(--muted);
+}}
+.ma-wall__head .q-icon {{ font-size:14px; }}
+.ma-wall__rule {{ flex:1 1 auto; height:1px; background:var(--line); }}
 
 /* 상담: the two speakers differ by side and by ground, never by side alone.
    Quasar's q-chat-message brings its own palette and a little tail; the rules below
@@ -1232,6 +1324,83 @@ def draft_view(rows, chosen=None):
                        'sender': row['sender'], 'received': local_text(row['received'])}
                       for row in queue],
             'current': detail_view(queue[position]), 'index': position}
+
+
+def note_tone(color):
+    """(ground, edge) for a stored colour key, falling back to the default paper.
+
+    A key kept for a colour that no longer exists reads as the default rather than
+    raising, for the reason model_rows() keeps a row for a model Codex stopped
+    listing: the value in the database was written by a version of this app, and the
+    screen's job is to show it, not to argue with it.
+    """
+    for key, _, ground, edge in NOTE_COLORS:
+        if key == color:
+            return ground, edge
+    return NOTE_COLORS[0][2], NOTE_COLORS[0][3]
+
+
+def note_view(row, subjects=None):
+    """One memo as the wall draws it. `subjects` is {mail id: subject}, read in one go."""
+    subjects = subjects or {}
+    mail_id = row['mail_id'] or ''
+    ground, edge = note_tone(row['color'])
+    return {'id': row['id'], 'text': row['text'] or '', 'color': row['color'] or '',
+            'ground': ground, 'edge': edge, 'pinned': bool(row['pinned']),
+            'mail': mail_id, 'subject': subjects.get(mail_id, ''),
+            'when': local_text(row['updated'] or row['created'])}
+
+
+def note_views(rows, subjects=None):
+    return [note_view(row, subjects) for row in rows]
+
+
+def keep_note(view, kind=''):
+    if kind == 'pin':
+        return view['pinned']
+    if kind == 'mail':
+        return bool(view['mail'])
+    return True
+
+
+def note_tally(views):
+    """The number on each segment, from the same list the segments filter.
+
+    Not `note_counts`: build() already has a local of that name feeding the sidebar
+    cache, and a module function it shadows is a bug waiting for whoever calls it
+    inside that scope.
+    """
+    return {kind: sum(1 for view in views if keep_note(view, kind))
+            for kind, _ in NOTE_FILTERS}
+
+
+def note_wall(views, kind=''):
+    """{'pinned', 'rest'} — the two walls, with the filter already applied to both.
+
+    The filter runs before the split rather than after, or '고정' would draw an empty
+    lower wall beneath the pinned one and the page would look half broken.
+    """
+    shown = [view for view in views if keep_note(view, kind)]
+    return {'pinned': [view for view in shown if view['pinned']],
+            'rest': [view for view in shown if not view['pinned']]}
+
+
+def note_signature(views):
+    """What the wall actually draws, and nothing else.
+
+    The 메모 화면 must never rebuild itself on a timer — every card on it is a
+    textarea somebody may be inside, which is the edit-eating the 초안 화면 exists to
+    stop. So the tick compares this and only *says* that something arrived; the text
+    is deliberately in it, because another screen (the 메일 detail) writes memos too
+    and a reader who cannot see that they changed is being lied to.
+    """
+    return tuple((view['id'], view['text'], view['color'], view['pinned'], view['mail'])
+                 for view in views)
+
+
+def pinned_notes(views, limit=PINNED_ON_HOME):
+    """The 대시보드's few. Read-only there: the wall is where a memo is written."""
+    return [view for view in views if view['pinned']][:limit]
 
 
 BULLET = re.compile(r'^\s*[-*]\s+(.*)$')
@@ -2069,6 +2238,58 @@ def todo_tally(counts, token):
             .classes('ma-meta__item').style('padding:2px 18px 14px')
 
 
+def memo_paper(view):
+    """The coloured card a memo is written on. Returned so the caller can fill it.
+
+    The ground and the left edge are the memo's whole structure, so they are set from
+    the view rather than a class: six papers would otherwise be six more rules in
+    THEME saying nothing but a colour each.
+    """
+    from nicegui import ui
+    return ui.element('div').classes('ma-memo').style(
+        f"background:{view['ground']};border-color:{view['edge']}55;"
+        f"border-left-color:{view['edge']}")
+
+
+def memo_mail_link(view, token):
+    """'this memo belongs to that mail' — the one thing a 할 일 card cannot say."""
+    from nicegui import ui
+    if not view['mail']:
+        return
+    with ui.link(target=href('/mail', token, id=view['mail'])).classes('ma-memo__link'):
+        ui.icon('mail')
+        ui.label(view['subject'] or '(제목 없음)')
+
+
+def pinned_panel(views, token, total=0):
+    """고정한 메모 on 대시보드. Read-only: a memo is written on the wall, not here.
+
+    No textarea, on purpose — the 대시보드 repaints itself every REFRESH_SECONDS, and
+    an editable box on a block that rebuilds on a timer is precisely the edit-eating
+    the 메모 화면 goes out of its way to avoid.
+    """
+    from nicegui import ui
+    with card(flush=True):
+        with ui.element('div').classes('ma-lane__head'):
+            ui.icon('push_pin').style(f'color:{MUTED};font-size:17px')
+            ui.label('고정한 메모').classes('ma-head__title')
+            if total > len(views):
+                ui.label(f'{len(views)}/{total}').classes('ma-meta__item')
+            ui.space()
+            ui.link('메모 열기', href('/memo', token)) \
+                .style(f'color:{BRAND};font-size:12px;text-decoration:none')
+        if not views:
+            empty('고정한 메모가 없습니다. 메모 화면에서 압정을 누르면 여기에 올라옵니다.')
+            return
+        with ui.element('div').style('display:grid;gap:8px;padding:2px 18px 16px'):
+            for view in views:
+                with memo_paper(view):
+                    ui.label(view['text']).classes('ma-memo__body')
+                    memo_mail_link(view, token)
+                    with ui.element('div').classes('ma-memo__foot'):
+                        ui.label(view['when']).classes('ma-memo__when')
+
+
 def lamp(running, stopping=False):
     """(colour, label) for the worker's state, shared by the strip and the 실행 page."""
     if stopping:
@@ -2763,6 +2984,9 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             latest['trend'] = trend(store(directory), account, today)
             latest['brief'] = briefing_view(
                 store(directory).briefing(account) if account else None, today)
+            memos = memo_views()
+            latest['pinned'] = pinned_notes(memos)
+            latest['memos'] = sum(1 for view in memos if view['pinned'])
             note_counts(rows, todos)
             return latest['data']
 
@@ -2799,6 +3023,10 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
         @ui.refreshable
         def todo_block():
             todo_tally(latest['todo'], token)
+
+        @ui.refreshable
+        def memo_block():
+            pinned_panel(latest['pinned'], token, latest['memos'])
 
         @ui.refreshable
         def run_block():
@@ -2886,6 +3114,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                                 .classes('ma-seg')
                         deadline_block()
                     todo_block()
+                    memo_block()
                     run_block()
             with ui.element('div').style('margin-top:14px'):
                 summary_row()
@@ -2893,7 +3122,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             def paint():
                 data = read()
                 for block in (brief_block, kpi_row, today_block, deadline_block,
-                              todo_block, run_block, summary_row):
+                              todo_block, memo_block, run_block, summary_row):
                     block.refresh()
                 for element, option in (
                         (daily, trend_option(latest['trend'])),
@@ -2952,6 +3181,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             state['selected'] = opened
         wanted = {'ids': []}        # what the 삭제 confirmation is standing over
         touched = {'now': False}    # did the open mail change anything the list shows
+        fresh = {'id': None}        # the memo 메모 붙이기 just made, to open with the caret
         # The table is rebuilt by the second now, and a rebuild is what clears q-table's
         # checkboxes. `live` carries the ticked ids and the last painted signature
         # across that rebuild, so a poll that finds nothing new does nothing at all.
@@ -2988,7 +3218,8 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 return
             wanted['ids'] = list(ids)
             warn.set_text(f'메일 {len(ids)}건을 지웁니다. 분석 결과와 답변 초안, 이 메일에 대한 '
-                          '상담 기록도 함께 사라지며 되돌릴 수 없습니다. 이미 엑셀에 반영된 행은 '
+                          '상담 기록도 함께 사라지며 되돌릴 수 없습니다. 직접 쓴 메모는 '
+                          '지워지지 않고 메모 화면에 남습니다. 이미 엑셀에 반영된 행은 '
                           '그대로 남고, 서버에서 같은 메일을 다시 가져오지도 않습니다.')
             confirm.open()
 
@@ -3214,6 +3445,22 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 panel.refresh()
                 ui.notify('할 일 판에 다시 올렸습니다.')
 
+            def attach():
+                """A blank memo on this mail, with the caret already in it.
+
+                The row is made first so the card can appear at once; a blank one
+                nobody typed into is swept the next time a wall is rebuilt, which is
+                what delete_empty_notes() is for.
+                """
+                account = account_of(config)
+                if not account:
+                    ui.notify('설정에서 메일 주소를 먼저 저장하세요.')
+                    return
+                store(directory).delete_empty_notes(account)
+                fresh['id'] = store(directory).add_note(account, color=DEFAULT_NOTE_COLOR,
+                                                        mail_id=view['id'])
+                bump()
+                panel.refresh()
 
             with card().classes('ma-modal ma-scroll'):
                 with ui.element('div').style('display:flex;gap:14px;align-items:flex-start;'
@@ -3336,6 +3583,19 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                                 .style(f'display:block;color:{SUBTLE};font-size:12.5px;'
                                        'white-space:pre-wrap;text-align:left;line-height:1.75;'
                                        'overflow-wrap:anywhere')
+                        # The memos written about this mail. They live in the same
+                        # table as the 메모 화면's and are edited the same way here —
+                        # this is what a memo can do that a 할 일 card cannot, so it
+                        # has to be reachable from the mail itself.
+                        section('메모')
+                        memos = memo_views(view['id'])
+                        with ui.element('div').style('display:grid;gap:8px'):
+                            memo_cards(memos, panel.refresh, fresh.pop('id', None),
+                                       linked=False)
+                        if not memos:
+                            empty('이 메일에 붙인 메모가 없습니다.')
+                        ui.button('이 메일에 메모 붙이기', icon='add', on_click=attach) \
+                            .props('outline dense no-caps').style('margin-top:8px')
                 with ui.element('div').classes('ma-head').style('margin:18px 0 6px'):
                     ui.label('답변 초안').classes('ma-head__title')
                     if view['analysed']:
@@ -3757,6 +4017,227 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 fresh = len([ident for ident in ids if ident not in live['ids']])
                 arrived.set_text(f'새 초안 {fresh}건이 도착했습니다.' if fresh
                                  else '검토할 초안 목록이 바뀌었습니다.')
+                notice.set_visibility(True)
+
+            ui.timer(REFRESH_SECONDS, watch)
+
+    # 메모 -----------------------------------------------------------
+
+    def memo_views(mail_id=None):
+        """Every memo the screen wants, with the subjects of the mail they belong to."""
+        account = account_of(config)
+        if not account:
+            return []
+        opened = store(directory)
+        rows = list(opened.notes(account, mail_id))
+        return note_views(rows, opened.mail_subjects(row['mail_id'] for row in rows))
+
+    def memo_cards(views, rebuild, fresh=None, on_save=None, linked=True):
+        """The memo card, wherever it is drawn.
+
+        Both the 메모 화면 and the 메일 detail draw this; what differs between them is
+        only what a rebuild means, so that is the one thing passed in. `linked` is
+        False inside a mail's own detail, where naming the mail every card already
+        belongs to is the same thing said once per card.
+        """
+        def save(ident, text):
+            store(directory).set_note_text(ident, text or '')
+            bump()
+            if on_save is not None:
+                on_save()
+
+        def recolor(ident, key, paper, swatches):
+            """Repaint the paper in place — a rebuild here would take the text with it.
+
+            Colour is the one property of a memo that changes nothing about where the
+            card belongs, so it is also the one that need not cost a rebuild.
+            """
+            store(directory).set_note_color(ident, key)
+            bump()
+            ground, edge = note_tone(key)
+            paper.style(f'background:{ground};border-color:{edge}55;'
+                        f'border-left-color:{edge}')
+            for name, swatch in swatches.items():
+                swatch.classes(add='is-live') if name == key \
+                    else swatch.classes(remove='is-live')
+            if on_save is not None:
+                on_save()
+
+        def pin(ident, pinned):
+            """고정 moves the card between the two walls, so this one does rebuild.
+
+            Whatever was being typed is safe: clicking the button blurs the textarea
+            first, and Quasar flushes a debounced input on blur — the save lands
+            before this handler runs.
+            """
+            store(directory).set_note_pinned(ident, pinned)
+            bump()
+            rebuild()
+
+        def drop(ident):
+            store(directory).delete_note(ident)
+            bump()
+            # Before the rebuild, never after: refresh() deletes the slot this handler
+            # is running in, and ui.notify then has no client to resolve.
+            ui.notify('메모를 지웠습니다.')
+            rebuild()
+
+        for view in views:
+            ident = view['id']
+            with memo_paper(view) as paper:
+                area = ui.textarea(value=view['text'], placeholder='메모를 적으세요') \
+                    .classes('w-full')
+                area.props('borderless autogrow dense debounce=600'
+                           + (' autofocus' if ident == fresh else ''))
+                area.on_value_change(lambda event, i=ident: save(i, event.value))
+                if linked:
+                    memo_mail_link(view, token)
+                with ui.element('div').classes('ma-memo__foot'):
+                    ui.label(view['when']).classes('ma-memo__when')
+                    with ui.element('div').classes('ma-memo__acts'):
+                        swatches = {}
+                        with ui.element('div').classes('ma-memo__pal'):
+                            for key, name, ground, _ in NOTE_COLORS:
+                                swatch = ui.element('button').classes('ma-sw') \
+                                    .style(f'background:{ground}').tooltip(name)
+                                swatch.on('click', lambda _, i=ident, k=key, p=paper,
+                                          s=swatches: recolor(i, k, p, s))
+                                swatches[key] = swatch
+                        chosen = view['color'] or DEFAULT_NOTE_COLOR
+                        if chosen in swatches:
+                            swatches[chosen].classes(add='is-live')
+                        ui.button(icon='push_pin',
+                                  on_click=lambda i=ident, p=view['pinned']: pin(i, not p)) \
+                            .props('flat dense round size=sm'
+                                   + (' color=primary' if view['pinned'] else ' color=grey-7')) \
+                            .tooltip('고정 해제' if view['pinned'] else '고정')
+                        ui.button(icon='close', on_click=lambda i=ident: drop(i)) \
+                            .props('flat dense round size=sm color=grey-7').tooltip('삭제')
+
+    @ui.page('/memo')
+    def memo_page(request: Request):
+        if not allowed(request):
+            refused()
+            return
+        account = account_of(config)
+        state = {'filter': 'all'}
+        # `fresh` is the memo 새 메모 just made, so its card can open with the caret in
+        # it; `signature` is what the tick compares against. Both die with the page.
+        live = {'signature': (), 'fresh': None}
+
+        def sweep():
+            """Drop blank memos before a rebuild. See Store.delete_empty_notes()."""
+            if account:
+                store(directory).delete_empty_notes(account)
+
+        def resync():
+            """Take the wall's own writes out of what watch() is watching for.
+
+            Without this the notice would fire on the user's own keystroke: the
+            signature carries the text, and a save they just made is a change.
+            """
+            live['signature'] = note_signature(memo_views())
+
+        def rebuild():
+            sweep()
+            board.refresh()
+
+        def add():
+            if not account:
+                ui.notify('설정에서 메일 주소를 먼저 저장하세요.')
+                return
+            sweep()
+            live['fresh'] = store(directory).add_note(account, color=DEFAULT_NOTE_COLOR)
+            bump()
+            # A new memo is neither pinned nor attached, so a filter that hides it
+            # would answer 새 메모 with an unchanged screen.
+            state['filter'] = 'all'
+            board.refresh()
+
+        def pick(kind):
+            state['filter'] = kind or 'all'
+            sweep()
+            board.refresh()
+
+        def wall_head(title, icon):
+            with ui.element('div').classes('ma-wall__head'):
+                ui.icon(icon).style(f'color:{MUTED}')
+                ui.label(title)
+                ui.element('div').classes('ma-wall__rule')
+
+        @ui.refreshable
+        def board():
+            views = memo_views()
+            live['signature'] = note_signature(views)
+            counts = note_tally(views)
+            data = note_wall(views, state['filter'])
+            with ui.element('div').style('display:flex;gap:8px;align-items:center;'
+                                         'flex-wrap:wrap;margin-bottom:14px'):
+                ui.button('새 메모', icon='add', on_click=add) \
+                    .props('unelevated dense no-caps')
+                ui.space()
+                ui.toggle({kind: f'{name} {counts[kind]}' for kind, name in NOTE_FILTERS},
+                          value=state['filter'],
+                          on_change=lambda event: pick(event.value)) \
+                    .props('no-caps dense unelevated toggle-color=primary').classes('ma-seg')
+            if not views:
+                with card():
+                    empty('아직 메모가 없습니다. 메일도 일정도 할 일도 아닌 것 — 전화번호, '
+                          '양식이 있는 자리, 회의 중에 흘려 적은 한 줄을 여기에 둡니다.')
+            elif not data['pinned'] and not data['rest']:
+                with card():
+                    empty('이 조건에 맞는 메모가 없습니다.')
+            for title, icon, key in (('고정', 'push_pin', 'pinned'),
+                                     ('메모', 'sticky_note_2', 'rest')):
+                if not data[key]:
+                    continue
+                wall_head(title, icon)
+                # align-items:start, so a memo is as tall as what is written on it,
+                # and auto-fill rather than grid()'s own auto-fit: fit collapses the
+                # empty tracks, so a 고정 wall holding one memo drew it a metre wide
+                # above a 메모 wall of ordinary cards.
+                with grid(minimum=250, gap=12) \
+                        .style('align-items:start;margin-bottom:16px;'
+                               'grid-template-columns:repeat(auto-fill,minmax(250px,1fr))'):
+                    memo_cards(data[key], rebuild, live['fresh'], resync)
+            live['fresh'] = None
+
+        with page_shell('/memo'):
+            ui.label('메일도 일정도 할 일도 아닌 것을 적어두는 곳입니다. 입력을 멈추면 저장되고, '
+                     '메일에 붙인 메모는 그 메일을 열 때 같이 나옵니다. 압정을 누르면 '
+                     '대시보드에도 올라옵니다.').classes('ma-lede')
+            with ui.element('div').classes('ma-alert ma-alert--warn') \
+                    .style('margin-bottom:12px') as notice:
+                ui.icon('sticky_note_2').style('font-size:16px')
+                arrived = ui.label('').style('font-size:12px')
+                ui.space()
+                ui.button('새로 고침', icon='refresh', on_click=lambda: reload()) \
+                    .props('flat dense no-caps')
+            notice.set_visibility(False)
+
+            def reload():
+                notice.set_visibility(False)
+                board.refresh()
+
+            board()
+
+            def watch():
+                """Say that a memo changed elsewhere; never rebuild it from under the typist.
+
+                Every card here is a textarea somebody may be inside, which is the
+                same reason the 초안 화면 announces rather than refreshes. It is not
+                theory: the 메일 detail writes memos into this same table, and so does
+                a second window open on another screen.
+                """
+                views = memo_views()
+                signature = note_signature(views)
+                if signature == live['signature']:
+                    notice.set_visibility(False)
+                    return
+                if not live['signature']:
+                    board.refresh()     # an empty wall has nothing to lose
+                    return
+                arrived.set_text('다른 화면에서 메모가 바뀌었습니다.')
                 notice.set_visibility(True)
 
             ui.timer(REFRESH_SECONDS, watch)

@@ -46,7 +46,11 @@ from mail_assistant.webui import (CARD_TONES, DEFAULT_LIST, FONT_FILE, STATE_TON
                                   detail_events, event_error, event_kind, event_text,
                                   manual_rows,
                                   BRIEF_LINES, BRIEF_SECTIONS, BRIEF_WATCH, briefing_empty,
-                                  briefing_text, briefing_view, stale_text)
+                                  briefing_text, briefing_view, stale_text,
+                                  DEFAULT_NOTE_COLOR, NOTE_COLORS, NOTE_FILTERS,
+                                  PINNED_ON_HOME, keep_note, note_signature,
+                                  note_tally, note_tone, note_views, note_wall,
+                                  pinned_notes)
 
 CONFIG = {'host': 'pop3s.hiworks.com', 'port': 995, 'email': 'me@corp.example'}
 TODAY = datetime.date(2026, 9, 11)
@@ -1667,7 +1671,7 @@ class ServerTests(unittest.TestCase):
 
 
 class SidebarTests(unittest.TestCase):
-    """The nine destinations left the header band for a sidebar, and grew badges."""
+    """The destinations left the header band for a sidebar, and grew badges."""
 
     def test_every_page_is_in_exactly_one_group(self):
         listed = [path for _, paths in NAV_GROUPS for path in paths]
@@ -2303,6 +2307,111 @@ class BeamTests(unittest.TestCase):
         # two accents. One class, used once, and the frame it lives on is built outside
         # the refreshable so the lap is never restarted by a repaint.
         self.assertEqual(THEME.count('.ma-beam {'), 1)
+
+
+def note(ident, text='메모', color='yellow', pinned=0, mail_id='', updated='2026-09-11T01:00:00+00:00'):
+    return {'id': ident, 'text': text, 'color': color, 'pinned': pinned,
+            'mail_id': mail_id, 'created': updated, 'updated': updated}
+
+
+class NoteShapeTests(unittest.TestCase):
+    """메모. Everything the wall decides is decided here, where Linux can see it."""
+
+    def test_every_colour_key_is_unique_and_the_default_is_one_of_them(self):
+        keys = [key for key, _, _, _ in NOTE_COLORS]
+        self.assertEqual(len(keys), len(set(keys)))
+        self.assertIn(DEFAULT_NOTE_COLOR, keys)
+
+    def test_a_colour_the_app_no_longer_offers_reads_as_the_default(self):
+        """The value was written by a version of this app; the screen shows it."""
+        self.assertEqual(note_tone('teal'), note_tone(DEFAULT_NOTE_COLOR))
+        self.assertEqual(note_tone(''), note_tone(DEFAULT_NOTE_COLOR))
+
+    def test_every_colour_carries_a_ground_and_a_darker_edge(self):
+        for key, name, ground, edge in NOTE_COLORS:
+            with self.subTest(key):
+                self.assertTrue(name)
+                self.assertRegex(ground, r'^#[0-9a-f]{6}$')
+                self.assertRegex(edge, r'^#[0-9a-f]{6}$')
+                self.assertLess(int(edge[1:], 16), int(ground[1:], 16))
+
+    def test_a_view_carries_the_paper_and_the_mail_it_belongs_to(self):
+        view = note_views([note(1, mail_id='abc')], {'abc': '견적 요청'})[0]
+        self.assertEqual(view['subject'], '견적 요청')
+        self.assertEqual(view['mail'], 'abc')
+        self.assertEqual((view['ground'], view['edge']), note_tone('yellow'))
+
+    def test_a_memo_whose_mail_is_gone_keeps_its_text_and_loses_its_name(self):
+        view = note_views([note(1, mail_id='abc')], {})[0]
+        self.assertEqual(view['mail'], 'abc')
+        self.assertEqual(view['subject'], '')
+
+    def test_the_filters_are_the_same_list_the_counts_are_keyed_by(self):
+        views = note_views([note(1, pinned=1), note(2, mail_id='abc'), note(3)])
+        self.assertEqual(sorted(note_tally(views)),
+                         sorted(kind for kind, _ in NOTE_FILTERS))
+
+    def test_the_counts_are_what_each_filter_actually_keeps(self):
+        views = note_views([note(1, pinned=1, mail_id='abc'), note(2, mail_id='b'), note(3)])
+        counts = note_tally(views)
+        self.assertEqual(counts, {'all': 3, 'pin': 1, 'mail': 2})
+        for kind, _ in NOTE_FILTERS:
+            with self.subTest(kind):
+                self.assertEqual(counts[kind],
+                                 len([v for v in views if keep_note(v, kind)]))
+
+    def test_the_filter_runs_before_the_split_and_not_after(self):
+        """'고정' must not draw an empty 메모 wall under the pinned one."""
+        views = note_views([note(1, pinned=1), note(2), note(3)])
+        wall = note_wall(views, 'pin')
+        self.assertEqual([v['id'] for v in wall['pinned']], [1])
+        self.assertEqual(wall['rest'], [])
+
+    def test_no_filter_puts_every_memo_on_one_of_the_two_walls(self):
+        views = note_views([note(1, pinned=1), note(2), note(3, pinned=1)])
+        wall = note_wall(views)
+        self.assertEqual([v['id'] for v in wall['pinned']], [1, 3])
+        self.assertEqual([v['id'] for v in wall['rest']], [2])
+
+    def test_the_signature_moves_on_everything_the_wall_draws(self):
+        base = note_views([note(1, mail_id='abc')])
+        for changed in (note(1, text='다른 글', mail_id='abc'),
+                        note(1, color='blue', mail_id='abc'),
+                        note(1, pinned=1, mail_id='abc'),
+                        note(1, mail_id='def'),
+                        note(2, mail_id='abc')):
+            with self.subTest(changed['id']):
+                self.assertNotEqual(note_signature(base),
+                                    note_signature(note_views([changed])))
+
+    def test_the_signature_ignores_a_clock_the_wall_does_not_draw(self):
+        """A repaint costs whoever is typing their caret, so a stamp must not buy one."""
+        early = note_views([note(1, updated='2026-09-11T01:00:00+00:00')])
+        later = note_views([note(1, updated='2026-09-12T05:00:00+00:00')])
+        self.assertNotEqual(early[0]['when'], later[0]['when'])
+        self.assertEqual(note_signature(early), note_signature(later))
+
+    def test_the_dashboard_takes_the_pinned_ones_and_stops(self):
+        views = note_views([note(i, pinned=1) for i in range(1, 9)] + [note(99)])
+        chosen = pinned_notes(views)
+        self.assertEqual(len(chosen), PINNED_ON_HOME)
+        self.assertTrue(all(view['pinned'] for view in chosen))
+
+    def test_the_wall_reads_what_the_store_wrote(self):
+        with workspace() as directory:
+            store = Store(directory / 'mail.db')
+            account = account_key(CONFIG)
+            ident = store.add(account, 'uid-1', mail('견적 요청'))
+            store.add_note(account, '붙인 메모', 'green', ident)
+            kept = store.add_note(account, '고정한 메모', 'blue')
+            store.set_note_pinned(kept)
+            rows = list(store.notes(account))
+            views = note_views(rows, store.mail_subjects(r['mail_id'] for r in rows))
+            store.db.close()
+            wall = note_wall(views)
+            self.assertEqual([v['text'] for v in wall['pinned']], ['고정한 메모'])
+            self.assertEqual(wall['rest'][0]['subject'], '견적 요청')
+            self.assertEqual(wall['rest'][0]['ground'], note_tone('green')[0])
 
 
 if __name__ == '__main__':

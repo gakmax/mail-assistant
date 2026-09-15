@@ -6,7 +6,7 @@ desktop Excel workbook over COM. The window (`app.py`) reads from the database,
 not from the workbook: 현황·메일·일정·실행·설정 tabs over `mail.db` — those are the
 tkinter fallback's own tab names, and the web screens call the same first page
 대시보드. The same database also backs the NiceGUI screens in `webui.py`, opened with
-`MailAssistantTools.exe web` — nine pages on 127.0.0.1, sharing one `Hub`. Shipped as
+`MailAssistantTools.exe web` — ten pages on 127.0.0.1, sharing one `Hub`. Shipped as
 an unsigned Inno Setup installer built by GitHub Actions, with in-app updates from
 public GitHub Releases.
 
@@ -17,7 +17,7 @@ that break silently if you don't know them.
 ## Commands
 
 ```bash
-python -m unittest discover -s tests -v    # from the repo root; 500 tests, all platforms
+python -m unittest discover -s tests -v    # from the repo root; 558 tests, all platforms
 ```
 
 ```powershell
@@ -206,7 +206,7 @@ apart. Two of those rules exist because nicegui's own defaults fight the page:
 header band and stops a long log line wrapping, and every surface that stacks text
 (`.ma-card`, `.ma-sunken`, `.ma-note`) therefore declares `display:block`.
 
-**The nine destinations live in `PAGES`; `NAV_GROUPS` holds nothing but paths.**
+**The destinations live in `PAGES`; `NAV_GROUPS` holds nothing but paths.**
 `nav_rows()` takes the name and icon from the first and the order and grouping from the
 second, so a page added to `PAGES` and forgotten in `NAV_GROUPS` is reachable by URL and
 by nothing on screen — a test holds the two sets equal, the way `core.STATES` is held
@@ -300,6 +300,46 @@ replace it with whatever the database last saw — the same edit-eating the wind
 `draft_baseline` exists to stop. `watch()` compares the queue's ids and sets a notice
 label outside the refreshable; only an empty queue, which has nothing to lose,
 refreshes itself.
+
+**The 메모 화면 is that same rule, times the number of cards on it.** Every memo is a
+textarea somebody may be inside, so the `REFRESH_SECONDS` tick compares
+`note_signature()` — the columns the wall draws, deliberately *including* the text,
+because the 메일 detail writes into the same table — and only sets a notice. What does
+rebuild is 고정 and 삭제, which move or remove a card and so cannot be done in place;
+what is being typed survives them because clicking a button blurs the textarea first
+and Quasar flushes a debounced input on blur. **Colour is the exception and must stay
+one**: `recolor()` writes the new ground onto the element and swaps the `is-live`
+swatch by hand rather than refreshing, because a rebuild there would cost the text for
+a change that moves no card. `ui.notify` goes *before* the rebuild in every one of
+these handlers, for the reason 업데이트's 지금 확인 learned it.
+
+**A memo is `mail_id`, and that is the whole reason it is not a second 할 일 판.**
+The key is `chat.mail_id`'s exactly — a mail's id, or `''` for a free-standing note —
+which is what lets the 메일 detail carry the memos written about that mail and the
+메모 화면 filter to 메일에 붙임. `Store.delete()` therefore calls `detach_notes()`
+rather than deleting them: the analysis, the draft and the chat all came *from* the
+mail and go with it, but a memo is the user's own writing and dropping it because they
+dropped the mail is the same edit-eating the draft box is guarded against. The 삭제
+confirmation says so out loud. Subjects come from `Store.mail_subjects()`, one
+`IN (…)` shared with `rooms()`, so a memo on a deleted mail is simply absent from the
+map instead of a second answer.
+
+**'새 메모' inserts the row, and `delete_empty_notes()` is the other half.** The row
+has to exist before the card can be drawn with the caret in it (`autofocus` on the
+textarea, never a `run_method` after a `refresh()`), so changing your mind leaves a
+blank. It is swept the next time a wall is rebuilt for some other reason — never while
+it is on screen, and never on a timer — and the sweep uses sqlite's *two-argument*
+`trim`, because the one-argument form strips spaces only and a memo opened and left
+alone holds the newline the caret put there. `note_tally()` is not `note_counts()`:
+`build()` already has a local of that name feeding the sidebar cache, and a module
+function it shadows is a bug waiting for whoever calls it inside that scope.
+
+**메모 is the one page with no sidebar badge, on purpose.** `nav_counts()`' numbers are
+all 'what is left'; every memo is just a memo, so the count would never fall, and a
+number that never falls is one a reader stops seeing — the same arithmetic that keeps
+the 분석 실패 card absent rather than 0. The 메모 wall also overrides `grid()`'s
+`auto-fit` with `auto-fill`: fit collapses the empty tracks, so a 고정 wall holding one
+memo drew it the full width of the page above a 메모 wall of ordinary cards.
 
 **The 메일 detail is a dialog, and the list is repainted when it closes — if it
 changed anything.** Rebuilding the table is also what clears q-table's checkboxes, so

@@ -166,6 +166,11 @@ class Store:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, account TEXT NOT NULL,
                 text TEXT NOT NULL, state TEXT NOT NULL DEFAULT '',
                 due TEXT NOT NULL DEFAULT '', created TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS note (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, account TEXT NOT NULL,
+                mail_id TEXT NOT NULL DEFAULT '', text TEXT NOT NULL DEFAULT '',
+                color TEXT NOT NULL DEFAULT '', pinned INTEGER NOT NULL DEFAULT 0,
+                created TEXT NOT NULL, updated TEXT NOT NULL DEFAULT '');
             CREATE TABLE IF NOT EXISTS event (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, account TEXT NOT NULL,
                 title TEXT NOT NULL, start TEXT NOT NULL DEFAULT '',
@@ -368,6 +373,83 @@ class Store:
         with self.db:
             self.db.execute('DELETE FROM todo WHERE id=?', (ident,))
 
+    # 메모. What is neither a mail, a dated event nor a task: a phone number, where a
+    # template lives, a line caught in a meeting. `mail_id` is the same key chat uses —
+    # a mail's id, or '' for a free-standing note — and it is the whole reason this is
+    # not a second 할 일 판: a memo can belong to the mail it was written about.
+
+    def add_note(self, account, text='', color='', mail_id=''):
+        stamp = now()
+        with self.db:
+            cursor = self.db.execute(
+                'INSERT INTO note(account,mail_id,text,color,created,updated) '
+                'VALUES (?,?,?,?,?,?)', (account, mail_id, text, color, stamp, stamp))
+        return cursor.lastrowid
+
+    def notes(self, account, mail_id=None):
+        """Pinned first, then most recently written. `mail_id` narrows to one mail's.
+
+        `id DESC` is the last tie-break for the reason every mail list ends with rowid:
+        `now()` is a string off a Windows clock that ticks about every 15ms, so notes
+        written in one burst share a stamp and the order would otherwise be sqlite's
+        to choose again on every call.
+        """
+        where, params = ['account=?'], [account]
+        if mail_id is not None:
+            where.append('mail_id=?')
+            params.append(mail_id)
+        return self.db.execute(
+            'SELECT id, mail_id, text, color, pinned, created, updated FROM note '
+            f"WHERE {' AND '.join(where)} ORDER BY pinned DESC, updated DESC, id DESC",
+            params).fetchall()
+
+    def set_note_text(self, ident, text):
+        """Only the text moves `updated`: the wall is ordered by when it was written."""
+        with self.db:
+            self.db.execute('UPDATE note SET text=?, updated=? WHERE id=?',
+                            (text, now(), ident))
+
+    def set_note_color(self, ident, color):
+        with self.db:
+            self.db.execute('UPDATE note SET color=? WHERE id=?', (color, ident))
+
+    def set_note_pinned(self, ident, pinned=True):
+        with self.db:
+            self.db.execute('UPDATE note SET pinned=? WHERE id=?',
+                            (1 if pinned else 0, ident))
+
+    def delete_note(self, ident):
+        with self.db:
+            self.db.execute('DELETE FROM note WHERE id=?', (ident,))
+
+    def delete_empty_notes(self, account, keep=None):
+        """Sweep memos nothing was ever written in.
+
+        '새 메모' inserts the row so the card can appear and take the caret at once,
+        which means a blank one is what 'clicked it and changed my mind' leaves
+        behind. It is swept the next time the wall is rebuilt for some other reason,
+        never while it is on screen — there is nothing in it to lose.
+        """
+        # Two-argument trim: the one-argument form strips spaces only, and a memo
+        # opened and left alone holds whatever newline the caret put there.
+        with self.db:
+            self.db.execute(
+                "DELETE FROM note WHERE account=? AND id IS NOT ? "
+                "AND trim(text, ' ' || char(9) || char(10) || char(13))=''",
+                (account, keep))
+
+    def detach_notes(self, ids):
+        """Cut memos loose from mail that is being deleted, rather than deleting them.
+
+        The analysis, the draft and the chat all came from the mail and go with it; a
+        memo is the user's own writing about it, and throwing that away because they
+        threw the mail away is the same edit-eating the draft box is guarded against.
+        The note survives as a free-standing one, which is what `mail_id=''` means.
+        """
+        with self.db:
+            self.db.executemany("UPDATE note SET mail_id='' WHERE mail_id=?",
+                                ((i,) for i in ids))
+
     # 직접 추가한 일정. Analysis produces the rest, and a mailbox that never mentions
     # a date cannot be made to: this is the one way a person puts one on the calendar.
     # It is a table rather than a column because it belongs to no mail.
@@ -474,12 +556,23 @@ class Store:
         found.setdefault('', {'key': '', 'turns': 0, 'at': '', 'role': '', 'last': ''})
         # Subjects for the mail threads, in one query rather than one per row.
         wanted = [key for key in found if key and not key.startswith(ROOM_MARK)]
-        if wanted:
-            marks = ','.join('?' * len(wanted))
-            for row in self.db.execute(f'SELECT id, subject FROM mail WHERE id IN ({marks})',
-                                       wanted).fetchall():
-                found[row['id']]['name'] = row['subject']
+        for ident, subject in self.mail_subjects(wanted).items():
+            found[ident]['name'] = subject
         return sorted(found.values(), key=lambda row: row['at'], reverse=True)
+
+    def mail_subjects(self, ids):
+        """{id: subject}, in one IN (…) rather than one query per row.
+
+        Both 상담 and 메모 hang their own rows off a mail id and both need the subject
+        to name it on screen; one query shape means the two cannot answer differently
+        for a mail that has since been deleted — it is simply absent from the map.
+        """
+        wanted = [ident for ident in dict.fromkeys(ids) if ident]
+        if not wanted:
+            return {}
+        marks = ','.join('?' * len(wanted))
+        return {row['id']: row['subject'] for row in self.db.execute(
+            f'SELECT id, subject FROM mail WHERE id IN ({marks})', wanted).fetchall()}
 
     def set_handled_many(self, ids, state):
         with self.db:
@@ -495,8 +588,10 @@ class Store:
         `seen` keeps the uid on purpose: the mail is still on the POP3 server, and
         forgetting it would collect and analyse the very mail the user just threw away
         on the next poll. Rows already written to the workbook stay there — this
-        database is not what Excel reads.
+        database is not what Excel reads. Memos are cut loose rather than dropped —
+        see detach_notes().
         """
+        self.detach_notes(ids)
         with self.db:
             self.db.executemany('DELETE FROM mail WHERE id=?', ((i,) for i in ids))
             self.db.executemany('DELETE FROM chat WHERE mail_id=?', ((i,) for i in ids))
