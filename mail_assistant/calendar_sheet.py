@@ -48,6 +48,20 @@ def parse_day(value):
     return day, clock.group(1) if clock else ''
 
 
+def plain_title(label):
+    """An entry label without the marker collect() puts on the front of it.
+
+    Kept beside MARKERS rather than in a screen: ■/▶/◆ are how an Excel cell says
+    마감·시작·확인 필요 in one colour of text, and everything that is not that cell —
+    the web panels, the tooltip, the briefing payload — draws the kind some other way
+    and would otherwise say it twice.
+    """
+    text = str(label or '')
+    if text[:1] in MARKERS.values():
+        text = text[1:].lstrip()
+    return text
+
+
 def collect(rows, first_row=2):
     """일정 rows -> {date: [Entry]}, sorted by time inside each day.
 

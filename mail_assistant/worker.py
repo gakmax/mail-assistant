@@ -1,10 +1,15 @@
 import json
 import time
+from datetime import date, datetime
 
 from .core import Store, account_key, now
 from .excel import Excel, error_detail
+from .overview import briefing_due, briefing_input, trend
 from .report import remember_secret, report
-from .services import analyze, check_login, fetch_mail, read_password
+from .services import analyze, briefing, check_login, fetch_mail, read_password
+
+# A failed briefing waits this long, rather than retrying on every 180-second cycle.
+BRIEF_BACKOFF = 1800
 
 
 def connect_detail(exc, password):
@@ -15,11 +20,20 @@ def connect_detail(exc, password):
     return detail[:300]
 
 
+def write_briefing(store, account, config, today):
+    """Build the day's briefing and store it. Called only when briefing_due() agrees."""
+    payload = briefing_input(store.page(account), today,
+                             events=store.events(account),
+                             trend_rows=trend(store, account, today))
+    store.save_briefing(account, today.isoformat(), briefing(payload, config))
+
+
 def run(config, directory, stop, notify, wake=None):
     store = Store(directory / 'mail.db')
     account = account_key(config)
     excel = Excel(config['workbook'])
     next_analysis = 0
+    next_briefing = 0
     # A crash mid-analysis leaves the marker behind, and a mail stuck on '분석 중' is
     # a lie the screens have no way to notice. Every start clears it.
     store.mark_analyzing(account, '')
@@ -86,6 +100,28 @@ def run(config, directory, stop, notify, wake=None):
             except Exception as exc:
                 report('엑셀 반영 실패', exc, f'대기 {len(waiting)}건')
                 messages.append('엑셀 반영 대기: ' + error_detail(exc))
+            # Last in the cycle, and only with the analysis queue empty: this shares the
+            # one Codex slot with analyze(), and the morning's mail is what that slot
+            # is for. The date stamp in meta is what makes it daily rather than a
+            # scheduler — the loop already wakes every `interval`.
+            today = date.today()
+            asked = store.get_meta('briefing_ask:' + account) == '1'
+            if asked:
+                # Cleared before the attempt: a request that fails must not re-fire
+                # every half hour for ever with nobody having asked again.
+                store.set_meta('briefing_ask:' + account, '')
+            if (counts['total'] and time.time() >= next_briefing and not stop.is_set()
+                    and briefing_due(store.get_meta('briefing:' + account), today,
+                                     datetime.now().hour, counts['pending'], asked)):
+                try:
+                    notify('오늘의 AI 브리핑을 만드는 중입니다.')
+                    write_briefing(store, account, config, today)
+                    store.set_meta('briefing:' + account, today.isoformat())
+                    messages.append('AI 브리핑을 새로 만들었습니다.')
+                except Exception as exc:
+                    report('브리핑 생성 실패', exc)
+                    next_briefing = time.time() + BRIEF_BACKOFF
+                    messages.append(f'AI 브리핑 실패: 약 {BRIEF_BACKOFF // 60}분 후 다시 시도합니다.')
             snapshot = {**status, **store.counts(account), 'message': ' / '.join(messages)}
             (directory / 'status.json').write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding='utf-8')
             notify(snapshot['message'])

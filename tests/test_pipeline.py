@@ -1731,9 +1731,11 @@ class WorkerTests(unittest.TestCase):
             store.analyzed(ident, parse_mail(mail()), RESULT)
             store.db.close()
             stop = MagicMock()
-            stop.is_set.side_effect = [False, True]
+            # One pass through the loop. The briefing check at the end of the cycle
+            # asks as well, which is why this is three and not two.
+            stop.is_set.side_effect = [False, False, True]
             messages = []
-            with patch('mail_assistant.worker.fetch_mail', return_value='새 메일 0건 수집'), patch('mail_assistant.worker.read_password', return_value='test'), patch('mail_assistant.worker.Excel') as excel:
+            with patch('mail_assistant.worker.fetch_mail', return_value='새 메일 0건 수집'), patch('mail_assistant.worker.read_password', return_value='test'), patch('mail_assistant.worker.write_briefing'), patch('mail_assistant.worker.Excel') as excel:
                 excel.return_value.update.side_effect = ExcelUpdateError('표 만들기', RuntimeError('invalid argument'))
                 run({**CONFIG, 'workbook': str(directory / 'test.xlsx'), 'interval': 180}, directory, stop, messages.append)
             self.assertIn('표 만들기', messages[-1])

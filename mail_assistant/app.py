@@ -91,7 +91,14 @@ class App:
             self.log(f'목록을 읽지 못했습니다: {type(exc).__name__}: {exc}')
             self.rows = []
         self.views = [row_view(row) for row in self.rows]
-        self.data = overview(self.rows, date.today())
+        try:
+            # 직접 추가한 일정 belong to the account, not to a mail, and the web 일정
+            # 화면 is the only place that can add one. The fallback still has to draw
+            # them, or the two windows disagree about what is on the calendar.
+            events = list(self.store().events(account)) if account else []
+        except Exception:
+            events = []
+        self.data = overview(self.rows, date.today(), events=events)
         self.refresh_stamps()
         self.paint_overview()
         self.paint_list()

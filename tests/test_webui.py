@@ -1,5 +1,6 @@
 """The web 현황 screen's shaping, which needs no nicegui and so runs on every platform."""
 import datetime
+import re
 import socket
 import tempfile
 import types
@@ -9,16 +10,20 @@ from contextlib import contextmanager
 from email.message import EmailMessage
 from pathlib import Path
 
-from mail_assistant.core import (ANALYZING, FAILED, HANDLED, PROGRESS, SORTS, Store,
-                                 account_key)
+from mail_assistant.core import (ANALYZING, EVENT_MARK, FAILED, HANDLED, PROGRESS, SORTS,
+                                 Store, account_key, event_key, event_row_id, is_event_key)
 from mail_assistant.dashboard import PRIORITIES
 from mail_assistant.calendar_sheet import MARKERS
 from mail_assistant.hub import Hub
-from mail_assistant.overview import DUE_DAYS, due_window, failures, oldest_open, overview
+from mail_assistant.overview import (BRIEF_DRAFTS, BRIEF_EVENTS, BRIEF_HOUR, BRIEF_OPEN,
+                                     BRIEF_TEXT, DUE_DAYS, briefing_due, briefing_input,
+                                     due_window, failures, oldest_open, overview)
 from mail_assistant.webui import (CARD_TONES, DEFAULT_LIST, FONT_FILE, STATE_TONES, STATUS,
                                   THEME, TREND_LABELS,
-                                  NAV_BADGE_MAX, NAV_GROUPS, PAGES, SIDE_BREAK, SIDE_RAIL,
+                                  NAV_BADGE_MAX, NAV_GROUPS, PAGES, RAIL_BOOT, RAIL_KEY,
+                                  RAIL_TOGGLE, SIDE_BREAK, SIDE_RAIL,
                                   SIDE_WIDE, badge_text, bar_status, nav_counts, nav_rows,
+                                  rail_css,
                                   update_pill,
                                   bar_option, bar_rows, card_icon, deadline_rows,
                                   detail_view, href, list_state, listing, new_token, open_port,
@@ -36,7 +41,12 @@ from mail_assistant.webui import (CARD_TONES, DEFAULT_LIST, FONT_FILE, STATE_TON
                                   KIND_ICONS, event_title, reanalyze_text, today_rows,
                                   GENERAL_ROOM, NEW_ROOM, ROOM_ICONS, ROOM_PREVIEW_MAX,
                                   ROOM_TITLE_MAX, room_preview, room_rows, room_search,
-                                  room_title)
+                                  room_title,
+                                  ANALYSIS_PARTS, EVENT_HINT, PART_TONES, analysis_blocks,
+                                  detail_events, event_error, event_kind, event_text,
+                                  manual_rows,
+                                  BRIEF_LINES, BRIEF_SECTIONS, BRIEF_WATCH, briefing_empty,
+                                  briefing_text, briefing_view, stale_text)
 
 CONFIG = {'host': 'pop3s.hiworks.com', 'port': 995, 'email': 'me@corp.example'}
 TODAY = datetime.date(2026, 9, 11)
@@ -1695,6 +1705,53 @@ class SidebarTests(unittest.TestCase):
         self.assertIn(f'@media (max-width:{SIDE_BREAK - 1}px)', THEME)
 
 
+class RailTests(unittest.TestCase):
+    """접기: the same rail the breakpoint draws, asked for rather than imposed."""
+
+    def rules(self, scope='html.ma-rail'):
+        """The rail as {selector: declarations}, comments dropped."""
+        css = re.sub(r'/\*.*?\*/', '', rail_css(scope), flags=re.S)
+        return {block.split('{')[0].strip(): block.split('{')[1]
+                for block in css.split('}') if '{' in block}
+
+    def test_every_rule_is_scoped_to_what_it_was_asked_for(self):
+        for selector in self.rules():
+            self.assertTrue(selector.startswith('html.ma-rail '), selector)
+
+    def test_the_two_ways_in_draw_one_rail(self):
+        chosen = rail_css('html.ma-rail')
+        narrow = rail_css('html:not(.ma-wide)')
+        self.assertEqual(chosen.replace('html.ma-rail', '#'),
+                         narrow.replace('html:not(.ma-wide)', '#'))
+
+    def test_the_stylesheet_carries_the_choice_and_the_breakpoint(self):
+        self.assertIn(rail_css('html.ma-rail'), THEME)
+        self.assertIn(rail_css('html:not(.ma-wide)'), THEME)
+
+    def test_the_rail_hides_the_label_and_keeps_the_count(self):
+        hidden = ' '.join(selector for selector, rule in self.rules().items()
+                          if 'display:none' in rule)
+        self.assertIn('.ma-side__label', hidden)
+        self.assertNotIn('.ma-badge', hidden)
+        # A count that became a dot would be the notification the badge is there for,
+        # with the number the reader asked for taken back out.
+        self.assertNotIn('font-size:0', self.rules()['html.ma-rail .ma-badge'])
+
+    def test_the_name_survives_the_label_as_the_rows_own_tooltip(self):
+        self.assertIn('content:attr(data-name)', rail_css('html.ma-rail'))
+
+    def test_the_toggle_and_the_boot_script_agree_on_where_the_choice_is_kept(self):
+        for script in (RAIL_BOOT, RAIL_TOGGLE):
+            self.assertIn(f"'{RAIL_KEY}'", script)
+            self.assertIn('localStorage', script)
+
+    def test_the_toggle_asks_the_same_breakpoint_the_stylesheet_does(self):
+        self.assertIn(f'(max-width:{SIDE_BREAK - 1}px)', RAIL_TOGGLE)
+
+    def test_pressing_it_never_reaches_the_server(self):
+        self.assertNotIn('emit(', RAIL_TOGGLE)
+
+
 class BadgeTests(unittest.TestCase):
     def test_nothing_to_say_draws_no_badge(self):
         for value in (0, None, '', -3):
@@ -1810,6 +1867,442 @@ class UpdatePillTests(unittest.TestCase):
     def test_an_offer_names_the_version_and_nothing_else(self):
         self.assertEqual(update_pill({'version': '0.5.1', 'size': 42_000_000}),
                          '새 버전 0.5.1')
+
+
+
+class AnalysisBlockTests(unittest.TestCase):
+    """분석 결과's parts: reading order, nothing empty, accent only where it means something."""
+
+    VIEW = {'summary': '요약문', 'requests': '등록해 주세요',
+            'reason': '3일 뒤 행사', 'action': '사전등록하세요'}
+
+    def test_every_part_is_drawn_in_reading_order(self):
+        self.assertEqual([part['key'] for part in analysis_blocks(self.VIEW)],
+                         ['summary', 'requests', 'reason', 'action'])
+
+    def test_an_empty_part_is_not_drawn_at_all(self):
+        view = dict(self.VIEW, requests='', reason='   ')
+        self.assertEqual([part['key'] for part in analysis_blocks(view)],
+                         ['summary', 'action'])
+
+    def test_an_unanalysed_mail_has_no_parts(self):
+        self.assertEqual(analysis_blocks({}), [])
+
+    def test_only_the_two_parts_a_reader_must_act_on_carry_an_accent(self):
+        accents = {part['key']: part['accent'] for part in analysis_blocks(self.VIEW)}
+        self.assertEqual(accents, {'summary': None, 'requests': 'brand',
+                                   'reason': None, 'action': 'ok'})
+
+    def test_every_accent_the_parts_name_has_a_colour(self):
+        for _, _, _, accent in ANALYSIS_PARTS:
+            self.assertIn(accent, PART_TONES)
+
+
+class DetailEventTests(unittest.TestCase):
+    """The mail's 일정 cards: the calendar's own kind, and why one is not on it."""
+
+    def test_a_deadline_is_마감_and_a_bare_start_is_시작(self):
+        self.assertEqual(event_kind({'start': '', 'deadline': '2026-09-20'}), '마감')
+        self.assertEqual(event_kind({'start': '2026-09-20', 'deadline': ''}), '시작')
+
+    def test_needs_review_wins_over_a_date_that_parsed(self):
+        self.assertEqual(event_kind({'start': '', 'deadline': '2026-09-20',
+                                     'needs_review': True}), '확인 필요')
+
+    def test_an_event_with_no_readable_date_is_확인_필요(self):
+        self.assertEqual(event_kind({'start': '', 'deadline': ''}), '확인 필요')
+        self.assertEqual(event_kind({'start': '다음 주 화요일', 'deadline': ''}), '확인 필요')
+
+    def test_the_card_says_when_the_calendar_cannot_show_it(self):
+        shaped = detail_events([{'title': '사전등록', 'start': '', 'deadline': '',
+                                 'evidence': '링크', 'needs_review': True},
+                                {'title': '웨비나', 'start': '2026-09-17T14:00',
+                                 'deadline': '', 'evidence': '', 'needs_review': False}])
+        self.assertFalse(shaped[0]['on_calendar'])
+        self.assertTrue(shaped[1]['on_calendar'])
+        self.assertEqual(shaped[1]['start'], '2026-09-17 14:00')
+        self.assertEqual(shaped[0]['deadline'], '—')
+
+    def test_a_kindless_event_still_has_an_icon_and_a_colour(self):
+        for event in detail_events([{'title': 'x', 'start': '', 'deadline': ''}]):
+            self.assertIn(event['kind'], KIND_ICONS)
+
+
+class ManualEventTests(unittest.TestCase):
+    """직접 추가한 일정: stored on their own, drawn beside the analysed ones."""
+
+    def test_a_key_carries_the_mark_and_reads_back(self):
+        self.assertTrue(is_event_key(event_key(7)))
+        self.assertEqual(event_row_id(event_key(7)), 7)
+
+    def test_a_mail_id_is_never_mistaken_for_one(self):
+        ident = 'a1b2c3d4e5f60718293a4b5c'          # 24 hex, which is what a mail id is
+        self.assertFalse(is_event_key(ident))
+        self.assertIsNone(event_row_id(ident))
+        self.assertNotIn(EVENT_MARK, ident)
+
+    def test_a_manual_event_lands_on_the_calendar_beside_the_analysed_ones(self):
+        with workspace() as folder:
+            store = Store(folder / 'mail.db')
+            account = account_key(CONFIG)
+            ident = store.add(account, 'uid-1', mail())
+            store.analyzed(ident, {'sender': 'a@b.c', 'subject': '제목', 'attachments': []},
+                           result(deadline='2026-09-14'))
+            store.add_event(account, '팀 회고', '', '2026-09-12', '매달 둘째 주')
+            rows = list(store.page(account))
+            data = overview(rows, TODAY, events=list(store.events(account)))
+            titles = [entry.mail_id for day in data['events'] for entry in data['events'][day]]
+            self.assertTrue(any(is_event_key(key) for key in titles))
+            self.assertEqual(data['cards'][f'{DUE_DAYS}일 내 마감'], 2)
+            store.db.close()
+
+    def test_ticking_a_manual_deadline_marks_its_own_row(self):
+        with workspace() as folder:
+            store = Store(folder / 'mail.db')
+            account = account_key(CONFIG)
+            row = store.add_event(account, '팀 회고', '', '2026-09-12')
+            store.set_event_handled(row, HANDLED)
+            data = overview([], TODAY, events=list(store.events(account)))
+            self.assertIn(event_key(row), data['handled'])
+            self.assertEqual(data['cards'][f'{DUE_DAYS}일 내 마감'], 0)
+            # The checklist keeps what the card drops, so the row is still there, done.
+            self.assertEqual([row['done'] for row in deadline_rows(data, TODAY)], [True])
+            store.db.close()
+
+    def test_a_manual_row_is_marked_so_no_panel_links_it_to_a_mail(self):
+        with workspace() as folder:
+            store = Store(folder / 'mail.db')
+            account = account_key(CONFIG)
+            store.add_event(account, '팀 회고', '2026-09-11', '2026-09-11')
+            data = overview([], TODAY, events=list(store.events(account)))
+            self.assertTrue(all(row['manual'] for row in deadline_rows(data, TODAY)))
+            self.assertTrue(all(row['manual']
+                                for row in today_rows(data['events'], TODAY, data['handled'])))
+            self.assertTrue(all(event['extendedProps']['manual']
+                                for event in calendar_events(data['events'], TODAY)))
+            store.db.close()
+
+    def test_an_analysed_event_is_not_marked_manual(self):
+        with workspace() as folder:
+            store = Store(folder / 'mail.db')
+            account = account_key(CONFIG)
+            ident = store.add(account, 'uid-1', mail())
+            store.analyzed(ident, {'sender': 'a@b.c', 'subject': '제목', 'attachments': []},
+                           result(deadline='2026-09-14'))
+            data = overview(list(store.page(account)), TODAY)
+            self.assertTrue(all(not event['extendedProps']['manual']
+                                for event in calendar_events(data['events'], TODAY)))
+            store.db.close()
+
+    def test_a_deleted_event_leaves_the_calendar(self):
+        with workspace() as folder:
+            store = Store(folder / 'mail.db')
+            account = account_key(CONFIG)
+            row = store.add_event(account, '팀 회고', '', '2026-09-12')
+            store.delete_event(row)
+            self.assertEqual(list(store.events(account)), [])
+            store.db.close()
+
+    def test_a_titleless_event_never_reaches_the_grid(self):
+        with workspace() as folder:
+            store = Store(folder / 'mail.db')
+            account = account_key(CONFIG)
+            store.add_event(account, '   ', '', '2026-09-12')
+            self.assertEqual(overview([], TODAY, events=list(store.events(account)))['events'], {})
+            store.db.close()
+
+    def test_the_panel_lists_newest_first_and_says_what_is_done(self):
+        with workspace() as folder:
+            store = Store(folder / 'mail.db')
+            account = account_key(CONFIG)
+            first = store.add_event(account, '먼저', '', '2026-09-12')
+            store.add_event(account, '나중', '2026-09-13 09:30', '')
+            store.set_event_handled(first, HANDLED)
+            rows = manual_rows(store.events(account))
+            self.assertEqual([row['title'] for row in rows], ['나중', '먼저'])
+            self.assertEqual(rows[0]['start'], '2026-09-13 09:30')
+            self.assertEqual(rows[0]['deadline'], '—')
+            self.assertTrue(rows[1]['done'])
+            store.db.close()
+
+
+class EventErrorTests(unittest.TestCase):
+    """An event saved with an unreadable date would appear on no calendar and say nothing."""
+
+    def test_a_good_event_has_nothing_to_say(self):
+        self.assertEqual(event_error('팀 회고', '', '2026-09-12'), '')
+        self.assertEqual(event_error('팀 회고', '2026-09-12 15:00', ''), '')
+
+    def test_a_missing_title_is_refused_first(self):
+        self.assertIn('제목', event_error('  ', '', '엉터리'))
+
+    def test_an_unreadable_date_names_the_field_and_the_format(self):
+        problem = event_error('팀 회고', '다음 주 화요일', '')
+        self.assertIn('시작', problem)
+        self.assertIn(EVENT_HINT, problem)
+        self.assertIn('마감', event_error('팀 회고', '', '9/12'))
+
+    def test_an_event_with_no_date_at_all_is_refused(self):
+        self.assertIn('달력', event_error('팀 회고', '', ''))
+
+    def test_event_text_never_pretends_to_have_a_date(self):
+        self.assertEqual(event_text(''), '—')
+        self.assertEqual(event_text('내일'), '—')
+        self.assertEqual(event_text('2026-09-17T14:00:00+09:00'), '2026-09-17 14:00')
+
+
+class BriefingInputTests(unittest.TestCase):
+    """What 오늘의 AI 브리핑 sends. Analysed answers and counts, never a mail body."""
+
+    BODY = '이 문장은 본문에만 있습니다'
+
+    def rows(self, folder, count=3):
+        store = Store(Path(folder) / 'mail.db')
+        account = account_key(CONFIG)
+        for index in range(count):
+            message = EmailMessage()
+            message['From'] = 'a@b.c'
+            message['Subject'] = f'제목 {index}'
+            message['Date'] = 'Fri, 11 Sep 2026 10:00:00 +0900'
+            message.set_content(self.BODY)
+            ident = store.add(account, f'uid-{index}', message.as_bytes())
+            store.analyzed(ident, {'sender': 'a@b.c', 'subject': f'제목 {index}',
+                                   'attachments': [], 'body': self.BODY},
+                           result('긴급' if index else '낮음', '2026-09-13', True))
+        return store
+
+    def payload(self, store):
+        return briefing_input(list(store.page(account_key(CONFIG))), TODAY)
+
+    def test_no_mail_body_ever_reaches_the_payload(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.rows(folder)
+            import json
+            self.assertNotIn(self.BODY, json.dumps(self.payload(store), ensure_ascii=False))
+            store.db.close()
+
+    def test_the_urgent_mail_is_read_out_before_the_rest(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.rows(folder)
+            priorities = [row['priority'] for row in self.payload(store)['open_mail']]
+            self.assertEqual(priorities[0], '긴급')
+            self.assertEqual(priorities[-1], '낮음')
+            store.db.close()
+
+    def test_a_long_field_is_clipped_rather_than_sent_whole(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            account = account_key(CONFIG)
+            ident = store.add(account, 'uid-1', mail())
+            verdict = {**result(), 'requests': '가' * 900}
+            store.analyzed(ident, {'sender': 'a@b.c', 'subject': '제목', 'attachments': []},
+                           verdict)
+            sent = briefing_input(list(store.page(account)), TODAY)['open_mail'][0]
+            self.assertLessEqual(len(sent['requests']), BRIEF_TEXT + 1)
+            self.assertTrue(sent['requests'].endswith('…'))
+            store.db.close()
+
+    def test_what_was_cut_is_said_rather_than_implied(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.rows(folder, count=BRIEF_OPEN + 4)
+            cut = self.payload(store)['truncated']['open_mail']
+            self.assertEqual(cut, {'shown': BRIEF_OPEN, 'total': BRIEF_OPEN + 4})
+            store.db.close()
+
+    def test_every_list_stays_inside_its_cap(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.rows(folder, count=BRIEF_OPEN + 4)
+            sent = self.payload(store)
+            self.assertLessEqual(len(sent['open_mail']), BRIEF_OPEN)
+            self.assertLessEqual(len(sent['deadlines']), BRIEF_EVENTS)
+            self.assertLessEqual(len(sent['unedited_drafts']), BRIEF_DRAFTS)
+            store.db.close()
+
+    def test_a_deadline_carries_no_excel_marker(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.rows(folder)
+            for entry in self.payload(store)['deadlines']:
+                self.assertNotIn(entry['title'][:1], MARKERS.values())
+            store.db.close()
+
+    def test_a_handled_mail_is_not_in_the_briefing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.rows(folder)
+            account = account_key(CONFIG)
+            done = list(store.page(account))[0]['id']
+            store.set_handled(done, HANDLED)
+            sent = self.payload(store)
+            self.assertNotIn(done, [row['mail_id'] for row in sent['open_mail']])
+            store.db.close()
+
+    def test_an_empty_mailbox_still_produces_a_shape(self):
+        sent = briefing_input([], TODAY)
+        self.assertEqual(sent['open_mail'], [])
+        self.assertEqual(sent['truncated']['open_mail'], {'shown': 0, 'total': 0})
+
+
+class BriefingDueTests(unittest.TestCase):
+    """분석 대기가 이기고, 아침 이후 하루 한 번. 버튼만 시각을 건너뛴다."""
+
+    DAY = TODAY.isoformat()
+
+    def test_analysis_always_wins_the_codex_slot(self):
+        self.assertFalse(briefing_due('', TODAY, 11, pending=2))
+        self.assertFalse(briefing_due('', TODAY, 11, pending=2, asked=True))
+
+    def test_nothing_before_the_morning_hour(self):
+        self.assertFalse(briefing_due('', TODAY, BRIEF_HOUR - 1, pending=0))
+        self.assertTrue(briefing_due('', TODAY, BRIEF_HOUR, pending=0))
+
+    def test_the_stamp_is_what_makes_it_once_a_day(self):
+        self.assertFalse(briefing_due(self.DAY, TODAY, 11, pending=0))
+        self.assertTrue(briefing_due('2026-09-10', TODAY, 11, pending=0))
+
+    def test_the_button_skips_the_clock_and_the_stamp(self):
+        self.assertTrue(briefing_due(self.DAY, TODAY, 3, pending=0, asked=True))
+
+
+class BriefingViewTests(unittest.TestCase):
+    """A stored briefing as the card reads it, and every way it can be unreadable."""
+
+    STORED = {'headline': '긴급 2건이 남았습니다.',
+              'sections': [{'title': '지난 마감', 'lines': ['A사 견적 회신이 6일 지났습니다.']},
+                           {'title': '오늘', 'lines': ['', '  ']}],
+              'watch': [{'mail_id': 'a' * 24, 'reason': 'A사 견적'},
+                        {'mail_id': event_key(3), 'reason': '직접 추가'},
+                        {'mail_id': '', 'reason': '없음'}]}
+
+    def stored(self, folder, day=None, data=None):
+        store = Store(Path(folder) / 'mail.db')
+        store.save_briefing(account_key(CONFIG), day or TODAY.isoformat(),
+                            self.STORED if data is None else data)
+        return store
+
+    def test_nothing_stored_draws_nothing(self):
+        view = briefing_view(None, TODAY)
+        self.assertFalse(view['has'])
+        self.assertEqual(view['sections'], [])
+
+    def test_the_stored_briefing_comes_back_whole(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.stored(folder)
+            view = briefing_view(store.briefing(account_key(CONFIG)), TODAY)
+            self.assertTrue(view['has'])
+            self.assertEqual(view['headline'], self.STORED['headline'])
+            self.assertFalse(view['stale'])
+            store.db.close()
+
+    def test_a_section_with_nothing_in_it_is_dropped(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.stored(folder)
+            view = briefing_view(store.briefing(account_key(CONFIG)), TODAY)
+            self.assertEqual([part['title'] for part in view['sections']], ['지난 마감'])
+            store.db.close()
+
+    def test_a_pin_with_no_mail_behind_it_is_not_drawn(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.stored(folder)
+            view = briefing_view(store.briefing(account_key(CONFIG)), TODAY)
+            self.assertEqual([pin['mail_id'] for pin in view['watch']], ['a' * 24])
+            store.db.close()
+
+    def test_yesterday_says_so_rather_than_passing_as_today(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.stored(folder, day='2026-09-09')
+            view = briefing_view(store.briefing(account_key(CONFIG)), TODAY)
+            self.assertTrue(view['stale'])
+            self.assertIn('9월 9일', view['stamp'])
+            self.assertIn('2일 전', stale_text(view, TODAY))
+            store.db.close()
+
+    def test_the_stamp_never_goes_through_a_korean_strftime(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.stored(folder)
+            view = briefing_view(store.briefing(account_key(CONFIG)), TODAY)
+            self.assertIn('기준', view['stamp'])
+            store.db.close()
+
+    def test_unreadable_stored_text_is_an_empty_card_and_not_a_crash(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            account = account_key(CONFIG)
+            store.db.execute('INSERT OR REPLACE INTO briefing VALUES (?,?,?,?)',
+                             (account, TODAY.isoformat(), '2026-09-11T09:00:00+09:00', '{'))
+            store.db.commit()
+            self.assertFalse(briefing_view(store.briefing(account), TODAY)['has'])
+            store.db.close()
+
+    def test_a_long_answer_is_cut_to_what_the_card_can_hold(self):
+        data = {'headline': 'x',
+                'sections': [{'title': f'{index}', 'lines': [f'{n}' for n in range(20)]}
+                             for index in range(9)],
+                'watch': [{'mail_id': f'{index:024d}', 'reason': 'r'} for index in range(9)]}
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.stored(folder, data=data)
+            view = briefing_view(store.briefing(account_key(CONFIG)), TODAY)
+            self.assertEqual(len(view['sections']), BRIEF_SECTIONS)
+            self.assertEqual(len(view['sections'][0]['lines']), BRIEF_LINES)
+            self.assertEqual(len(view['watch']), BRIEF_WATCH)
+            store.db.close()
+
+    def test_only_the_newest_day_is_offered(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            account = account_key(CONFIG)
+            for day in ('2026-09-09', '2026-09-11', '2026-09-10'):
+                store.save_briefing(account, day, {**self.STORED, 'headline': day})
+            self.assertEqual(store.briefing(account)['day'], '2026-09-11')
+            store.db.close()
+
+    def test_old_briefings_are_dropped_rather_than_kept_for_ever(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            account = account_key(CONFIG)
+            for index in range(Store.BRIEF_KEEP + 5):
+                store.save_briefing(account, f'2026-01-{index + 1:02d}', self.STORED)
+            kept = store.db.execute('SELECT COUNT(*) FROM briefing WHERE account=?',
+                                    (account,)).fetchone()[0]
+            self.assertEqual(kept, Store.BRIEF_KEEP)
+            store.db.close()
+
+
+class BriefingSentenceTests(unittest.TestCase):
+    """An empty card says why, and 다시 만들기 says what it actually did."""
+
+    def test_an_empty_mailbox_is_not_the_same_as_a_stopped_collector(self):
+        self.assertIn('수집된 메일이 없어', briefing_empty(True, 0, 11))
+        self.assertIn('수집을 시작하면', briefing_empty(False, 4, 11))
+
+    def test_before_the_morning_hour_the_card_says_when(self):
+        self.assertIn(f'{BRIEF_HOUR}시', briefing_empty(True, 4, BRIEF_HOUR - 1))
+        self.assertNotIn(f'{BRIEF_HOUR}시', briefing_empty(True, 4, BRIEF_HOUR))
+
+    def test_the_button_is_a_booking_and_says_so_either_way(self):
+        self.assertIn('요청', briefing_text(True))
+        self.assertIn('수집을 시작하면', briefing_text(False))
+
+
+class BeamTests(unittest.TestCase):
+    """The 브리핑 card's moving edge, which is CSS and nothing else."""
+
+    def test_the_angle_is_registered_or_it_cannot_animate(self):
+        self.assertIn('@property --ma-angle', THEME)
+        self.assertIn('@keyframes ma-beam', THEME)
+
+    def test_the_beam_is_masked_down_to_the_frame(self):
+        self.assertIn('mask-composite:exclude', THEME)
+        self.assertIn('-webkit-mask-composite:xor', THEME)
+
+    def test_a_reader_who_asked_for_stillness_gets_it(self):
+        rule = THEME.split('@media (prefers-reduced-motion:reduce)', 1)[1].split('}', 1)[0]
+        self.assertIn('.ma-beam::before', rule)
+        self.assertIn('animation:none', rule)
+
+    def test_only_the_written_card_carries_the_beam(self):
+        # A beam on every card is a beam on none — the same arithmetic as 분석 결과's
+        # two accents. One class, used once, and the frame it lives on is built outside
+        # the refreshable so the lap is never restarted by a repaint.
+        self.assertEqual(THEME.count('.ma-beam {'), 1)
 
 
 if __name__ == '__main__':

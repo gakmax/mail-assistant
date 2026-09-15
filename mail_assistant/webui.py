@@ -16,14 +16,15 @@ from html import escape
 from pathlib import Path
 
 from . import __version__
-from .calendar_sheet import COLORS, MARKERS
-from .core import (ANALYZING, FAILED, HANDLED, LIST_LIMIT, PROGRESS, ROOM_MARK, SORTS, STATES,
-                   Store, account_key, local_text, now, parse_mail, row_view, state_of)
+from .calendar_sheet import COLORS, parse_day, plain_title
+from .core import (ANALYZING, FAILED, HANDLED, LIST_LIMIT, PROGRESS, ROOM_MARK, SORTS,
+                   STATES, Store, account_key, event_row_id, is_event_key, local_text, now,
+                   parse_mail, row_view, state_of)
 from .dashboard import CATEGORIES, PRIORITIES, describe
 from .excel import mailto
 from .hub import line_text
-from .overview import (DUE_DAYS, RECENT_DAYS, UPCOMING, overview, past_due, results,
-                       review_queue, trend)
+from .overview import (BRIEF_HOUR, DUE_DAYS, RECENT_DAYS, UPCOMING, overview, past_due,
+                       results, review_queue, trend)
 from .settings import (CUSTOM, DEFAULTS, FIELDS, NO_MODELS, field_errors, model_rows,
                        model_value, normalize, read_models)
 from .style import CALM, DASH_GREEN, LINK, NEUTRAL, SOON, URGENT, css_color
@@ -119,6 +120,7 @@ STATE_TONES = {HANDLED: css_color(DASH_GREEN), PROGRESS: css_color(LINK),
                ANALYZING: css_color(SOON)}
 # The kanban lane dots. Same three states, same three colours as the 상태 tags above.
 LANE_TONES = {'': css_color(CALM), PROGRESS: css_color(LINK), HANDLED: css_color(DASH_GREEN)}
+
 LOCAL = threading.local()
 
 # Pretendard, served from /vendor like FullCalendar — never a CDN. One variable file
@@ -135,6 +137,78 @@ FONT_FILE = 'PretendardVariable.woff2'
 # first chart exists. It is a local read, so this costs nothing but ordering.
 FONT_PRELOAD = (f'<link rel="preload" href="/vendor/pretendard/{FONT_FILE}" as="font" '
                 'type="font/woff2" crossorigin>')
+
+# The reader's own choice of sidebar width, kept in the browser and nowhere else.
+# Three states and not two: 'rail' and 'wide' are explicit, and the absence of both is
+# the breakpoint's own answer — which is what lets a narrow window still be opened out.
+RAIL_KEY = 'ma-side'
+# Read before Vue mounts, so a sidebar that was left collapsed is collapsed in the
+# first frame instead of snapping shut once the page is up.
+RAIL_BOOT = f"""<script>
+(function () {{
+  try {{
+    var choice = localStorage.getItem('{RAIL_KEY}');
+    if (choice === 'rail' || choice === 'wide')
+      document.documentElement.classList.add('ma-' + choice);
+  }} catch (err) {{}}
+}})();
+</script>"""
+# Client-side only, for the reason the kanban's dragover is: the server has nothing to
+# do with how wide somebody wants their navigation, and a round trip per click would
+# buy a repaint of a class name. It reads the *effective* state — class, or the
+# breakpoint when no class was chosen — so one press always does the visible thing.
+RAIL_TOGGLE = f"""(e) => {{
+  const root = document.documentElement;
+  const narrow = window.matchMedia('(max-width:{SIDE_BREAK - 1}px)').matches;
+  const rail = root.classList.contains('ma-rail')
+    || (narrow && !root.classList.contains('ma-wide'));
+  root.classList.toggle('ma-rail', !rail);
+  root.classList.toggle('ma-wide', rail);
+  try {{ localStorage.setItem('{RAIL_KEY}', rail ? 'wide' : 'rail'); }} catch (err) {{}}
+}}"""
+
+
+def rail_css(scope):
+    """The sidebar as a rail of icons, written once and emitted for both ways in.
+
+    `scope` prefixes every selector: the 접기 button writes a class on <html>, the
+    breakpoint matches the window, and a rail that looked different depending on which
+    one collapsed it would be two rails to keep in step. A plain .format(), not an
+    f-string, because almost every brace here is CSS.
+    """
+    return """
+{scope} .ma-side {{ width:{rail}px; padding:14px 8px 18px; overflow:visible; }}
+{scope} .ma-side__words, {scope} .ma-side__label {{ display:none; }}
+{scope} .ma-side__brand {{ justify-content:center; padding:4px 0 10px; }}
+{scope} .ma-side__item {{ justify-content:center; padding:8px 0; }}
+/* The heading has no room for its word, but the grouping it marks is still worth a
+   line: four questions read as four, where nine bare icons read as nine. */
+{scope} .ma-side__group {{
+  height:1px; padding:0; margin:9px 12px 7px; font-size:0; overflow:hidden;
+  background:var(--line);
+}}
+/* The count stays a count: 아이콘만 was never 'and no number'. It rides on the icon's
+   shoulder, because there is no row left for it to sit at the end of. */
+{scope} .ma-badge {{
+  position:absolute; top:2px; right:4px; margin:0; padding:0 3px;
+  min-width:15px; height:15px; line-height:13px; font-size:9.5px;
+  background:var(--brand); border-color:var(--card); color:#fff;
+}}
+{scope} .ma-side__item.is-live .ma-badge {{ border-color:var(--brand-soft); }}
+/* The name is gone from the row, so the row grows the page's own tooltip rather than
+   a native title — which waits a second, wraps where it likes and wears the OS ink.
+   .ma-side is overflow:visible above for this line alone. */
+{scope} .ma-side__item::after {{
+  content:attr(data-name); position:absolute; left:calc(100% + 8px); top:50%;
+  transform:translateY(-50%); z-index:40; pointer-events:none; opacity:0;
+  background:var(--ink); color:#fff; border-radius:7px; padding:4px 9px;
+  font-size:11.5px; font-weight:600; white-space:nowrap; box-shadow:var(--shadow);
+  transition:opacity .12s ease;
+}}
+{scope} .ma-side__item:hover::after {{ opacity:1; }}
+{scope} .ma-bar__toggle .q-icon {{ transform:rotate(180deg); }}
+""".format(scope=scope, rail=SIDE_RAIL)
+
 
 # One stylesheet, injected once per page by shell(). Everything below is a token or a
 # component class; a page that reaches for .style() again is usually asking for one
@@ -217,17 +291,11 @@ body {{
 .ma-side__item.is-live .ma-badge {{
   background:var(--brand); border-color:var(--brand); color:#fff;
 }}
+/* Collapsed because somebody pressed 접기, and collapsed because the window cannot
+   hold the labels, are the same sidebar — rail_css() is what keeps them one. */
+{rail_css('html.ma-rail')}
 @media (max-width:{SIDE_BREAK - 1}px) {{
-  .ma-side {{ width:{SIDE_RAIL}px; padding:14px 8px 18px; }}
-  .ma-side__words, .ma-side__label, .ma-side__group {{ display:none; }}
-  .ma-side__brand {{ justify-content:center; padding:4px 0 10px; }}
-  .ma-side__item {{ justify-content:center; padding:8px 0; }}
-  /* No room for the count, so the badge becomes the fact that there is one. */
-  .ma-badge {{
-    position:absolute; top:5px; right:11px; margin:0; padding:0;
-    width:8px; height:8px; min-width:0; font-size:0; line-height:0;
-    border-radius:50%; background:var(--brand); border-color:var(--card);
-  }}
+{rail_css('html:not(.ma-wide)')}
 }}
 
 /* min-width:0 and not flex:1 alone: a flex child's default minimum is its content,
@@ -313,6 +381,72 @@ a.ma-kpi:hover {{
 .ma-kpi__value {{ font-size:25px; font-weight:700; line-height:1.2; letter-spacing:-.02em; }}
 .ma-kpi__hint {{ font-size:11px; color:var(--muted); }}
 
+/* 오늘의 AI 브리핑. The one card on the 대시보드 that is written rather than counted,
+   so it is the one card that gets a moving edge — a beam everywhere is a beam nowhere,
+   the same arithmetic as 분석 결과's two accents. It is a conic gradient turned by an
+   animated custom property and masked down to the 1px frame: no extra element, nothing
+   added to the layout, and the grey border underneath shows through wherever the
+   gradient is transparent. @property is what makes an angle animate at all — without
+   the registration the ring simply sits still, which is the fallback, not a break. */
+@property --ma-angle {{ syntax:'<angle>'; initial-value:0deg; inherits:false; }}
+.ma-beam {{
+  position:relative;
+  background:radial-gradient(130% 150% at 0% 0%, var(--brand-soft), transparent 58%),
+             var(--card);
+}}
+.ma-beam::before {{
+  content:''; position:absolute; inset:-1px; border-radius:calc(var(--r) + 1px);
+  padding:1px; pointer-events:none;
+  background:conic-gradient(from var(--ma-angle), transparent 0 56%,
+             var(--brand-soft) 70%, var(--brand) 84%, transparent 93% 100%);
+  -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite:xor;
+  mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite:exclude;
+  animation:ma-beam 5s linear infinite;
+}}
+@keyframes ma-beam {{ to {{ --ma-angle:360deg; }} }}
+/* A card that never stops moving is a card a reader learns to look away from. */
+@media (prefers-reduced-motion:reduce) {{
+  .ma-beam::before {{ animation:none; background:var(--brand-soft); }}
+}}
+.ma-brief__lede {{
+  display:block; font-size:15px; font-weight:650; line-height:1.55;
+  letter-spacing:-.012em; color:var(--ink);
+}}
+.ma-brief__grid {{
+  display:grid; gap:11px; margin-top:12px;
+  grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
+}}
+.ma-brief__sec {{
+  display:block; background:var(--card); border:1px solid var(--hair);
+  border-radius:10px; padding:10px 13px;
+}}
+.ma-brief__title {{
+  font-size:11.5px; font-weight:700; color:var(--brand); margin-bottom:5px;
+}}
+.ma-brief__line {{
+  display:flex; gap:7px; align-items:baseline;
+  font-size:12.5px; line-height:1.68; color:var(--ink);
+}}
+.ma-brief__line::before {{
+  content:''; flex:none; width:4px; height:4px; border-radius:50%;
+  background:#c6c8ce; transform:translateY(-3px);
+}}
+.ma-brief__watch {{
+  display:flex; gap:7px; flex-wrap:wrap; align-items:center;
+  margin-top:12px; padding-top:10px; border-top:1px solid var(--hair);
+}}
+.ma-brief__pin {{
+  display:inline-flex; align-items:center; gap:5px; max-width:100%;
+  text-decoration:none; border:1px solid var(--line); border-radius:999px;
+  padding:3px 11px 3px 9px; font-size:11.5px; color:var(--subtle);
+  background:var(--card); transition:border-color .12s ease, color .12s ease;
+}}
+.ma-brief__pin:hover {{ border-color:var(--brand); color:var(--brand); }}
+.ma-brief__pin .q-icon {{ font-size:13px; flex:none; }}
+.ma-brief__pin span {{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
+
 .ma-meta {{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; }}
 .ma-meta__item {{ font-size:12px; color:var(--muted); }}
 .ma-dot {{ width:7px; height:7px; border-radius:50%; flex:none; }}
@@ -366,6 +500,30 @@ a.ma-kpi:hover {{
 .ma-alert--warn {{
   color:var(--soon); background:rgba(208,112,0,.07); border-color:rgba(208,112,0,.16);
 }}
+/* 분석 결과: one block per part, so 요약 and 다음 행동 are two things and not a
+   wall. The left rule is the accent, and only the parts a reader has to act on get
+   one — four colours would be none. */
+.ma-part {{
+  display:block; background:var(--card); border:1px solid var(--hair);
+  border-left:3px solid var(--line); border-radius:10px;
+  padding:10px 13px; margin-bottom:9px;
+}}
+.ma-part--brand {{ border-left-color:var(--brand); }}
+.ma-part--ok {{ border-left-color:var(--ok); }}
+.ma-part__head {{ display:flex; align-items:center; gap:6px; margin-bottom:5px; }}
+.ma-part__head .q-icon {{ font-size:15px; flex:none; }}
+.ma-part__label {{ font-size:11.5px; font-weight:700; color:var(--ink); }}
+.ma-part__body {{
+  display:block; font-size:13px; line-height:1.68; color:var(--ink);
+  white-space:pre-wrap; overflow-wrap:anywhere;
+}}
+.ma-part__foot {{
+  display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+  margin-top:7px; padding-top:6px; border-top:1px solid var(--hair);
+}}
+.ma-part__link {{ font-size:12px; color:var(--brand); text-decoration:none; }}
+.ma-part__link:hover {{ text-decoration:underline; }}
+
 .ma-row {{
   display:flex; gap:9px; align-items:baseline; flex-wrap:wrap;
   padding:6px 0; border-bottom:1px solid var(--hair);
@@ -719,20 +877,6 @@ def day_title(day):
     return f'{day.month}월 {day.day}일 ({WEEKDAYS[day.weekday()]})'
 
 
-def plain_title(label):
-    """An entry label without the marker calendar_sheet puts on the front of it.
-
-    ■/▶/◆ are how an Excel cell says 마감·시작·확인 필요 in one colour of text. Every
-    screen that shows an entry draws KIND_ICONS beside it instead, in the kind's own
-    colour, so the marker would be the same thing said twice — and it arrived here in
-    the surrounding text's colour, which said nothing at all.
-    """
-    text = str(label or '')
-    if text[:1] in MARKERS.values():
-        text = text[1:].lstrip()
-    return text
-
-
 def today_rows(events, today, handled=()):
     """오늘 날짜에 걸린 일정 — 시작도 마감도, 처리 완료된 메일만 빼고.
 
@@ -740,7 +884,7 @@ def today_rows(events, today, handled=()):
     있는가', which is why 시작 is kept here and dropped there.
     """
     return [{'kind': entry.kind, 'title': plain_title(entry.label), 'mail': entry.mail_id,
-             'evidence': entry.evidence}
+             'evidence': entry.evidence, 'manual': is_event_key(entry.mail_id)}
             for entry in events.get(today, []) if entry.mail_id not in handled]
 
 
@@ -756,6 +900,7 @@ def deadline_rows(data, today):
     """
     return [{'day': day.isoformat(), 'title': plain_title(entry.label), 'kind': entry.kind,
              'left': describe(day, today), 'mail': entry.mail_id,
+             'manual': is_event_key(entry.mail_id),
              'done': entry.mail_id in data['handled'],
              'missed': day < today and entry.mail_id not in data['handled']}
             for day, entry in data['due_window']]
@@ -775,6 +920,81 @@ def summary_line(data):
             f" · 처리 완료 {len(data['handled'])}건")
     missed = len(data['past_due'])
     return text + (f' · 지난 마감 {missed}건' if missed else '')
+
+
+BRIEF_SECTIONS = 4
+BRIEF_LINES = 6
+BRIEF_WATCH = 5
+BRIEF_TIP = ('오늘의 브리핑을 다시 만들도록 예약합니다. '
+             '분석 대기가 없을 때 수집 차례에 만들어집니다.')
+
+
+def briefing_view(row, today):
+    """A stored briefing as the card draws it, or an empty one.
+
+    The day it was written for travels with it rather than being checked away: a
+    briefing from yesterday is still worth reading and is not today's, and a card that
+    showed one without saying which day it covered would be the same silence
+    '최신 버전입니다' behind a dead proxy was.
+    """
+    blank = {'has': False, 'stale': False, 'day': '', 'stamp': '',
+             'headline': '', 'sections': [], 'watch': []}
+    if row is None:
+        return blank
+    try:
+        data = json.loads(row['result'])
+    except (ValueError, TypeError):
+        return blank
+    day = str(row['day'] or '')
+    try:
+        written = date.fromisoformat(day)
+    except ValueError:
+        return blank
+    clock = local_text(row['at'], '%H:%M')
+    sections = []
+    for part in (data.get('sections') or [])[:BRIEF_SECTIONS]:
+        lines = [text.strip() for text in (part.get('lines') or []) if str(text).strip()]
+        if lines:
+            sections.append({'title': str(part.get('title') or '').strip() or '메모',
+                             'lines': lines[:BRIEF_LINES]})
+    watch = [{'mail_id': pin.get('mail_id', ''),
+              'reason': str(pin.get('reason') or '').strip() or '메일 열기'}
+             for pin in (data.get('watch') or [])
+             # A manual 일정 has no mail behind it, and a pin that opened an empty
+             # 메일 화면 is worse than one that is simply not drawn.
+             if pin.get('mail_id') and not is_event_key(pin.get('mail_id'))][:BRIEF_WATCH]
+    return {'has': bool(sections or data.get('headline')), 'day': day,
+            'stale': written != today,
+            'stamp': f'{day_title(written)} {clock} 기준'.strip(),
+            'headline': str(data.get('headline') or '').strip(),
+            'sections': sections, 'watch': watch}
+
+
+def briefing_empty(running, total, hour):
+    """Why the card has nothing in it. Never blank space with no reason beside it."""
+    if not total:
+        return '수집된 메일이 없어 아직 브리핑할 내용이 없습니다.'
+    if not running:
+        return '아직 브리핑이 없습니다. 수집을 시작하면 오늘 치를 만듭니다.'
+    if hour < BRIEF_HOUR:
+        return f'아직 브리핑이 없습니다. 오전 {BRIEF_HOUR}시 이후 첫 수집 때 만듭니다.'
+    return '아직 브리핑이 없습니다. 분석 대기가 비면 다음 수집 차례에 만듭니다.'
+
+
+def briefing_text(running):
+    """다시 만들기 is a booking, exactly as 다시 분석 is: the worker does the work."""
+    if running:
+        return '브리핑을 다시 만들도록 요청했습니다. 다음 수집 차례에 반영됩니다.'
+    return '브리핑을 다시 만들도록 예약했습니다. 수집을 시작하면 만들어집니다.'
+
+
+def stale_text(view, today):
+    """어제 브리핑 is a different sentence from 오늘 브리핑, and has to read as one."""
+    try:
+        gap = (today - date.fromisoformat(view['day'])).days
+    except ValueError:
+        return ''
+    return f'{gap}일 전 브리핑입니다. 오늘 치는 다음 수집 차례에 만들어집니다.'
 
 
 def run_summary(hub, directory, config, limit=RUN_LINES):
@@ -826,7 +1046,8 @@ def account_of(config):
 def snapshot(directory, config, today=None, within=DUE_DAYS):
     account = account_of(config)
     rows = list(store(directory).page(account)) if account else []
-    return overview(rows, today or date.today(), within=within)
+    events = list(store(directory).events(account)) if account else []
+    return overview(rows, today or date.today(), within=within, events=events)
 
 
 def list_state(saved=None):
@@ -1255,6 +1476,67 @@ def run_view(hub, directory, config, services=None, limit=RUN_LINES * 3):
                 blockers=list(field_errors(config).values()))
 
 
+# 분석 결과 was four label pairs in a column, which read as one wall of text: the
+# headings were the only thing dividing 요약 from 다음 행동 and they were 11px grey.
+# Each part is now its own block, and the accent is spent only on the two a reader has
+# to *do* something about — colouring all four would be colouring none.
+ANALYSIS_PARTS = (('summary', '요약', 'subject', None),
+                  ('requests', '요청사항', 'assignment', 'brand'),
+                  ('reason', '우선순위 근거', 'rule', None),
+                  ('action', '다음 행동', 'bolt', 'ok'))
+
+
+# The accent name each part carries, as a colour. None is the plain rule: a part
+# nobody has to act on.
+PART_TONES = {None: MUTED, 'brand': BRAND, 'ok': OK}
+
+
+def analysis_blocks(view):
+    """The 분석 결과 parts that have something in them, in reading order.
+
+    Pure so the tests can hold the order and the accents without nicegui: the blocks
+    are the screen's structure, and a part that silently stopped being drawn is
+    exactly the kind of thing no screenshot review catches.
+    """
+    blocks = []
+    for key, label, icon, accent in ANALYSIS_PARTS:
+        text = str(view.get(key) or '').strip()
+        if text:
+            blocks.append({'key': key, 'label': label, 'icon': icon,
+                           'accent': accent, 'text': text})
+    return blocks
+
+
+def event_kind(event):
+    """마감·시작·확인 필요 for one analysed event, the way the calendar decides it.
+
+    An event whose dates neither parse nor exist is 확인 필요 even when Codex did not
+    say so: it is on no calendar, and the card is the only place that can say why.
+    """
+    dated = {name: parse_day(event.get(name))[0]
+             for name in ('start', 'deadline')}
+    if event.get('needs_review') or not any(dated.values()):
+        return '확인 필요'
+    return '마감' if dated['deadline'] else '시작'
+
+
+def detail_events(events):
+    """The mail's 일정 as the detail panel draws them, kind and all."""
+    shaped = []
+    for event in events:
+        dated = [parse_day(event.get(name))[0] for name in ('start', 'deadline')]
+        shaped.append({
+            'title': str(event.get('title') or '(제목 없음)'),
+            'kind': event_kind(event),
+            'start': event_text(event.get('start')),
+            'deadline': event_text(event.get('deadline')),
+            'evidence': str(event.get('evidence') or ''),
+            # What the panel can say and the calendar cannot: this one is not there.
+            'on_calendar': any(dated),
+        })
+    return shaped
+
+
 def detail_view(row):
     """Everything the detail panel shows, shaped without touching nicegui."""
     result = json.loads(row['result']) if row['result'] else {}
@@ -1276,6 +1558,7 @@ def detail_view(row):
         'draft': row['draft_edit'] or result.get('reply_draft', ''),
         'reply_subject': result.get('reply_subject', '') or f"Re: {row['subject']}",
         'analysed': bool(result),
+        'reply_needed': bool(result.get('reply_needed')),
         'todo_hidden': bool(row['todo_hidden']),
     }
 
@@ -1325,6 +1608,9 @@ def calendar_events(events, today, handled=()):
                 # front, because a tooltip has no slot to say when from.
                 'extendedProps': {'kind': entry.kind, 'evidence': entry.evidence,
                                   'clean': plain_title(entry.label),
+                                  # A manual entry owns no mail, so the click that
+                                  # opens one has nothing to open and says so instead.
+                                  'manual': is_event_key(entry.mail_id),
                                   'missed': entry.kind == '마감' and day < today},
             })
     return payload
@@ -1556,11 +1842,68 @@ def deadlines(data, today, token, on_tick):
                     .style(f'color:{css_color(COLORS[row["kind"]])};font-size:14px;flex:none') \
                     .tooltip(row['kind'])
                 ui.label(row['day']).classes('ma-due__day')
-                ui.link(row['title'], href('/mail', token, id=row['mail'])) \
-                    .classes('ma-due__title')
+                if row['manual']:
+                    ui.label(row['title']).classes('ma-due__title')
+                else:
+                    ui.link(row['title'], href('/mail', token, id=row['mail'])) \
+                        .classes('ma-due__title')
                 ui.space()
                 ui.label(row['left']).classes(
                     'ma-due__left' + (' is-missed' if row['missed'] else ''))
+
+
+def briefing_frame():
+    """The beamed card itself, built once and never rebuilt.
+
+    The body inside it is refreshable; this is not. A CSS animation restarts from
+    zero every time its element is created, so a beam inside the refreshable would
+    jump back to the top of its lap on every five-second repaint — the same reason
+    the charts beside it are updated in place rather than wrapped in one.
+    """
+    from nicegui import ui
+    return ui.element('div').classes('ma-card ma-beam')
+
+
+def briefing_body(view, today, token, reason, on_ask=None):
+    """오늘의 AI 브리핑, inside briefing_frame(). Reads what the worker stored.
+
+    Generating here would hold the one Codex slot for up to 240 seconds inside a page
+    that repaints every five, and the reader would watch the 대시보드 stop. 다시 만들기
+    books it with the worker and says so, exactly as 다시 분석 does.
+    """
+    from nicegui import ui
+    with ui.element('div').classes('ma-head'):
+        ui.icon('auto_awesome').style(f'color:{BRAND};font-size:17px')
+        ui.label('오늘의 AI 브리핑').classes('ma-head__title')
+        if view['has']:
+            ui.label(view['stamp']).classes('ma-meta__item')
+        ui.space()
+        ui.button('다시 만들기', icon='refresh', on_click=on_ask) \
+            .props('flat dense no-caps text-color=primary').tooltip(BRIEF_TIP)
+    if view['has'] and view['stale']:
+        with ui.element('div').classes('ma-alert ma-alert--warn').style('margin-bottom:11px'):
+            ui.icon('history').style('font-size:15px')
+            ui.label(stale_text(view, today))
+    if not view['has']:
+        empty(reason)
+        return
+    if view['headline']:
+        ui.label(view['headline']).classes('ma-brief__lede')
+    with ui.element('div').classes('ma-brief__grid'):
+        for part in view['sections']:
+            with ui.element('div').classes('ma-brief__sec'):
+                ui.label(part['title']).classes('ma-brief__title')
+                for line in part['lines']:
+                    with ui.element('div').classes('ma-brief__line'):
+                        ui.label(line)
+    if view['watch']:
+        with ui.element('div').classes('ma-brief__watch'):
+            ui.label('먼저 볼 메일').classes('ma-meta__item')
+            for pin in view['watch']:
+                with ui.link(target=href('/mail', token, id=pin['mail_id'])) \
+                        .classes('ma-brief__pin'):
+                    ui.icon('arrow_outward')
+                    ui.label(pin['reason'])
 
 
 def today_panel(rows, today, token):
@@ -1587,10 +1930,116 @@ def today_panel(rows, today, token):
                     ui.icon(KIND_ICONS[row['kind']]) \
                         .style(f'color:{css_color(COLORS[row["kind"]])};font-size:15px;'
                                'flex:none')
-                    ui.link(row['title'], href('/mail', token, id=row['mail'])) \
-                        .classes('ma-today__title')
+                    if row['manual']:
+                        # No mail behind it, so no link: a href that opens an empty
+                        # 메일 화면 is worse than plain text.
+                        ui.label(row['title']).classes('ma-today__title') \
+                            .style(f'color:{INK}')
+                    else:
+                        ui.link(row['title'], href('/mail', token, id=row['mail'])) \
+                            .classes('ma-today__title')
                     ui.space()
                     ui.label(row['kind']).classes('ma-today__kind')
+
+
+EVENT_HINT = '2026-09-22 또는 2026-09-22 15:00'
+
+
+def event_text(value):
+    """A stored date as the panel prints it, or '—'. Never a strftime: see local_text."""
+    day, clock = parse_day(value)
+    if not day:
+        return '—'
+    return f'{day.isoformat()} {clock}'.strip()
+
+
+def event_error(title, start, deadline):
+    """Why this 일정 cannot be saved, or '' when it can.
+
+    An unparsable date is the failure worth catching: parse_day() simply returns None
+    for one, and collect() then builds no entry at all — the event would be saved,
+    show up in the list below, and appear on no calendar, with nothing saying why.
+    """
+    if not str(title or '').strip():
+        return '일정 제목을 입력하세요.'
+    for label, value in (('시작', start), ('마감', deadline)):
+        if str(value or '').strip() and not parse_day(value)[0]:
+            return f'{label} 날짜를 읽을 수 없습니다. {EVENT_HINT} 형식으로 입력하세요.'
+    if not str(start or '').strip() and not str(deadline or '').strip():
+        return '시작이나 마감 중 하나는 있어야 달력에 올라갑니다.'
+    return ''
+
+
+def manual_rows(events):
+    """직접 추가한 일정 as the panel under the calendar lists them, newest first."""
+    return [{'id': row['id'], 'title': row['title'],
+             'start': event_text(row['start']), 'deadline': event_text(row['deadline']),
+             'note': row['note'], 'done': row['handled'] == HANDLED}
+            for row in reversed(list(events))]
+
+
+def manual_panel(directory, account, token, on_change):
+    """Add a 일정 by hand, and list the ones that are there.
+
+    Everything else on this page comes out of an analysis, and a mailbox that never
+    mentions a date cannot be made to mention one. The calendar above is drawn from a
+    payload baked into the page, so a change here reloads rather than repaints: there
+    is no server-side handle on a FullCalendar that was built in the browser.
+    """
+    from nicegui import ui
+    rows = manual_rows(store(directory).events(account)) if account else []
+
+    def add():
+        problem = event_error(title.value, start.value, deadline.value)
+        if problem:
+            ui.notify(problem)
+            return
+        if not account:
+            ui.notify('설정을 먼저 저장하세요.')
+            return
+        store(directory).add_event(account, (title.value or '').strip(),
+                                   (start.value or '').strip(),
+                                   (deadline.value or '').strip(),
+                                   (note.value or '').strip())
+        on_change()
+
+    def drop(ident):
+        store(directory).delete_event(ident)
+        on_change()
+
+    with card('직접 추가한 일정', 'edit_calendar'):
+        ui.label(f'분석이 잡지 못한 일정을 손으로 올립니다. 날짜는 {EVENT_HINT} 형식이고, '
+                 '시작과 마감 중 하나만 있어도 됩니다. 메일에 딸리지 않으므로 누를 메일이 '
+                 '없고, Excel 일정 시트에는 나가지 않습니다.').classes('ma-lede')
+        with ui.element('div').style('display:flex;gap:8px;flex-wrap:wrap;'
+                                     'align-items:center;margin-bottom:12px'):
+            title = ui.input(placeholder='일정 제목').props('dense outlined') \
+                .style('flex:2 1 220px')
+            start = ui.input(placeholder='시작 2026-09-22 15:00').props('dense outlined') \
+                .style('flex:1 1 180px')
+            deadline = ui.input(placeholder='마감 2026-09-22').props('dense outlined') \
+                .style('flex:1 1 180px')
+            note = ui.input(placeholder='메모 (선택)').props('dense outlined') \
+                .style('flex:1 1 160px')
+            ui.button('추가', icon='add', on_click=add).props('unelevated dense no-caps')
+        if not rows:
+            empty('직접 추가한 일정이 없습니다.')
+            return
+        for row in rows:
+            with ui.element('div').classes('ma-row'):
+                ui.label(row['title']) \
+                    .style(f"color:{MUTED if row['done'] else INK};font-size:13px;"
+                           'font-weight:500'
+                           + (';text-decoration:line-through' if row['done'] else ''))
+                ui.label(f"시작 {row['start']} · 마감 {row['deadline']}") \
+                    .classes('ma-meta__item')
+                if row['note']:
+                    ui.label(row['note']).classes('ma-meta__item')
+                if row['done']:
+                    tag('완료', MUTED, SUNKEN)
+                ui.space()
+                ui.button(icon='delete_outline', on_click=lambda i=row['id']: drop(i)) \
+                    .props('flat dense round text-color=negative').tooltip('삭제')
 
 
 def todo_tally(counts, token):
@@ -1727,6 +2176,8 @@ def shell(current, token, chrome=None):
         ui.colors(primary=BRAND, secondary=SUBTLE, positive=OK, negative=css_color(URGENT),
                   warning=css_color(SOON))
         ui.add_head_html(THEME)
+        # Before the app mounts, so a sidebar left collapsed does not open and shut.
+        ui.add_head_html(RAIL_BOOT)
         latest = chrome() if chrome is not None else {}
         marks = {}
 
@@ -1755,7 +2206,11 @@ def shell(current, token, chrome=None):
                             ui.label(heading).classes('ma-side__group')
                         for path, name, icon, live, badge in items:
                             classes = 'ma-side__item' + (' is-live' if live else '')
-                            with ui.link(target=href(path, token)).classes(classes):
+                            link = ui.link(target=href(path, token)).classes(classes)
+                            # The rail draws this with ::after; the name has to be on
+                            # the row itself because the label is display:none there.
+                            link.props(f'data-name="{name}"')
+                            with link:
                                 ui.icon(icon)
                                 ui.label(name).classes('ma-side__label')
                                 mark = ui.label(badge).classes('ma-badge')
@@ -1764,6 +2219,12 @@ def shell(current, token, chrome=None):
             with ui.element('div').classes('ma-main'):
                 with ui.element('header').classes('ma-bar'):
                     with ui.element('div').classes('ma-bar__inner'):
+                        # Nothing here reaches the server: the class it writes is
+                        # read by CSS, and the choice is kept in the browser.
+                        rail = ui.button(icon='menu_open').classes('ma-bar__toggle') \
+                            .props('flat dense round size=sm').style(f'color:{SUBTLE}') \
+                            .tooltip('사이드바 접기·펼치기')
+                        rail.on('click', js_handler=RAIL_TOGGLE)
                         # The frame has no browser chrome, so this is the only way back
                         # from a page somebody reached by following a card.
                         ui.button(icon='arrow_back', on_click=lambda: ui.navigate.back()) \
@@ -2015,7 +2476,10 @@ window.mailCalendar = function (events, tries) {
       if (props.evidence) {
         body.push(`<div class="ma-tip__row">근거: ${escapeHtml(props.evidence)}</div>`);
       }
-      body.push('<div class="ma-tip__hint">누르면 이 일정이 나온 메일이 열립니다.</div>');
+      body.push('<div class="ma-tip__hint">'
+                + (props.manual ? '직접 추가한 일정입니다.'
+                                : '누르면 이 일정이 나온 메일이 열립니다.')
+                + '</div>');
       const html = '<div class="ma-tip__head">'
         + `<span class="ma-tip__dot" style="background:${info.event.backgroundColor}"></span>`
         + `<span class="ma-tip__title">${escapeHtml(props.clean || info.event.title)}</span>`
@@ -2028,6 +2492,9 @@ window.mailCalendar = function (events, tries) {
     eventClick: (info) => {
       info.jsEvent.preventDefault();
       hideTip();
+      // A manual entry has no mail to open, and emitting its key would send the
+      // 메일 화면 looking for an id no mail can carry.
+      if (info.event.extendedProps.manual) return;
       emitEvent('mail-open', info.event.id);
     },
   });
@@ -2287,14 +2754,35 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             account = account_of(config)
             rows = list(store(directory).page(account)) if account else []
             todos = list(store(directory).todos(account)) if account else []
+            events = list(store(directory).events(account)) if account else []
             today = date.today()
-            latest['data'] = overview(rows, today, within=window['days'])
+            latest['data'] = overview(rows, today, within=window['days'], events=events)
             latest['todo'] = board_counts(rows, todos)
             latest['today'] = today_rows(latest['data']['events'], today,
                                          latest['data']['handled'])
             latest['trend'] = trend(store(directory), account, today)
+            latest['brief'] = briefing_view(
+                store(directory).briefing(account) if account else None, today)
             note_counts(rows, todos)
             return latest['data']
+
+        def ask_briefing():
+            """A booking, like 다시 분석: the worker owns the Codex slot, not this page."""
+            account = account_of(config)
+            if not account:
+                ui.notify('설정에서 메일 주소를 먼저 입력하세요.')
+                return
+            store(directory).set_meta('briefing_ask:' + account, '1')
+            if collecting():
+                hub.wake()
+            ui.notify(briefing_text(collecting()))
+
+        @ui.refreshable
+        def brief_block():
+            briefing_body(latest['brief'], date.today(), token,
+                          briefing_empty(collecting(), latest['data']['total'],
+                                         datetime.now().hour),
+                          ask_briefing)
 
         @ui.refreshable
         def kpi_row():
@@ -2325,9 +2813,14 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             """One mail can carry several deadlines; all its rows move together.
 
             The tick writes the mail's own 처리 상태 — the same field the kanban moves —
-            so the two screens cannot disagree about what is finished.
+            so the two screens cannot disagree about what is finished. A 직접 추가한
+            일정 has no mail to write to and keeps the same flag on its own row.
             """
-            store(directory).set_handled(ident, HANDLED if done else '')
+            manual = event_row_id(ident)
+            if manual is None:
+                store(directory).set_handled(ident, HANDLED if done else '')
+            else:
+                store(directory).set_event_handled(manual, HANDLED if done else '')
             bump()
             read()
             # The kanban's middle column is this same field, so its tally moves too,
@@ -2359,7 +2852,10 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                          if updater.state == WORKING else None)
                 if updater.waiting() and not updater.asked:
                     dialog.open()
-            kpi_row()
+            with briefing_frame():
+                brief_block()
+            with ui.element('div').style('margin-top:14px'):
+                kpi_row()
             with ui.element('div').classes('ma-split').style('margin-top:14px'):
                 with ui.element('div').classes('ma-stack'):
                     with card('일별 처리량', 'show_chart'):
@@ -2396,8 +2892,8 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
 
             def paint():
                 data = read()
-                for block in (kpi_row, today_block, deadline_block, todo_block, run_block,
-                              summary_row):
+                for block in (brief_block, kpi_row, today_block, deadline_block,
+                              todo_block, run_block, summary_row):
                     block.refresh()
                 for element, option in (
                         (daily, trend_option(latest['trend'])),
@@ -2718,6 +3214,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 panel.refresh()
                 ui.notify('할 일 판에 다시 올렸습니다.')
 
+
             with card().classes('ma-modal ma-scroll'):
                 with ui.element('div').style('display:flex;gap:14px;align-items:flex-start;'
                                              'flex-wrap:wrap'):
@@ -2768,37 +3265,67 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                         section('분석 결과', top=False)
                         if not view['analysed']:
                             empty('아직 분석되지 않았습니다.')
-                        for label, text in (('요약', view['summary']),
-                                            ('요청사항', view['requests']),
-                                            ('우선순위 근거', view['reason']),
-                                            ('다음 행동', view['action'])):
-                            if text:
-                                ui.label(label).classes('ma-field')
-                                ui.label(text).style(f'color:{INK};font-size:13px;'
-                                                     'white-space:pre-wrap;line-height:1.65')
-                        if view['events']:
-                            ui.label('일정').classes('ma-field')
-                            for event in view['events']:
-                                note = ' · 확인 필요' if event.get('needs_review') else ''
-                                with ui.element('div').classes('ma-sunken') \
-                                        .style('padding:9px 11px;margin-bottom:6px'):
-                                    ui.label(f"{event.get('title', '')}{note}") \
-                                        .style(f'color:{INK};font-size:12.5px;font-weight:600')
-                                    ui.label(f"시작 {event.get('start') or '—'}"
-                                             f" · 마감 {event.get('deadline') or '—'}") \
+                        for part in analysis_blocks(view):
+                            accent = f" ma-part--{part['accent']}" if part['accent'] else ''
+                            with ui.element('div').classes('ma-part' + accent):
+                                with ui.element('div').classes('ma-part__head'):
+                                    ui.icon(part['icon']) \
+                                        .style(f"color:{PART_TONES[part['accent']]}")
+                                    ui.label(part['label']).classes('ma-part__label')
+                                ui.label(part['text']).classes('ma-part__body')
+                                if part['key'] == 'action':
+                                    # 다음 행동 is already a card on the 할 일 판 — the
+                                    # board grows one for every analysed mail that
+                                    # produced one — so this says where it went rather
+                                    # than offering to put it there a second time.
+                                    with ui.element('div').classes('ma-part__foot'):
+                                        if view['todo_hidden']:
+                                            ui.label('할 일 판에서 치운 항목입니다.') \
+                                                .classes('ma-meta__item')
+                                        else:
+                                            ui.link('할 일 판에서 보기',
+                                                    href('/todo', token)) \
+                                                .classes('ma-part__link')
+                        for event in detail_events(view['events']):
+                            tone = css_color(COLORS[event['kind']])
+                            with ui.element('div').classes('ma-part') \
+                                    .style(f'border-left-color:{tone}'):
+                                with ui.element('div').classes('ma-part__head'):
+                                    ui.icon(KIND_ICONS[event['kind']]).style(f'color:{tone}')
+                                    ui.label(event['title']).classes('ma-part__label')
+                                    ui.space()
+                                    tag(event['kind'], tone, soft_of(tone))
+                                with ui.element('div').classes('ma-meta'):
+                                    ui.label(f"시작 {event['start']}").classes('ma-meta__item')
+                                    ui.label(f"마감 {event['deadline']}") \
                                         .classes('ma-meta__item')
-                                    if event.get('evidence'):
-                                        ui.label(f"근거: {event['evidence']}") \
-                                            .classes('ma-meta__item') \
-                                            .style('white-space:pre-wrap')
+                                if event['evidence']:
+                                    ui.label(f"근거: {event['evidence']}") \
+                                        .classes('ma-meta__item') \
+                                        .style('display:block;margin-top:4px;'
+                                               'white-space:pre-wrap')
+                                with ui.element('div').classes('ma-part__foot'):
+                                    if event['on_calendar']:
+                                        ui.link('달력에서 보기', href('/calendar', token)) \
+                                            .classes('ma-part__link')
+                                    else:
+                                        # The one thing the calendar cannot say: this
+                                        # event carries no date it could be drawn on.
+                                        ui.label('읽을 수 있는 날짜가 없어 달력에는 '
+                                                 '올라가지 않습니다. 일정 화면에서 직접 '
+                                                 '추가할 수 있습니다.') \
+                                            .classes('ma-meta__item')
                         if view['attachments']:
-                            ui.label('첨부').classes('ma-field')
-                            with ui.element('div').classes('ma-meta'):
-                                for name in view['attachments']:
-                                    with ui.element('div').classes('ma-tag') \
-                                            .style(tag_style(SUBTLE) + ';gap:3px'):
-                                        ui.icon('attach_file').style('font-size:13px')
-                                        ui.label(name)
+                            with ui.element('div').classes('ma-part'):
+                                with ui.element('div').classes('ma-part__head'):
+                                    ui.icon('attach_file').style(f'color:{MUTED}')
+                                    ui.label('첨부').classes('ma-part__label')
+                                with ui.element('div').classes('ma-meta'):
+                                    for name in view['attachments']:
+                                        with ui.element('div').classes('ma-tag') \
+                                                .style(tag_style(SUBTLE) + ';gap:3px'):
+                                            ui.icon('attach_file').style('font-size:13px')
+                                            ui.label(name)
                     with ui.element('div'):
                         section('원문', top=False)
                         # display:block on purpose: a bare div inherits a centring flex
@@ -2811,6 +3338,14 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                                        'overflow-wrap:anywhere')
                 with ui.element('div').classes('ma-head').style('margin:18px 0 6px'):
                     ui.label('답변 초안').classes('ma-head__title')
+                    if view['analysed']:
+                        # The analysis answers this and nothing on screen showed it:
+                        # an empty draft box looks the same whether Codex judged no
+                        # answer was wanted or simply had nothing to say.
+                        if view['reply_needed']:
+                            tag('답장 필요', BRAND, BRAND_SOFT)
+                        else:
+                            tag('답장 불필요', MUTED, SUNKEN)
                     ui.label('입력을 멈추면 자동 저장됩니다.').classes('ma-meta__item')
                     ui.space()
                     ui.button('초안 복사', icon='content_copy', on_click=copy) \
@@ -2899,6 +3434,17 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             refused()
             return
         ui.on('mail-open', lambda event: ui.navigate.to(href('/mail', token, id=event.args)))
+        account = account_of(config)
+
+        def reload():
+            """The grid is a payload baked into the page, so a change is a fresh load.
+
+            ui.navigate.to of this same path is the reload: the alternative is holding
+            a handle on a calendar that lives entirely in the browser.
+            """
+            bump()
+            ui.navigate.to(href('/calendar', token))
+
         data = snapshot(directory, config)
         payload = calendar_events(data['events'], date.today(), data['handled'])
         ui.add_head_html(CALENDAR_SCRIPT)
@@ -2920,8 +3466,13 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                             ui.icon(KIND_ICONS[kind]) \
                                 .style(f'color:{css_color(COLORS[kind])};font-size:15px')
                             ui.label(kind).classes('ma-meta__item')
-                    ui.label('일정을 누르면 그 메일이 열립니다.').classes('ma-meta__item')
+                    # Not every entry has one now: 직접 추가한 일정 open nothing, and the
+                    # tooltip is what says so on the entry itself.
+                    ui.label('메일에서 나온 일정을 누르면 그 메일이 열립니다.') \
+                        .classes('ma-meta__item')
                 ui.element('div').props('id=calendar').style('width:100%')
+            with ui.element('div').style('margin-top:14px'):
+                manual_panel(directory, account, token, reload)
             missed = past_due(data['events'], date.today(), handled=data['handled'],
                               limit=UPCOMING * 3)
             if missed:

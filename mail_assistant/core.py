@@ -16,6 +16,10 @@ HANDLED = '처리'
 # What tells a free-standing 상담 room's key from a mail's. A mail id is 24 hex
 # characters, so '#' can never be one.
 ROOM_MARK = '#'
+# 직접 추가한 일정's id, in the places that hold a mail id. A mail id is 24 hex
+# characters, so neither marker can ever collide with one — the same trick, and
+# the same reason: one column, two kinds of owner, and no way to confuse them.
+EVENT_MARK = '@'
 PROGRESS = '진행'      # the kanban's middle column; '' -> 진행 -> 처리
 FAILED = '실패'
 # Set by the worker while Codex is actually looking at a mail, cleared the moment it
@@ -27,6 +31,26 @@ LIST_LIMIT = 50
 # Kept here rather than imported from dashboard, which imports this module. A test
 # asserts the two agree.
 PRIORITY_ORDER = ('긴급', '높음', '보통', '낮음')
+
+
+def event_key(ident):
+    """A 직접 추가한 일정's id, in the fields that otherwise hold a mail id."""
+    return f'{EVENT_MARK}{ident}'
+
+
+def is_event_key(value):
+    """직접 추가한 일정 rather than a mail's. A mail id is 24 hex characters."""
+    return str(value or '').startswith(EVENT_MARK)
+
+
+def event_row_id(value):
+    """The event table's own id behind a key, or None when the key is a mail's."""
+    if not is_event_key(value):
+        return None
+    try:
+        return int(str(value)[len(EVENT_MARK):])
+    except ValueError:
+        return None
 
 
 def sql_text(value):
@@ -142,6 +166,14 @@ class Store:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, account TEXT NOT NULL,
                 text TEXT NOT NULL, state TEXT NOT NULL DEFAULT '',
                 due TEXT NOT NULL DEFAULT '', created TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS event (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, account TEXT NOT NULL,
+                title TEXT NOT NULL, start TEXT NOT NULL DEFAULT '',
+                deadline TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '',
+                handled TEXT NOT NULL DEFAULT '', created TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS briefing (
+                account TEXT NOT NULL, day TEXT NOT NULL, at TEXT NOT NULL,
+                result TEXT NOT NULL, PRIMARY KEY(account,day));
             CREATE TABLE IF NOT EXISTS seen (account TEXT, uid TEXT, PRIMARY KEY(account,uid));
             CREATE TABLE IF NOT EXISTS mail (
                 id TEXT PRIMARY KEY, account TEXT NOT NULL, uid TEXT NOT NULL,
@@ -210,6 +242,22 @@ class Store:
     def set_meta(self, key, value):
         with self.db:
             self.db.execute('INSERT OR REPLACE INTO meta VALUES (?,?)', (key, value))
+
+    BRIEF_KEEP = 30
+
+    def save_briefing(self, account, day, result):
+        """One row per day, replaced when the reader asks for it again."""
+        with self.db:
+            self.db.execute('INSERT OR REPLACE INTO briefing VALUES (?,?,?,?)',
+                            (account, day, now(), json.dumps(result, ensure_ascii=False)))
+            self.db.execute('DELETE FROM briefing WHERE account=? AND day NOT IN '
+                            '(SELECT day FROM briefing WHERE account=? ORDER BY day DESC LIMIT ?)',
+                            (account, account, self.BRIEF_KEEP))
+
+    def briefing(self, account):
+        """The newest briefing, whatever day it is for — the screen says which."""
+        return self.db.execute('SELECT * FROM briefing WHERE account=? ORDER BY day DESC LIMIT 1',
+                               (account,)).fetchone()
 
     def seen(self, account):
         return {r[0] for r in self.db.execute('SELECT uid FROM seen WHERE account=?', (account,))}
@@ -319,6 +367,31 @@ class Store:
     def delete_todo(self, ident):
         with self.db:
             self.db.execute('DELETE FROM todo WHERE id=?', (ident,))
+
+    # 직접 추가한 일정. Analysis produces the rest, and a mailbox that never mentions
+    # a date cannot be made to: this is the one way a person puts one on the calendar.
+    # It is a table rather than a column because it belongs to no mail.
+
+    def add_event(self, account, title, start='', deadline='', note=''):
+        with self.db:
+            cursor = self.db.execute(
+                'INSERT INTO event(account,title,start,deadline,note,created) '
+                'VALUES (?,?,?,?,?,?)', (account, title, start, deadline, note, now()))
+        return cursor.lastrowid
+
+    def events(self, account):
+        return self.db.execute(
+            'SELECT id, title, start, deadline, note, handled, created FROM event '
+            'WHERE account=? ORDER BY id', (account,)).fetchall()
+
+    def set_event_handled(self, ident, state):
+        """The tick on the 마감 checklist, for a row that owns no mail to mark."""
+        with self.db:
+            self.db.execute('UPDATE event SET handled=? WHERE id=?', (state, ident))
+
+    def delete_event(self, ident):
+        with self.db:
+            self.db.execute('DELETE FROM event WHERE id=?', (ident,))
 
     def unedited_drafts(self, account):
         """Analysed, unhandled, not edited by a person. overview.review_queue() then

@@ -17,7 +17,7 @@ that break silently if you don't know them.
 ## Commands
 
 ```bash
-python -m unittest discover -s tests -v    # from the repo root; 372 tests, all platforms
+python -m unittest discover -s tests -v    # from the repo root; 500 tests, all platforms
 ```
 
 ```powershell
@@ -222,6 +222,21 @@ the number beside 메일 and the card called 미처리 메일 cannot disagree, a
 analysis produced no `next_action` is not counted as a 할 일 card by either. `badge_text()`
 draws nothing for a zero, for the reason the 분석 실패 card is absent rather than 0.
 
+**Collapsing the sidebar is CSS and localStorage; the server never hears about it.**
+`rail_css()` holds the rail's rules once and `THEME` emits them twice — under
+`html.ma-rail`, which the ≡ button writes, and inside the `SIDE_BREAK` media query under
+`html:not(.ma-wide)`, which is the breakpoint's own answer when nobody has chosen. Three
+states and not two: with only a rail class a narrow window could never be opened out
+again, and the button would do nothing exactly where the labels are hardest to spare.
+`RAIL_TOGGLE` is a `js_handler` for the same reason `dragover` is one — a class name is
+not worth a websocket round trip — and `RAIL_BOOT` re-applies the choice from the *head*,
+before Vue mounts, or a sidebar left collapsed opens and shuts on every page load. The
+rail keeps the badge's **number**: '아이콘만' was never 'and no count', which is what the
+8px dot it used to draw amounted to. The name the hidden `.ma-side__label` takes away
+comes back as `::after` on the row's own `data-name` — the page's own tooltip, as on the
+calendar, rather than a native `title` — and that one line is why `.ma-side` turns
+`overflow:visible` in the rail.
+
 **`.ma-main` is a block, never a flex column.** `.ma-page` centres itself with
 `margin:0 auto`, and an auto cross-axis margin on a *flex item* beats `align-self:stretch`
 — the page then shrink-wraps to its content, which on the 대시보드 wrapped the four KPI
@@ -299,6 +314,42 @@ the only way to be finished with one was to mark the mail 완료 — a different
 `board()` skips the flag, so `board_counts()` and the 대시보드 tally drop the same card
 at the same moment; the mail itself is untouched, and the only way back is the 메일
 detail's 할 일 판에 다시 올리기, which is why that button has to live there.
+
+**A 직접 추가한 일정 rides in the same field as a mail id, and `EVENT_MARK` is why
+that is safe.** Every panel that draws an entry — the calendar, 오늘 일정, the 마감
+checklist — holds `entry.mail_id`, so a manual event has to look like one. Its key is
+`'@' + rowid`, which a mail id (24 hex characters) cannot be, exactly as `ROOM_MARK`
+works for a free-standing 상담 room. `overview.event_lines()` turns the rows into the
+일정 sheet's own row shape and hands them to the same `collect()`, so 마감/시작, the
+clock and the sort are decided once for both kinds — a manually added deadline that
+sorted differently from an analysed one would be the same day drawn two ways. Three
+things follow and each is a place it breaks quietly: a manual row must not be *linked*
+to a mail (`is_event_key` gates that in `today_rows`, `deadline_rows` and the
+calendar's `eventClick`, which would otherwise send 메일 화면 looking for an id no mail
+can carry); the 마감 tick routes on `event_row_id` and writes `event.handled` instead
+of `mail.handled`; and `overview()` folds the finished ones into the same `handled`
+set, because every panel below it asks 'is this one done' of one set. The Excel 일정
+sheet is written from analysed mail and never sees them, which is what the README says
+out loud.
+
+**The 일정 화면 reloads after a manual event; it does not repaint.** The grid is a
+FullCalendar built in the browser from a payload baked into the page by
+`ui.add_body_html` — there is no server-side handle on it, and `ui.run_javascript`
+cannot draw it (see the invariant above). `manual_panel`'s `on_change` is therefore
+`ui.navigate.to` of this same path. That is the cost of the payload-in-the-page rule,
+not an oversight.
+
+**분석 결과 is blocks, and the accent is spent on two of them.** It was four
+`ui.label` pairs in a column and read as one wall of text: the headings were the only
+thing dividing 요약 from 다음 행동 and they were 11px grey. `ANALYSIS_PARTS` holds the
+order, the icon and the accent; `analysis_blocks()` drops the empty ones, and only
+요청사항 (what they asked) and 다음 행동 (what you do) carry a colour — accenting all
+four is accenting none, which is the same arithmetic as 시작's hue on the calendar.
+`PART_TONES` is checked against `ANALYSIS_PARTS` by a test for the reason `CARD_TONES`
+is checked against `card_rows()`. `event_kind()` gives an analysed event the calendar's
+own kind, and calls one 확인 필요 when *neither* date parses even if Codex did not say
+so — the card is then the only place that can tell the reader why that event is on no
+calendar, which is the one thing the calendar itself cannot say.
 
 **Deleting mail keeps its `seen` uid.** `Store.delete()` drops the mail row and the
 chat hung off it, and deliberately leaves `seen` alone: the mail is still on the POP3
@@ -418,6 +469,51 @@ holding a colon survives the split), which is also what lets `drag_drop()` drop 
 returned to its own lane instead of rewriting the state it already has. The chevron
 buttons stay: `shoot.ps1` cannot click, so drag is the one thing on this page no test
 covers, and it must not be the only way to move a card.
+
+**오늘의 AI 브리핑 is the worker's, once a day, and always behind analysis.**
+`worker.run()` builds it at the *end* of a cycle and `overview.briefing_due()` is the
+whole trigger: a date stamp in `meta` is what makes it daily — the loop already wakes
+every `interval`, so there is no scheduler — and `pending` is what makes it wait.
+`services.codex_slot()` is a `BoundedSemaphore(1)` and `briefing()` can hold it for 240
+seconds, which at nine in the morning is the queue of mail nobody has read yet. Three
+things follow. `BRIEF_HOUR` keeps a briefing written at 03:00 from being what the reader
+finds at nine. A failure sets `next_briefing` rather than retrying on the next
+180-second cycle. And 다시 만들기 is a *booking* — it writes `briefing_ask:<account>` and
+calls `Hub.wake()`, exactly as 다시 분석 does, because the page cannot hold that slot for
+four minutes inside a shell that repaints every five; `briefing_text()` says which of
+the two sentences applies, and the worker clears the flag *before* the attempt so a
+failed request does not re-fire for ever with nobody having asked again.
+
+**A briefing's input is analysed answers, never mail.** `overview.briefing_input()` is
+pure and tested, and every field in it came out of a `result` JSON that `analyze()`
+already paid for. `BRIEF_OPEN`/`BRIEF_EVENTS`/`BRIEF_DRAFTS`/`BRIEF_TEXT` hold it to
+roughly 8-12KB, which is where the answer stops getting sharper; thirty bodies at
+`analyze()`'s own 60,000-character ceiling is the 240-second timeout instead. What the
+caps cut is reported in the payload's own `truncated`, because a model that saw thirty
+of eighty-seven has to be able to say '그 외 57건' rather than write '조용합니다' about
+the thirty. `briefing_view()` then re-clips on the way out: the schema constrains shape,
+not length, and the card is a card. `plain_title()` moved to `calendar_sheet.py`
+beside `MARKERS` when the payload started stripping ■/▶/◆ as well: `overview.py`
+cannot import a screen, and two copies of that strip is how the marker comes back.
+
+**The 브리핑 card's frame is built outside the refreshable.** A CSS animation restarts
+from zero every time its element is created, so `.ma-beam` inside `brief_block()` would
+jump back to the top of its lap on every five-second repaint — the same failure the
+charts beside it avoid by being updated in place. `briefing_frame()` is therefore called
+once by `home()` and `briefing_body()` is what refreshes inside it. The beam itself is a
+conic gradient turned by an `@property`-registered angle and masked down to the 1px
+border, which is why there is no extra element and nothing to lay out; without the
+`@property` registration the ring simply sits still, which is the fallback and not a
+break. One card carries it and a test holds that to one, for the reason 분석 결과 spends
+its accent on two blocks of four.
+
+**A stale briefing says which day it is for.** `briefing_view()` keeps `day` beside the
+text rather than checking it away, and `stale_text()` is the '2일 전 브리핑입니다' band —
+a card that showed yesterday's without saying so is the same silence a 지금 확인 that
+claimed 최신 버전입니다 behind a dead proxy was. `briefing_empty()` is the other half:
+three reasons (no mail, no collector, before `BRIEF_HOUR`) and never blank space.
+`local_text` gives the clock and `day_title()` builds the Korean date by hand, because
+Korean in a `strftime` format is the Windows crash above.
 
 **The 대시보드 charts are updated, not rebuilt.** `home()` creates its four `ui.echart`
 elements once and `paint()` writes new options into them every `REFRESH_SECONDS`; only

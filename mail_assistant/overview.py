@@ -6,14 +6,26 @@ can show them without a spreadsheet.
 import json
 from datetime import date, timedelta
 
-from .calendar_sheet import collect
-from .core import HANDLED, day_bounds, local_text
+from .calendar_sheet import collect, plain_title
+from .core import HANDLED, PRIORITY_ORDER, day_bounds, event_key, local_text
 from .core import workbook_rows
 from .dashboard import CATEGORIES, PRIORITIES
 
 DUE_DAYS = 7
 RECENT_DAYS = 7
 UPCOMING = 8
+# What 오늘의 AI 브리핑 is allowed to send. The input is analysed results, never mail
+# bodies: analyze() already spent the 60,000-character budget on those one at a time,
+# and thirty of them in one prompt is the 240-second timeout with nothing to show.
+# Roughly 8-12KB of JSON at these caps, which is where the answer stops getting
+# sharper and starts getting vaguer.
+BRIEF_OPEN = 30
+BRIEF_EVENTS = 15
+BRIEF_DRAFTS = 10
+BRIEF_TEXT = 200
+# Nothing before this hour: a briefing written at 03:00 describes yesterday and is
+# what the reader finds at nine.
+BRIEF_HOUR = 8
 
 
 def analysed(rows):
@@ -28,7 +40,19 @@ def results(rows):
             continue
 
 
-def schedule_entries(rows):
+def event_lines(events):
+    """직접 추가한 일정 in the 일정 sheet's own row shape.
+
+    Built here rather than as a second kind of entry so collect() decides 마감/시작,
+    the clock and the sort for both: a manually added deadline that sorted differently
+    from an analysed one would be the same day drawn two ways.
+    """
+    return [[f'{event_key(row["id"])}:0', event_key(row['id']), row['title'],
+             row['start'], row['deadline'], row['note'], '', '']
+            for row in events if str(row['title'] or '').strip()]
+
+
+def schedule_entries(rows, events=()):
     """Reuse the 일정 sheet shape so collect()/month_grid() work unchanged."""
     lines = []
     for row in analysed(rows):
@@ -36,6 +60,7 @@ def schedule_entries(rows):
             lines.extend(workbook_rows(row)['일정'])
         except (ValueError, KeyError, TypeError):
             continue
+    lines.extend(event_lines(events))
     return collect(lines)
 
 
@@ -131,9 +156,90 @@ def review_pending(rows):
     return len(review_queue(rows))
 
 
-def overview(rows, today, within=DUE_DAYS):
+def clip(value, limit=BRIEF_TEXT):
+    """One line of an analysed field, short enough that thirty of them still fit."""
+    text = ' '.join(str(value or '').split())
+    return text[:limit] + '…' if len(text) > limit else text
+
+
+def brief_rank(row, result):
+    """긴급 first, then the oldest — the two things that decide what gets read out."""
+    try:
+        rank = PRIORITY_ORDER.index(result.get('priority', ''))
+    except ValueError:
+        rank = len(PRIORITY_ORDER)
+    return rank, row['received'] or ''
+
+
+def briefing_input(rows, today, events=(), within=DUE_DAYS, trend_rows=()):
+    """What 오늘의 AI 브리핑 sends to Codex: the analysed numbers, never the mail.
+
+    Every mail here has already been through analyze(), so the briefing is a second
+    pass over answers rather than a second reading of the mailbox — one small call a
+    day against the one Codex slot analysis also needs. The caps are in the payload as
+    `truncated`: a model that saw thirty of eighty-seven must be able to say so rather
+    than write '전체적으로 조용합니다' about the thirty.
+    """
+    data = overview(rows, today, within=within, events=events)
+    handled = data['handled']
+    open_mail = sorted(((row, result) for row, result in results(rows)
+                        if row['id'] not in handled), key=lambda pair: brief_rank(*pair))
+    drafts = review_queue(rows)
+    deadline_rows = [(day, entry) for day, entry in data['due_window']
+                     if entry.mail_id not in handled]
+    return {
+        'today': today.isoformat(),
+        'window_days': within,
+        'counts': {**data['cards'], '분석 실패': data['failed'],
+                   '수집 전체': data['total'], '분석 대기': data['waiting'],
+                   '처리 완료': len(handled)},
+        'oldest_open_days': data['oldest'],
+        'deadlines': [{'day': day.isoformat(), 'kind': entry.kind,
+                       'title': clip(plain_title(entry.label)),
+                       'mail_id': entry.mail_id, 'overdue': day < today}
+                      for day, entry in deadline_rows[:BRIEF_EVENTS]],
+        'open_mail': [{'mail_id': row['id'], 'received': (row['received'] or '')[:10],
+                       'subject': clip(row['subject'] or '(제목 없음)', 80),
+                       'sender': clip(row['sender'], 80),
+                       'priority': result.get('priority', ''),
+                       'category': result.get('category', ''),
+                       'requests': clip(result.get('requests', '')),
+                       'next_action': clip(result.get('next_action', ''))}
+                      for row, result in open_mail[:BRIEF_OPEN]],
+        'unedited_drafts': [clip(row['subject'] or '(제목 없음)', 80)
+                            for row in drafts[:BRIEF_DRAFTS]],
+        'daily': [{'day': day, **counts} for day, counts in trend_rows],
+        'truncated': {'open_mail': {'shown': min(len(open_mail), BRIEF_OPEN),
+                                    'total': len(open_mail)},
+                      'deadlines': {'shown': min(len(deadline_rows), BRIEF_EVENTS),
+                                    'total': len(deadline_rows)},
+                      'unedited_drafts': {'shown': min(len(drafts), BRIEF_DRAFTS),
+                                          'total': len(drafts)}},
+    }
+
+
+def briefing_due(stamp, today, hour, pending, asked=False):
+    """하루 한 번, 아침 이후, 분석 대기가 없을 때. 수동 요청은 시각만 건너뛴다.
+
+    Analysis always wins the Codex slot: a briefing that queued ahead of it would hold
+    the only process for up to 240 seconds at exactly the hour the morning's mail is
+    waiting to be read. `asked` is the button, and it skips the clock and the stamp but
+    not that — which is why the screen says so rather than the button being disabled.
+    """
+    if pending:
+        return False
+    if asked:
+        return True
+    return hour >= BRIEF_HOUR and stamp != today.isoformat()
+
+
+def overview(rows, today, within=DUE_DAYS, events=()):
+    """events is 직접 추가한 일정; they join the analysed ones and are counted with them."""
     handled = {row['id'] for row in rows if row['handled'] == HANDLED}
-    events = schedule_entries(rows)
+    # A manual event owns no mail, so it carries its own 처리 상태 — and lands in the
+    # same set, because every panel below asks 'is this one finished' of one set.
+    handled |= {event_key(row['id']) for row in events if row['handled'] == HANDLED}
+    events = schedule_entries(rows, events)
     due = deadlines(events, today, within=within, handled=handled)
     priorities = counts_by(rows, 'priority', [name for name, _ in PRIORITIES])
     return {
