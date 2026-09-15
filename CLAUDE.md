@@ -440,6 +440,21 @@ is set by the things that change a list column (처리 상태, 다시 분석, �
 else. Refreshing while the dialog is open is the same work done where nobody can see
 it, behind a dialog that covers the rows.
 
+**A 거래처 is an address, never a display name.** `core.address_of()` — moved there
+from `excel.py`, where it began as the `mailto:` link's helper, because core cannot
+import a screen — lowercases and keys on the address, and `sender_addr` is the column
+`Store.senders()` groups by and `search()` filters on. Group on `sender` instead and
+one company becomes three: the display name is whatever the sender's client felt like
+writing this week, and the same person arrives as `김과장 <kim@x>`, `KIM <Kim@X>` and
+bare `kim@x`. The counts come from one GROUP BY — never one query per sender, the rule
+`Store.rooms()` already follows — and 미처리/답장 대기 are counted with the very
+conditions their own screens use, so a 거래처 card and the list it opens cannot
+disagree; a test opens every card's list and compares the totals. The 메일 화면 draws
+the active sender as a **removable chip** rather than a dropdown: there is no list to
+offer, because the value came off a mail rather than out of a set, but a filter that
+can arrive and never be seen is a list quietly missing mail — the same reason 종류 and
+우선순위 are dropdowns and not only links.
+
 **A conversation's key is `References[0]`, and that is why nothing has to arrive in
 order.** The root mail's own `Message-ID` *is* the first entry of every reply's
 `References`, so `core.thread_key()` gives the original and its answers the same key

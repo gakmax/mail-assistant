@@ -18,7 +18,7 @@ from mail_assistant.core import (ANALYZING, FAILED, HANDLED, HEADERS, NO_RETRY,
                                  account_key, STATES, STATE_SQL, state_where, wait_cutoff,
                                  WAITING, PROGRESS, day_bounds, filter_rows,
                                  local_text, parse_mail, row_view, sql_text, state_of,
-                                 thread_key, message_ids,
+                                 thread_key, message_ids, address_of, display_name,
                                  table_text, text_of_html, workbook_rows)
 from mail_assistant.excel import (Excel, ExcelUpdateError, append_missing, ensure_table,
                                   error_detail, first_column, repair_generated_header,
@@ -448,6 +448,104 @@ class ThreadStoreTests(unittest.TestCase):
                 # 자기 자신은 맥락이 아니다: received<? 가 그것을 자른다.
                 self.assertEqual(store.thread_before(self.ACCOUNT, row['thread'],
                                                      store.detail(root)['received']), [])
+            finally:
+                store.db.close()
+
+
+class SenderTests(unittest.TestCase):
+    """거래처 — 한 주소로 묶고, 세는 쪽과 여는 쪽이 같은 컬럼을 쓴다."""
+
+    ACCOUNT = 'acct'
+    TODAY = datetime.date(2026, 9, 15)
+
+    def test_the_address_is_the_key_and_the_display_name_is_not(self):
+        """표시 이름은 보내는 쪽 클라이언트가 이번 주에 쓰기로 한 것이다."""
+        self.assertEqual(address_of('김과장 <Kim@Buyer.example>'), 'kim@buyer.example')
+        self.assertEqual(address_of('plain@x.com'), 'plain@x.com')
+        self.assertEqual(address_of('이름만 있고 주소 없음'), '')
+        self.assertEqual(display_name('김과장 <kim@x>'), '김과장')
+        self.assertEqual(display_name('"Kim, J" <kim@x>'), 'Kim, J')
+        self.assertEqual(display_name('plain@x.com'), '')
+
+    def store(self, folder, plan):
+        """plan: (uid, From 헤더, 받은 날짜, 분석함, reply_needed, handled)"""
+        store = Store(Path(folder) / 'mail.db')
+        self.ids = {}
+        for uid, sender, day, analysed, needed, handled in plan:
+            message = EmailMessage()
+            message['From'] = sender
+            message['Subject'] = f'{uid} 제목'
+            message['Message-ID'] = f'<{uid}@x>'
+            message.set_content('본문')
+            ident = store.add(self.ACCOUNT, uid, message.as_bytes())
+            self.ids[uid] = ident
+            if analysed:
+                store.analyzed(ident, {'sender': sender, 'subject': '', 'body': '',
+                                       'attachments': []},
+                               {'category': '문의', 'summary': '', 'requests': '',
+                                'events': [], 'priority': '보통', 'priority_reason': '',
+                                'next_action': '', 'reply_needed': needed,
+                                'reply_subject': '', 'reply_draft': ''})
+            if handled:
+                store.set_handled(ident, handled)
+            with store.db:
+                store.db.execute('UPDATE mail SET received=? WHERE id=?',
+                                 (day_bounds(day)[0], ident))
+        return store
+
+    PLAN = [('a', '김과장 <kim@buyer.example>', datetime.date(2026, 9, 14), True, True, ''),
+            ('b', 'KIM <Kim@Buyer.Example>', datetime.date(2026, 9, 5), True, True, ''),
+            ('c', 'kim@buyer.example', datetime.date(2026, 9, 1), True, False, HANDLED),
+            ('d', '이대리 <lee@corp.example>', datetime.date(2026, 9, 12), True, False, '')]
+
+    def test_one_company_is_one_row_however_the_name_was_written(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder, self.PLAN)
+            try:
+                rows = {row['addr']: row for row in store.senders(self.ACCOUNT, self.TODAY)}
+                self.assertEqual(set(rows), {'kim@buyer.example', 'lee@corp.example'})
+                kim = rows['kim@buyer.example']
+                self.assertEqual(kim['total'], 3)
+                self.assertEqual(kim['open'], 2)      # c는 처리 완료
+                self.assertEqual(kim['done'], 1)
+                # a는 하루 전이라 아직 대기가 아니고, b는 열흘 전이라 대기다.
+                self.assertEqual(kim['waiting'], 1)
+            finally:
+                store.db.close()
+
+    def test_the_card_and_the_list_it_opens_count_the_same_mail(self):
+        """카드는 GROUP BY로 세고 목록은 sender_addr로 거른다. 둘은 같아야 한다."""
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder, self.PLAN)
+            try:
+                for row in store.senders(self.ACCOUNT, self.TODAY):
+                    _, total = store.search(self.ACCOUNT, sender=row['addr'])
+                    self.assertEqual(total, row['total'], row['addr'])
+                    _, waiting = store.search(self.ACCOUNT, sender=row['addr'], state=WAITING)
+                    self.assertEqual(waiting, row['waiting'], row['addr'])
+                    _, open_count = store.search(self.ACCOUNT, sender=row['addr'], state='미처리')
+                    self.assertEqual(open_count, row['open'], row['addr'])
+            finally:
+                store.db.close()
+
+    def test_older_mail_is_grouped_by_the_backfill(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder, self.PLAN)
+            try:
+                with store.db:
+                    store.db.execute("UPDATE mail SET sender_addr=''")
+                store.backfill_senders()
+                self.assertEqual(len(store.senders(self.ACCOUNT, self.TODAY)), 2)
+            finally:
+                store.db.close()
+
+    def test_the_newest_contact_comes_first(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = self.store(folder, self.PLAN)
+            try:
+                rows = store.senders(self.ACCOUNT, self.TODAY)
+                self.assertEqual([row['addr'] for row in rows],
+                                 ['kim@buyer.example', 'lee@corp.example'])
             finally:
                 store.db.close()
 

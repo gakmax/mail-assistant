@@ -5,7 +5,7 @@ from urllib.parse import quote
 
 from .calendar_sheet import sheet_events, update_calendar
 from .dashboard import update_dashboard
-from .core import HEADERS, workbook_rows
+from .core import HEADERS, address_of, workbook_rows
 from .style import apply_style
 
 
@@ -123,16 +123,7 @@ def mail_rows(sheet):
             if item is not None}
 
 
-ADDRESS = re.compile(r'<([^<>@\s]+@[^<>@\s]+)>')
 MAILTO_LIMIT = 1800   # Excel rejects hyperlinks much beyond 2,000 characters.
-
-
-def address_of(sender):
-    match = ADDRESS.search(str(sender or ''))
-    if match:
-        return match.group(1)
-    text = str(sender or '').strip()
-    return text if '@' in text and ' ' not in text else ''
 
 
 def mailto(sender, subject, draft):

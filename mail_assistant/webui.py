@@ -18,6 +18,7 @@ from pathlib import Path
 from . import __version__
 from .calendar_sheet import COLORS, parse_day, plain_title
 from .core import (ANALYZING, FAILED, HANDLED, LIST_LIMIT, PROGRESS, ROOM_MARK, SORTS,
+                   address_of, display_name,
                    STATES, Store, WAIT_DAYS, WAITING, account_key, event_row_id,
                    is_event_key, local_text,
                    looks_foreign, now, parse_mail, row_view, state_of)
@@ -91,7 +92,7 @@ WINDOW_FLOOR = (640, 480)   # no desktop is smaller; a floor stops a silly scree
 # (path, label, Material icon). The icons ship with Quasar, so nothing is fetched.
 PAGES = (('/', '대시보드', 'dashboard'), ('/mail', '메일', 'mail'), ('/calendar', '일정', 'event'),
          ('/todo', '할 일', 'checklist'), ('/drafts', '초안', 'drafts'),
-         ('/memo', '메모', 'sticky_note_2'),
+         ('/memo', '메모', 'sticky_note_2'), ('/senders', '거래처', 'contacts'),
          ('/chat', '상담', 'forum'), ('/stats', '통계', 'insights'),
          ('/run', '실행', 'play_circle'), ('/settings', '설정', 'settings'))
 # The sidebar's groups, in the order they are drawn. Ten destinations in one flat
@@ -101,7 +102,7 @@ PAGES = (('/', '대시보드', 'dashboard'), ('/mail', '메일', 'mail'), ('/cal
 # because a page added there and forgotten here would be reachable by URL and by
 # nothing else on screen.
 NAV_GROUPS = (('', ('/',)),
-              ('업무', ('/mail', '/calendar', '/todo', '/drafts', '/memo')),
+              ('업무', ('/mail', '/calendar', '/todo', '/drafts', '/memo', '/senders')),
               ('도움', ('/chat', '/stats')),
               ('시스템', ('/run', '/settings')))
 # The sidebar with labels, and the same sidebar as icons only. The nine links used to
@@ -147,7 +148,7 @@ PRIORITY_NAMES = tuple(name for name, _ in PRIORITIES)
 # The 메일 목록's own filters, and what a 대시보드 bar sets when it is clicked. The value
 # is the column, so a link arriving with ?category=공지 needs no translation.
 BAR_FILTERS = (('category', '종류', CATEGORIES), ('priority', '우선순위', PRIORITY_NAMES))
-DEFAULT_LIST = {'query': '', 'state': '', 'category': '', 'priority': '',
+DEFAULT_LIST = {'query': '', 'state': '', 'category': '', 'priority': '', 'sender': '',
                 'sort': 'received', 'desc': True,
                 'page': 0, 'per': LIST_LIMIT, 'selected': None}
 WINDOWS = (7, 14, 30)           # the 마감 windows the 대시보드 card offers
@@ -495,6 +496,26 @@ a.ma-kpi:hover {{
 .ma-kpi__label {{ font-size:12px; color:var(--muted); }}
 .ma-kpi__value {{ font-size:25px; font-weight:700; line-height:1.2; letter-spacing:-.02em; }}
 .ma-kpi__hint {{ font-size:11px; color:var(--muted); }}
+
+/* 거래처 카드. A whole card is the link — the name, the counts and the last-seen line
+   all answer one question ('이 사람과 무엇이 남았나') and so all go to one place, the
+   mail list filtered to that address. Same lift as .ma-kpi's, because both are cards
+   you click. display:block, for the reason .ma-card carries it: .nicegui-content is a
+   flex column with align-items:start and would shrink-wrap this to its longest word. */
+.ma-sender {{ display:block; text-decoration:none; color:inherit; padding:14px 16px; }}
+a.ma-sender:hover {{
+  box-shadow:0 4px 10px rgba(24,24,27,.07); transform:translateY(-1px);
+  border-color:#d7d8dc;
+}}
+.ma-sender__name {{
+  display:block; font-size:14px; font-weight:650; color:var(--ink);
+  letter-spacing:-.01em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}}
+.ma-sender__addr {{
+  display:block; font-size:11.5px; color:var(--muted); margin-top:2px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}}
+.ma-sender__foot {{ display:block; font-size:11px; color:var(--muted); margin-top:8px; }}
 
 /* 오늘의 AI 브리핑. The one card on the 대시보드 that is written rather than counted,
    so it is the one card that gets a moving edge — a beam everywhere is a beam nowhere,
@@ -1396,6 +1417,9 @@ def list_state(saved=None):
         if values[key] not in names:
             values[key] = ''
     values['query'] = str(values['query'] or '')
+    # 거래처 주소는 알려진 목록이 없다 — 골라 주는 것이 아니라 메일이 들고 온 값이라서.
+    # SQL에는 언제나 파라미터로 들어가고, 화면에는 없는 주소면 빈 목록이 나온다.
+    values['sender'] = str(values['sender'] or '').strip().lower()[:200]
     values['desc'] = bool(values['desc'])
     try:
         values['page'] = max(0, int(values['page']))
@@ -1494,6 +1518,7 @@ def listing(directory, config, state):
     page, per = state['page'], state['per']
     narrow = {'query': state['query'], 'state': state['state'],
               'category': state['category'], 'priority': state['priority'],
+              'sender': state['sender'],
               'sort': state['sort'], 'desc': state['desc'], 'limit': per}
     rows, total = store(directory).search(account, offset=page * per, **narrow)
     if not rows and total and page:
@@ -2154,6 +2179,7 @@ def detail_view(row):
     return {
         'id': row['id'], 'subject': row['subject'] or parsed.get('subject') or '(제목 없음)',
         'sender': row['sender'] or parsed.get('sender', ''),
+        'sender_addr': address_of(row['sender'] or parsed.get('sender', '')),
         'received': local_text(row['received'], '%Y-%m-%d %H:%M'),
         'category': result.get('category', ''), 'priority': result.get('priority', ''),
         'state': state_of(row), 'handled': row['handled'] == HANDLED, 'error': row['error'],
@@ -2260,6 +2286,63 @@ def thread_strip(rows, token):
                             .classes('ma-today__title')
                     ui.space()
                     ui.label(row['state']).classes('ma-today__kind')
+
+
+# 거래처 화면이 한 번에 그리는 카드 수. 더 있으면 검색으로 좁힌다 — 200장을 그리는
+# 것은 그리는 쪽보다 읽는 쪽이 먼저 포기하는 일이다.
+SENDER_SHOWN = 60
+SENDER_SORTS = (('recent', '최근순'), ('open', '남은 일 순'))
+
+
+def sender_rows(rows, today):
+    """거래처 한 줄씩, 화면이 그리는 모양으로. Store.senders()가 이미 센 것만 옮긴다.
+
+    이름은 표시 이름이 있을 때만 이름이고, 없으면 주소가 이름이다 — 주소는 언제나
+    있고(그것이 이 행을 묶은 키다) 표시 이름은 보내는 쪽 마음이다.
+    """
+    shaped = []
+    for row in rows:
+        try:
+            last = date.fromisoformat(local_text(row['last'], '%Y-%m-%d'))
+            quiet = max(0, (today - last).days)
+        except ValueError:
+            quiet = None
+        shaped.append({'addr': row['addr'], 'name': display_name(row['name']) or row['addr'],
+                       'named': bool(display_name(row['name'])),
+                       'total': row['total'], 'open': row['open'],
+                       'waiting': row['waiting'], 'done': row['done'],
+                       'last': local_text(row['last'], '%Y-%m-%d'), 'quiet': quiet,
+                       'since': local_text(row['first'], '%Y-%m-%d')})
+    return shaped
+
+
+def sender_sort(rows, mode='recent'):
+    """최근순은 Store.senders()가 이미 준 순서. 남은 일 순은 기다리게 한 것부터.
+
+    '남은 일'이 답장 대기를 먼저 보는 것은 대시보드 카드와 같은 이유다 — 미처리는
+    '아직 안 봤다'이고 답장 대기는 '상대가 서 있다'이다.
+    """
+    if mode != 'open':
+        return list(rows)
+    return sorted(rows, key=lambda row: (-row['waiting'], -row['open'], row['name']))
+
+
+def sender_search(rows, text):
+    """이름이나 주소로 좁힌다. 둘 다 보는 것은 읽는 사람이 어느 쪽을 기억할지 모르기 때문."""
+    needle = str(text or '').strip().lower()
+    if not needle:
+        return list(rows)
+    return [row for row in rows
+            if needle in row['name'].lower() or needle in row['addr'].lower()]
+
+
+def sender_line(row):
+    """카드 아래 한 줄. 마지막으로 온 날과, 그 뒤로 조용한 날수."""
+    if row['quiet'] is None:
+        return ''
+    if row['quiet'] == 0:
+        return f"마지막 {row['last']} · 오늘"
+    return f"마지막 {row['last']} · {row['quiet']}일 전"
 
 
 def vendor_path():
@@ -4190,7 +4273,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
         # A card or bar link arrives with its own filter; it wins over what was
         # remembered. A filter the link did not name is left as it was: 공지 clicked
         # from the 대시보드 keeps the 미처리 the reader chose here a minute ago.
-        for key in ('state', 'sort', 'query', 'category', 'priority'):
+        for key in ('state', 'sort', 'query', 'category', 'priority', 'sender'):
             if key in request.query_params:
                 saved[key] = request.query_params[key]
                 saved['page'] = 0
@@ -4576,7 +4659,16 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                             .style(f'color:{INK};font-size:16.5px;font-weight:700;'
                                    'letter-spacing:-.01em;line-height:1.4')
                         with ui.element('div').classes('ma-meta').style('margin-top:8px'):
-                            ui.label(view['sender']).classes('ma-meta__item')
+                            if view['sender_addr']:
+                                # 이 사람과 주고받은 나머지로 가는 길. 발신자는 이미
+                                # 화면에 있었고, 누를 수 없는 것이 전부였다.
+                                ui.link(view['sender'],
+                                        href('/mail', token, sender=view['sender_addr'])) \
+                                    .classes('ma-meta__item') \
+                                    .style(f'color:{BRAND};text-decoration:none') \
+                                    .tooltip('이 발신자의 메일만 모아 보기')
+                            else:
+                                ui.label(view['sender']).classes('ma-meta__item')
                             ui.label(view['received']).classes('ma-meta__item')
                             tag(view['category'])
                             tag(view['priority'], STATUS.get(view['priority']),
@@ -4811,6 +4903,29 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                             .style('min-width:130px')
                         narrow.on_value_change(
                             lambda event, key=key: edit(**{key: event.value or ''}))
+                    # 거래처는 고를 수 있는 목록이 없다 — 메일이 들고 온 주소라서 —
+                    # 그래서 드롭다운이 아니라 걸려 있을 때만 나타나는 칩이다. 보이지
+                    # 않는 필터는 조용히 메일이 빠진 목록이고, 그것이 종류·우선순위가
+                    # 링크에만 있지 않고 드롭다운으로도 있는 이유와 같다.
+                    if state['sender']:
+                        chip = ui.element('div').classes('ma-tag') \
+                            .style(f'background:{soft_of(css_color(LINK))};'
+                                   f'color:{css_color(LINK)};display:flex;'
+                                   'align-items:center;gap:4px')
+
+                        def drop_sender():
+                            # set_visibility is an element method and needs no client;
+                            # the chip is built once outside the refreshable, so
+                            # clearing the filter has to take it off the bar by hand.
+                            edit(sender='')
+                            chip.set_visibility(False)
+
+                        with chip:
+                            ui.icon('person').style('font-size:13px')
+                            ui.label(f"거래처 {state['sender']}")
+                            ui.button(icon='close', on_click=drop_sender) \
+                                .props('flat dense round size=xs') \
+                                .style(f'color:{css_color(LINK)}').tooltip('거래처 필터 해제')
                     ui.space()
                     fetch = ui.button('지금 가져오기', icon='cloud_download', on_click=collect) \
                         .props('unelevated dense no-caps') \
@@ -5702,6 +5817,82 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             ui.timer(0.15, lambda: area.scroll_to(percent=1.0), once=True)
 
     # 통계 -----------------------------------------------------------
+
+    # 거래처 ------------------------------------------------------------
+
+    @ui.page('/senders')
+    def senders_page(request: Request):
+        """거래처 — 한 사람과 주고받은 전부를, 한 장으로.
+
+        메일 목록은 한 통씩 답하고 이 화면은 '이 사람과 무엇이 남아 있나'에 답한다.
+        숫자는 전부 Store.senders()의 한 번의 GROUP BY에서 나오고, 카드를 누르면
+        그 주소로 걸러진 같은 목록이 열린다 — 세는 쪽과 여는 쪽이 같은 sender_addr
+        컬럼을 쓰므로 둘이 다른 메일을 셀 수 없다.
+        """
+        if not allowed(request):
+            refused()
+            return
+        picked = {'sort': 'recent', 'query': request.query_params.get('q', '')}
+
+        @ui.refreshable
+        def body():
+            account = account_of(config)
+            rows = sender_rows(store(directory).senders(account), date.today()) if account else []
+            found = sender_sort(sender_search(rows, picked['query']), picked['sort'])
+            shown = found[:SENDER_SHOWN]
+            with ui.element('div').classes('ma-meta').style('margin-bottom:12px'):
+                ui.label(f'거래처 {len(rows)}곳').classes('ma-meta__item')
+                if len(found) != len(rows):
+                    ui.label(f'검색 결과 {len(found)}곳').classes('ma-meta__item')
+                if len(shown) != len(found):
+                    ui.label(f'{len(shown)}곳만 표시').classes('ma-meta__item')
+            if not rows:
+                empty('아직 수집된 메일이 없습니다.')
+                return
+            if not found:
+                empty('그 이름이나 주소로 받은 메일이 없습니다.')
+                return
+            with grid(minimum=250, gap=12):
+                for row in shown:
+                    with ui.link(target=href('/mail', token, sender=row['addr'])) \
+                            .classes('ma-card ma-sender'):
+                        ui.label(row['name']).classes('ma-sender__name')
+                        if row['named']:
+                            ui.label(row['addr']).classes('ma-sender__addr')
+                        with ui.element('div').classes('ma-meta').style('margin-top:9px'):
+                            tag(f"전체 {row['total']}")
+                            if row['open']:
+                                tag(f"미처리 {row['open']}", css_color(LINK),
+                                    soft_of(css_color(LINK)))
+                            if row['waiting']:
+                                # 답장 대기와 같은 색: 두 화면이 같은 것을 세고 있다.
+                                tag(f"답장 대기 {row['waiting']}", css_color(SOON),
+                                    soft_of(css_color(SOON)))
+                        line = sender_line(row)
+                        if line:
+                            ui.label(line).classes('ma-sender__foot')
+
+        def pick(mode):
+            picked['sort'] = mode
+            body.refresh()
+
+        def look(text):
+            picked['query'] = text
+            body.refresh()
+
+        with page_shell('/senders'):
+            with ui.element('div').classes('ma-head').style('margin-bottom:12px'):
+                ui.icon('contacts').style(f'color:{MUTED};font-size:17px')
+                ui.label('거래처').classes('ma-head__title')
+                ui.space()
+                ui.input(placeholder='이름 또는 주소', value=picked['query'],
+                         on_change=lambda event: look(event.value)) \
+                    .props('dense outlined clearable debounce=250').style('width:210px')
+                ui.toggle({key: label for key, label in SENDER_SORTS},
+                          value=picked['sort'],
+                          on_change=lambda event: pick(event.value)) \
+                    .props('no-caps dense unelevated toggle-color=primary').classes('ma-seg')
+            body()
 
     @ui.page('/stats')
     def stats_page(request: Request):

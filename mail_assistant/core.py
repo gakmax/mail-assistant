@@ -386,7 +386,11 @@ class Store:
                      # thread가 ''인 것은 헤더가 아예 없던 메일이고, 그런 메일은
                      # 저 혼자 한 대화다(thread_rows()가 그렇게 답한다).
                      ('message_id', "TEXT NOT NULL DEFAULT ''"),
-                     ('thread', "TEXT NOT NULL DEFAULT ''"))
+                     ('thread', "TEXT NOT NULL DEFAULT ''"),
+                     # 발신자의 주소만. `sender`는 표시 이름이 붙어 있고 그 이름은
+                     # 보내는 쪽 클라이언트가 이번 주에 쓰기로 한 것이라, 그것으로
+                     # 묶으면 한 거래처가 둘이 된다.
+                     ('sender_addr', "TEXT NOT NULL DEFAULT ''"))
         with self.db:
             for column, declaration in additions:
                 if column not in present:
@@ -395,6 +399,7 @@ class Store:
         self.backfill_verdicts()
         self.backfill_replies()
         self.backfill_threads()
+        self.backfill_senders()
 
     def backfill_headers(self):
         """Fill subject/sender for mail collected before those columns existed."""
@@ -447,6 +452,43 @@ class Store:
         if updates:
             with self.db:
                 self.db.executemany('UPDATE mail SET message_id=?, thread=? WHERE id=?', updates)
+
+    def backfill_senders(self):
+        """Fill sender_addr for mail collected before the column existed.
+
+        Read off the `sender` column rather than re-parsed from raw: backfill_headers()
+        has already put the header there, and address_of() is the same function add()
+        uses. A sender with no address at all lands on '' and is asked again next open,
+        which costs one scan of a handful of rows — the alternative is a second marker
+        column for a case that is a malformed From header.
+        """
+        rows = self.db.execute("SELECT id, sender FROM mail WHERE sender_addr='' "
+                               "AND sender<>''").fetchall()
+        updates = [(address_of(row['sender']), row['id']) for row in rows]
+        updates = [pair for pair in updates if pair[0]]
+        if updates:
+            with self.db:
+                self.db.executemany('UPDATE mail SET sender_addr=? WHERE id=?', updates)
+
+    def senders(self, account, today=None, days=WAIT_DAYS):
+        """거래처 한 줄씩 — 주고받은 수, 남은 것, 기다리게 한 것, 마지막 수신.
+
+        One grouped query, never one per sender: the same rule Store.rooms() follows.
+        미처리 and 답장 대기 are counted with the conditions their own screens use
+        (STATE_SQL's 미처리, and state_where(WAITING)'s), so a 거래처 row and the list
+        it opens cannot disagree — a test holds them against each other.
+        """
+        cutoff = wait_cutoff(today or local_now().date(), days)
+        return self.db.execute(
+            'SELECT sender_addr addr, COUNT(*) total, '
+            "MAX(received) last, MIN(received) first, "
+            "COALESCE(SUM(handled = '' AND result IS NOT NULL),0) open, "
+            'COALESCE(SUM(reply_needed = 1 AND handled <> ? AND received < ?),0) waiting, '
+            "COALESCE(SUM(handled = ?),0) done, "
+            "MAX(CASE WHEN sender <> '' THEN sender END) name "
+            "FROM mail WHERE account=? AND sender_addr<>'' GROUP BY sender_addr "
+            'ORDER BY last DESC, addr ASC',
+            (HANDLED, cutoff, HANDLED, account)).fetchall()
 
     def backfill_replies(self):
         """Fill reply_needed for mail analysed before the column existed.
@@ -512,9 +554,9 @@ class Store:
             headers = {'subject': '', 'sender': ''}
         with self.db:
             self.db.execute('INSERT OR IGNORE INTO mail(id,account,uid,raw,received,subject,sender,'
-                            'message_id,thread) VALUES (?,?,?,?,?,?,?,?,?)',
+                            'sender_addr,message_id,thread) VALUES (?,?,?,?,?,?,?,?,?,?)',
                             (ident, account, uid, raw, now(), headers.get('subject', ''),
-                             headers.get('sender', ''),
+                             headers.get('sender', ''), address_of(headers.get('sender', '')),
                              (message_ids(headers.get('message_id')) or [''])[0],
                              # `or ident`: 헤더가 하나도 없는 메일도 키를 가져야 한다.
                              # ''로 두면 키 없는 메일끼리 한 대화가 된다.
@@ -627,7 +669,7 @@ class Store:
                                (account, limit)).fetchall()
 
     def search(self, account, query='', state='', sort='received', desc=True,
-               limit=LIST_LIMIT, offset=0, category='', priority=''):
+               limit=LIST_LIMIT, offset=0, category='', priority='', sender=''):
         """(page of rows, total). The list used to read 2000 rows and sort them in Python.
 
         `category` and `priority` are the columns the 대시보드 bars are drawn from, so a
@@ -646,8 +688,10 @@ class Store:
         if clause:
             where.append(f'({clause})')
             params += list(extra)
-        # The column name is ours; the value is always a parameter.
-        for column, chosen in (('category', category), ('priority', priority)):
+        # The column name is ours; the value is always a parameter. sender_addr and
+        # not sender: 거래처 화면 counts by address, so this has to filter by it too.
+        for column, chosen in (('category', category), ('priority', priority),
+                               ('sender_addr', sender)):
             if chosen:
                 where.append(f'{column} = ?')
                 params.append(chosen)
@@ -1104,6 +1148,31 @@ def row_view(row):
             'category': result.get('category', ''), 'priority': result.get('priority', ''),
             'state': state_of(row), 'error': row['error'],
             'waiting': days is not None and days >= WAIT_DAYS}
+
+
+ADDRESS = re.compile(r'<([^<>@\s]+@[^<>@\s]+)>')
+
+
+def address_of(sender):
+    """'김과장 <kim@buyer.example>' → 'kim@buyer.example', 없으면 ''.
+
+    Lives here rather than in excel.py, where it began as the mailto: link's own
+    helper: it reads a header, and a 거래처 is that address — the display name is
+    whatever the sender's client felt like writing this week, so grouping on it would
+    make one company two.
+    """
+    match = ADDRESS.search(str(sender or ''))
+    if match:
+        return match.group(1).lower()
+    text = str(sender or '').strip()
+    return text.lower() if '@' in text and ' ' not in text else ''
+
+
+def display_name(sender):
+    """'김과장 <kim@x>' → '김과장', 이름이 없으면 ''. 따옴표는 클라이언트가 붙인 것이다."""
+    text = str(sender or '').strip()
+    name = ADDRESS.split(text)[0] if '<' in text else ''
+    return name.strip().strip('"').strip() if name.strip() != text else ''
 
 
 MESSAGE_IDS = re.compile(r'<[^<>\s]+>')

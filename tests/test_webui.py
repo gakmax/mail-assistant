@@ -47,6 +47,8 @@ from mail_assistant.webui import (CARD_TONES, COST_TONES, DEFAULT_LIST, FONT_FIL
                                   calendar_events, card_target, countdown_text, run_view,
                                   FAILED_CARD, WAITING, WAIT_LATE, WAIT_NOTE, wait_age,
                                   THREAD_SHOWN, thread_view, thread_line, thread_clip,
+                                  SENDER_SHOWN, SENDER_SORTS, sender_rows, sender_sort,
+                                  sender_search, sender_line,
                                   board, board_counts, card_hint, card_rows,
                                   chat_context, draft_view, label_step, stats_view,
                                   deadline_progress, drag_drop, drag_payload, drag_start,
@@ -266,6 +268,57 @@ class WaitingCardTests(unittest.TestCase):
         """POP3로는 보낸 메일을 볼 수 없다 — 그 사실이 화면에 있어야 한다."""
         self.assertIn('완료 표시', WAIT_NOTE)
         self.assertGreater(WAIT_LATE, 0)
+
+
+class SenderCardTests(unittest.TestCase):
+    """거래처 카드의 모양, 정렬, 검색."""
+
+    TODAY = datetime.date(2026, 9, 15)
+
+    def raw(self, addr, name, total, open_count, waiting, last):
+        return {'addr': addr, 'name': name, 'total': total, 'open': open_count,
+                'waiting': waiting, 'done': total - open_count,
+                'last': f'{last}T00:00:00+00:00', 'first': '2026-08-01T00:00:00+00:00'}
+
+    ROWS = (('kim@buyer.example', '김과장 <kim@buyer.example>', 8, 3, 2, '2026-09-13'),
+            ('lee@corp.example', 'lee@corp.example', 4, 4, 0, '2026-09-14'),
+            ('park@x.example', '박부장 <park@x.example>', 2, 0, 1, '2026-09-01'))
+
+    def rows(self):
+        return sender_rows([self.raw(*args) for args in self.ROWS], self.TODAY)
+
+    def test_a_sender_with_no_display_name_is_named_by_its_address(self):
+        rows = {row['addr']: row for row in self.rows()}
+        self.assertEqual(rows['kim@buyer.example']['name'], '김과장')
+        self.assertTrue(rows['kim@buyer.example']['named'])
+        self.assertEqual(rows['lee@corp.example']['name'], 'lee@corp.example')
+        self.assertFalse(rows['lee@corp.example']['named'])
+
+    def test_the_foot_says_how_long_it_has_been_quiet(self):
+        rows = {row['addr']: row for row in self.rows()}
+        self.assertEqual(sender_line(rows['kim@buyer.example']), '마지막 2026-09-13 · 2일 전')
+        self.assertIn('오늘', sender_line(sender_rows(
+            [self.raw('a@x', 'a@x', 1, 1, 0, '2026-09-15')], self.TODAY)[0]))
+
+    def test_남은_일_순은_기다리게_한_것부터(self):
+        """미처리는 '아직 안 봤다'이고 답장 대기는 '상대가 서 있다'이다."""
+        order = [row['addr'] for row in sender_sort(self.rows(), 'open')]
+        self.assertEqual(order[0], 'kim@buyer.example')      # 대기 2
+        self.assertEqual(order[1], 'park@x.example')         # 대기 1
+        self.assertEqual(order[2], 'lee@corp.example')       # 대기 0, 미처리 4
+
+    def test_recent_keeps_the_order_the_query_gave(self):
+        self.assertEqual([row['addr'] for row in sender_sort(self.rows(), 'recent')],
+                         [addr for addr, *_ in self.ROWS])
+
+    def test_search_looks_at_both_the_name_and_the_address(self):
+        """읽는 사람이 이름을 기억할지 주소를 기억할지 알 수 없다."""
+        self.assertEqual([row['addr'] for row in sender_search(self.rows(), '김과장')],
+                         ['kim@buyer.example'])
+        self.assertEqual([row['addr'] for row in sender_search(self.rows(), 'CORP')],
+                         ['lee@corp.example'])
+        self.assertEqual(len(sender_search(self.rows(), '')), 3)
+        self.assertEqual(sender_search(self.rows(), '없는이름'), [])
 
 
 class ThreadStripTests(unittest.TestCase):
