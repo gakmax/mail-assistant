@@ -2859,15 +2859,26 @@ class GiveUpTests(unittest.TestCase):
     # 것과 같은 시계다. 그래서 지난 실패를 분명히 앞에 둔다.
     BEFORE = '2020-01-01T00:00:00+00:00'
 
+    def workspace(self):
+        """tmpdir도 테스트 정리에 맡긴다. 순서가 이 헬퍼의 전부다.
+
+        `with tempfile.TemporaryDirectory()` 안에서 addCleanup으로 연결을 닫으면 순서가
+        뒤집힌다 — 정리는 with 블록이 끝난 *뒤*에 돌고, Windows는 그때 이미 열린 mail.db를
+        지우려다 WinError 32를 낸 뒤다. 폴더를 먼저 등록하면 LIFO로 연결이 먼저 닫힌다.
+        """
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        return Path(holder.name)
+
     def opened(self, directory):
         """열고 나서 반드시 닫는다. 단언이 먼저 터지면 Windows가 mail.db를 붙들고 있다."""
         store = Store(directory / 'mail.db')
         self.addCleanup(store.db.close)
         return store
 
-    def prepared(self, folder, attempts):
+    def prepared(self, attempts):
         """실패를 `attempts`번 쌓은 메일 하나, 그리고 두 번째 메일 하나."""
-        directory = Path(folder)
+        directory = self.workspace()
         store = self.opened(directory)
         first = store.add(account_key(CONFIG), 'stuck', mail())
         second = store.add(account_key(CONFIG), 'other', mail())
@@ -2898,55 +2909,51 @@ class GiveUpTests(unittest.TestCase):
 
     def test_it_is_put_down_once_codex_is_known_to_be_working(self):
         from mail_assistant.worker import MAX_ATTEMPTS
-        with tempfile.TemporaryDirectory() as folder:
-            directory, store, first, second = self.prepared(folder, MAX_ATTEMPTS - 1)
-            # 이 메일이 마지막으로 실패한 *뒤에* 다른 메일이 분석에 성공했다.
-            store.analyzed(second, parse_mail(mail()), RESULT)
-            store.db.close()          # 워커가 같은 파일을 연다
-            messages = self.cycle(directory)
-            store = self.opened(directory)
-            row = store.detail(first)
-            self.assertEqual(row['retry_at'], NO_RETRY)
-            self.assertIn('더 시도하지 않습니다', row['error'])
-            self.assertIn('분석 포기', ' / '.join(messages))
+        directory, store, first, second = self.prepared(MAX_ATTEMPTS - 1)
+        # 이 메일이 마지막으로 실패한 *뒤에* 다른 메일이 분석에 성공했다.
+        store.analyzed(second, parse_mail(mail()), RESULT)
+        store.db.close()          # 워커가 같은 파일을 연다
+        messages = self.cycle(directory)
+        store = self.opened(directory)
+        row = store.detail(first)
+        self.assertEqual(row['retry_at'], NO_RETRY)
+        self.assertIn('더 시도하지 않습니다', row['error'])
+        self.assertIn('분석 포기', ' / '.join(messages))
 
     def test_a_quota_outage_never_puts_the_queue_down(self):
         """아무것도 성공하지 못했다면 한도나 로그인 쪽이고, 그것은 메일의 잘못이 아니다."""
         from mail_assistant.worker import MAX_ATTEMPTS
-        with tempfile.TemporaryDirectory() as folder:
-            directory, store, first, _ = self.prepared(folder, MAX_ATTEMPTS - 1)
-            store.db.close()
-            self.cycle(directory)
-            store = self.opened(directory)
-            row = store.detail(first)
-            self.assertLess(row['retry_at'], NO_RETRY)
-            self.assertGreater(row['retry_at'], time.time())
+        directory, store, first, _ = self.prepared(MAX_ATTEMPTS - 1)
+        store.db.close()
+        self.cycle(directory)
+        store = self.opened(directory)
+        row = store.detail(first)
+        self.assertLess(row['retry_at'], NO_RETRY)
+        self.assertGreater(row['retry_at'], time.time())
 
     def test_다시_분석_is_still_the_way_back_in(self):
         from mail_assistant.worker import MAX_ATTEMPTS
-        with tempfile.TemporaryDirectory() as folder:
-            directory, store, first, second = self.prepared(folder, MAX_ATTEMPTS - 1)
-            store.analyzed(second, parse_mail(mail()), RESULT)
-            store.db.close()
-            self.cycle(directory)
-            store = self.opened(directory)
-            self.assertEqual(store.reset([first]), 1)
-            row = store.detail(first)
-            self.assertEqual(row['attempts'], 0)
-            self.assertEqual(row['failed_at'], '')
-            self.assertEqual([one['id'] for one in
-                              store.pending(account_key(CONFIG), time.time())], [first])
+        directory, store, first, second = self.prepared(MAX_ATTEMPTS - 1)
+        store.analyzed(second, parse_mail(mail()), RESULT)
+        store.db.close()
+        self.cycle(directory)
+        store = self.opened(directory)
+        self.assertEqual(store.reset([first]), 1)
+        row = store.detail(first)
+        self.assertEqual(row['attempts'], 0)
+        self.assertEqual(row['failed_at'], '')
+        self.assertEqual([one['id'] for one in
+                          store.pending(account_key(CONFIG), time.time())], [first])
 
     def test_analyzed_since_is_what_tells_the_two_apart(self):
-        with tempfile.TemporaryDirectory() as folder:
-            directory, store, first, second = self.prepared(folder, 1)
-            stamp = store.detail(first)['failed_at']
-            self.assertEqual(stamp, self.BEFORE)
-            self.assertFalse(store.analyzed_since(account_key(CONFIG), stamp))
-            store.analyzed(second, parse_mail(mail()), RESULT)
-            self.assertTrue(store.analyzed_since(account_key(CONFIG), stamp))
-            # 한 번도 실패한 적 없는 메일에는 물어볼 것이 없다.
-            self.assertFalse(store.analyzed_since(account_key(CONFIG), ''))
+        directory, store, first, second = self.prepared(1)
+        stamp = store.detail(first)['failed_at']
+        self.assertEqual(stamp, self.BEFORE)
+        self.assertFalse(store.analyzed_since(account_key(CONFIG), stamp))
+        store.analyzed(second, parse_mail(mail()), RESULT)
+        self.assertTrue(store.analyzed_since(account_key(CONFIG), stamp))
+        # 한 번도 실패한 적 없는 메일에는 물어볼 것이 없다.
+        self.assertFalse(store.analyzed_since(account_key(CONFIG), ''))
 
 
 class ConsoleTests(unittest.TestCase):

@@ -972,6 +972,15 @@ an explicitly older `failed_at`, which is also what the real sequence looks like
 a backoff of five minutes to an hour separates a failure from the next attempt.
 NO_RETRY and 다시 분석 are the way back in, exactly as they are for `Unanalyzable`.
 
+`addCleanup` in that class is not a detail either: registered inside a
+`with tempfile.TemporaryDirectory()` it runs *after* the block, so the folder is removed
+while the connection is still open and Windows answers WinError 32 — which is how the
+first attempt at this fix broke four tests instead of two. `workspace()` puts the
+directory itself on `addCleanup` **before** any `Store`, so LIFO closes the connections
+first. Both conditions are reproducible off Windows: freeze `core.now` to a constant for
+the clock, and for the lock, wrap `tempfile.TemporaryDirectory.cleanup` and ask whether
+any sqlite connection under that folder still answers `SELECT 1`.
+
 **A body over `BODY_LIMIT` is clipped, and the clip is said in three places.**
 20,000자 — about 11,000 tokens, and the value 번역 and 초안 already use. What makes
 clipping safe is that nothing about it is silent: `CLIP_NOTE` goes on the front of the
