@@ -30,6 +30,7 @@ from mail_assistant.webui import (CARD_TONES, COST_TONES, DEFAULT_LIST, FONT_FIL
                                   NAV_BADGE_MAX, NAV_GROUPS, PAGES, RAIL_BOOT, RAIL_KEY,
                                   RAIL_TOGGLE, SIDE_BREAK, SIDE_EASE, SIDE_GROUP, SIDE_RAIL,
                                   CHAT_CHROME, translated_note, row_value,
+                                  BODY_LIMIT, clipped_note,
                                   DRAFT_NOTE, DRAFT_TONES, DRAFT_WAYS,
                                   draft_input, draft_picks,
                                   SIDE_WIDE, badge_text, bar_status, nav_counts, nav_rows,
@@ -2067,6 +2068,17 @@ class TranslationTests(unittest.TestCase):
                             translated=('영어', '견적을 요청드립니다.'))
             self.assertEqual(view['translated'], '견적을 요청드립니다.')
             self.assertEqual(view['language'], '영어')
+
+    def test_a_clipped_analysis_says_so_in_the_mails_own_numbers(self):
+        note = clipped_note(123456)
+        self.assertIn('123,456자', note)
+        self.assertIn(f'{BODY_LIMIT:,}자', note)
+        # 원문은 전체가 남아 있다는 것이 이 줄의 나머지 절반이다.
+        self.assertIn('원문', note)
+
+    def test_an_ordinary_mail_has_no_such_line(self):
+        self.assertEqual(clipped_note(0), '')
+        self.assertEqual(clipped_note(None), '')
 
     def test_the_note_names_the_language_and_what_not_to_trust_it_for(self):
         self.assertIn('영어 원문을', translated_note('영어'))

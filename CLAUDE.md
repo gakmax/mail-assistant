@@ -17,7 +17,7 @@ that break silently if you don't know them.
 ## Commands
 
 ```bash
-python -m unittest discover -s tests -v    # from the repo root; 683 tests, all platforms
+python -m unittest discover -s tests -v    # from the repo root; 689 tests, all platforms
 ```
 
 ```powershell
@@ -874,18 +874,29 @@ and are now one. A new caller passes a prefix, a prompt, a payload, a schema and
 own Korean failure sentence — and nothing else, because everything else is the part
 that must not drift.
 
+**A body over `BODY_LIMIT` is clipped, and the clip is said in three places.**
+60,000자 is what comes back inside the 240-second timeout. What makes clipping safe is
+that nothing about it is silent: `CLIP_NOTE` goes on the front of the prompt so a model
+that saw half a mail does not write '일정 없음' about the other half, `parsed['clipped']`
+carries the *original* length into the database, and the 메일 상세 draws an amber band
+(`clipped_note()`) above the analysis with 실행 saying it too. `parsed` keeps the **whole**
+body — only what is sent to Codex is cut — because 원문 is drawn from that field and a
+reader told 'the analysis saw 60,000 of 72,013자' has to be able to read the rest.
+
 **A failure a retry cannot fix is `services.Unanalyzable`, and the worker puts that
-mail down.** The 60,000-character guard in `analyze()` is deliberate — clipping would
-silently lose whatever deadline was in the second half — but for six cycles it was
-raised as a plain `RuntimeError`, which is the branch that reports to Discord, pushes
-the *global* `next_analysis` backoff to an hour and `break`s the loop. So one mail that
-could never succeed stalled every other mail behind it, for ever, and posted a crash
-report each time round (report.py's 30-minute de-duplication does not help: the backoff
-grows past it). `Unanalyzable` gets its own branch — `store.failed(id, str(exc),
-NO_RETRY)`, no report, no backoff, `continue` — and it is the one failure whose message
-is stored on the mail, because it is ours rather than Codex's output. `core.NO_RETRY` is
-a far-future `retry_at` and `Store.reset()` writing 0 over it is the way back in, which
-is what makes 다시 분석 the only thing that asks again.
+mail down.** A mail whose raw bytes will not parse, and one with neither a body nor a
+subject, are the two: the next cycle reads the same bytes. Before this they rose as
+plain `RuntimeError`s, which is the branch that reports to Discord, pushes the *global*
+`next_analysis` backoff to an hour and `break`s the loop — so one mail that could never
+succeed stalled every other mail behind it, for ever, and posted a crash report each
+time round (report.py's 30-minute de-duplication does not help: the backoff grows past
+it; 6번째 시도 is what arrived). `Unanalyzable` gets its own branch —
+`store.failed(id, str(exc), NO_RETRY)`, no report, no backoff, `continue` — and it is
+the one failure whose message is stored on the mail, because it is ours rather than
+Codex's output. `core.NO_RETRY` is a far-future `retry_at` and `Store.reset()` writing 0
+over it is the way back in, which is what makes 다시 분석 the only thing that asks again.
+`NO_SUBJECT` is named in core for this check alone: `parse_mail()` writes '(제목 없음)'
+where a header was missing, so '제목이 없다' is not the same test as `not subject`.
 
 **분석은 답변 초안을 쓰지 않는다, and a made one goes into `reply_draft`.** The
 analysis's prompt now says `reply_draft는 항상 빈 문자열` while still judging

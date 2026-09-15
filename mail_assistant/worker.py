@@ -6,8 +6,8 @@ from .core import NO_RETRY, Store, account_key, now
 from .excel import Excel, error_detail
 from .overview import briefing_due, briefing_input, trend
 from .report import remember_secret, report
-from .services import (Unanalyzable, analyze, briefing, check_login, fetch_mail,
-                       read_password)
+from .services import (BODY_LIMIT, Unanalyzable, analyze, briefing, check_login,
+                       fetch_mail, read_password)
 
 # A failed briefing waits this long, rather than retrying on every 180-second cycle.
 BRIEF_BACKOFF = 1800
@@ -71,6 +71,12 @@ def run(config, directory, stop, notify, wake=None):
                         try:
                             parsed, result = analyze(row, config)
                             store.analyzed(row['id'], parsed, result)
+                            if parsed.get('clipped'):
+                                # Not silent anywhere: the mail carries the notice and
+                                # 실행 says it too, because a clipped analysis reads
+                                # exactly like a whole one.
+                                messages.append(f'본문이 길어 앞 {BODY_LIMIT:,}자만 분석: '
+                                                f'{subject}')
                         except Unanalyzable as exc:
                             # Nothing a retry can change, so this mail is put down where
                             # it is: no global backoff, because the queue behind it is

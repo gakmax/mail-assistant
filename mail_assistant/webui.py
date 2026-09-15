@@ -25,7 +25,7 @@ from .excel import mailto
 from .hub import line_text
 from .overview import (BRIEF_HOUR, DUE_DAYS, RECENT_DAYS, UPCOMING, overview, past_due,
                        results, review_queue, trend)
-from .services import DRAFT_TONES, DRAFT_WAYS
+from .services import BODY_LIMIT, DRAFT_TONES, DRAFT_WAYS
 from .settings import (DEFAULTS, FIELDS, GRADE_NOTE, NO_MODELS, field_errors, model_label,
                        model_rows, normalize, read_models)
 from .style import CALM, DASH_GREEN, LINK, NEUTRAL, SOON, URGENT, css_color
@@ -2073,6 +2073,19 @@ TRANSLATE_TIP = ('본문을 한국어로 옮깁니다. 분석과 같은 Codex �
                  '분석 중이면 그 뒤에 처리됩니다.')
 
 
+def clipped_note(total, limit=BODY_LIMIT):
+    """'본문 123,456자 중 앞 60,000자만 분석했습니다' — or '' for an ordinary mail.
+
+    Said out loud and in the warning tone, because a clipped analysis that looked like
+    every other analysis is the one way this limit can quietly cost a deadline.
+    """
+    if not total:
+        return ''
+    return (f'본문이 {int(total):,}자여서 앞 {limit:,}자만 분석했습니다. '
+            '뒤쪽에 있는 일정이나 요청은 빠졌을 수 있으니 원문을 확인하세요. '
+            '원문은 전체가 보관되어 있습니다.')
+
+
 def translated_note(language):
     """번역문 위에 붙는 한 줄. What it was, and what it cannot be trusted for."""
     source = f'{language} 원문을' if language else '원문을'
@@ -2100,6 +2113,9 @@ def detail_view(row):
         # 해외영업 메일: what was stored the one time it was asked for, and whether the
         # mail reads as somebody else's language in the first place. The second is what
         # decides which of the two the panel opens on — not the button being there.
+        # 본문이 길어 앞부분만 분석된 메일. The number is the *original* length, which
+        # is what the notice has to say — 60,000 is the part that was read.
+        'clipped': int(parsed.get('clipped') or 0),
         'translated': row_value(row, 'translated'),
         'language': row_value(row, 'translated_from'),
         'foreign': looks_foreign(tidy_body(parsed.get('body', ''))),
@@ -4344,6 +4360,13 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     with ui.element('div').classes('ma-alert').style('margin-top:12px'):
                         ui.icon('error_outline').style('font-size:16px')
                         ui.label(view['error']).style('font-size:12px')
+                if view['clipped']:
+                    # Amber, not red: the analysis below is real, it just did not see
+                    # all of the mail — which the reader has to be told before reading it.
+                    with ui.element('div').classes('ma-alert ma-alert--warn') \
+                            .style('margin-top:12px'):
+                        ui.icon('content_cut').style('font-size:16px')
+                        ui.label(clipped_note(view['clipped'])).style('font-size:12px')
                 with grid(minimum=320, gap=22).style('margin-top:16px;align-items:start'):
                     with ui.element('div'):
                         with ui.element('div').classes('ma-head') \

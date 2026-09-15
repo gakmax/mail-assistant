@@ -38,6 +38,10 @@ PRIORITY_ORDER = ('긴급', '높음', '보통', '낮음')
 # already compares this against time.time() and 다시 분석 (Store.reset) writes 0 over it,
 # which is the one way back in.
 NO_RETRY = 4102444800.0     # 2100-01-01
+# What parse_mail() puts where a Subject header should have been. Named because
+# services.analyze() has to tell it apart from a subject somebody actually wrote:
+# a mail with neither a subject nor a body has nothing to analyse at all.
+NO_SUBJECT = '(제목 없음)'
 
 
 def event_key(ident):
@@ -257,7 +261,7 @@ def parse_mail(raw: bytes):
             text = text_of_html(text)
     return {
         'sender': str(message.get('From', '')),
-        'subject': str(message.get('Subject', '(제목 없음)')),
+        'subject': str(message.get('Subject', NO_SUBJECT)),
         'date': str(message.get('Date', '')),
         'message_id': str(message.get('Message-ID', '')),
         'body': text,

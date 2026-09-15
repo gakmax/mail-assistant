@@ -2279,23 +2279,77 @@ class BodyLimitTests(unittest.TestCase):
         msg.set_content('가' * (BODY_LIMIT + 1))
         return msg.as_bytes()
 
-    def test_an_oversize_body_is_refused_and_never_clipped(self):
-        """뒤쪽 절반에 있던 마감을 조용히 잃는 쪽이 더 나쁘다."""
+    def analyzed(self, raw):
+        """analyze() against a fake Codex, returning (what was sent, parsed, result)."""
+        seen = {}
+
+        def execute(command, **kwargs):
+            seen['input'] = kwargs['input']
+            Path(command[command.index('-o') + 1]).write_text(json.dumps(RESULT),
+                                                              encoding='utf-8')
+            return subprocess.CompletedProcess(command, 0)
+
         with tempfile.TemporaryDirectory() as folder:
             store = Store(Path(folder) / 'mail.db')
-            store.add(account_key(CONFIG), 'long', self.oversize())
+            store.add(account_key(CONFIG), 'one', raw)
             row = store.pending(account_key(CONFIG), time.time())[0]
-            with patch('mail_assistant.services.subprocess.run') as run:
-                with self.assertRaises(Unanalyzable) as caught:
-                    analyze(row, CONFIG)
-            run.assert_not_called()             # Codex was never asked
-            self.assertIn(f'{BODY_LIMIT:,}자', str(caught.exception))
+            with patch('mail_assistant.services.codex_command', return_value=['codex']), \
+                 patch('mail_assistant.services.subprocess.run', side_effect=execute):
+                parsed, result = analyze(row, CONFIG)
             store.db.close()
+        text = seen['input']
+        return text, json.loads(text[text.index('{'):]), parsed, result
+
+    def test_only_the_first_part_is_sent_and_the_model_is_told_so(self):
+        """잘라 놓고 아무 말이 없는 것이 이 상한의 유일한 위험이다."""
+        text, payload, _, _ = self.analyzed(self.oversize())
+        self.assertEqual(len(payload['body']), BODY_LIMIT)
+        self.assertIn('clipped', payload)
+        # 뒤쪽을 보지 못한 모델이 '일정 없음'이라고 쓰면 잘린 절반이 조용히 사라진다.
+        self.assertIn('단정하지 말고', text)
+        self.assertIn('needs_review=true', text)
+
+    def test_an_ordinary_mail_is_told_none_of_that(self):
+        text, payload, parsed, result = self.analyzed(mail())
+        self.assertNotIn('앞부분만 잘라', text)
+        self.assertNotIn('clipped', payload)
+        self.assertNotIn('clipped', parsed)
+        self.assertEqual(result, RESULT)
+
+    def test_what_is_stored_is_the_whole_body_and_the_original_length(self):
+        """원문은 전체가 남아야 한다 — 화면이 보여주는 것이 이 parsed이기 때문이다."""
+        _, _, parsed, _ = self.analyzed(self.oversize())
+        self.assertGreater(len(parsed['body']), BODY_LIMIT)
+        self.assertEqual(parsed['clipped'], len(parsed['body']))
 
     def test_it_is_not_the_kind_of_failure_a_retry_fixes(self):
         """Unanalyzable subclasses RuntimeError, so an older except still catches it —
         but the worker's own branch has to come first, which is what this pins."""
         self.assertTrue(issubclass(Unanalyzable, RuntimeError))
+
+    def test_a_mail_with_nothing_in_it_at_all_is_put_down(self):
+        message = EmailMessage()
+        message['From'] = 'sender@example.com'
+        message['Date'] = 'Thu, 10 Sep 2026 10:00:00 +0900'
+        message.set_content('   ')
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            store.add(account_key(CONFIG), 'empty', message.as_bytes())
+            row = store.pending(account_key(CONFIG), time.time())[0]
+            with patch('mail_assistant.services.subprocess.run') as run:
+                with self.assertRaises(Unanalyzable):
+                    analyze(row, CONFIG)
+            run.assert_not_called()             # Codex was never asked
+            store.db.close()
+
+    def test_a_subject_with_no_body_is_still_worth_analysing(self):
+        """'회의 12시'만 제목에 있는 메일을 거절하면 그것이 회귀다."""
+        message = EmailMessage()
+        message['Subject'] = '내일 12시 회의'
+        message['From'] = 'sender@example.com'
+        message['Date'] = 'Thu, 10 Sep 2026 10:00:00 +0900'
+        message.set_content('')
+        self.assertEqual(self.analyzed(message.as_bytes())[3], RESULT)
 
     def test_a_body_inside_the_limit_is_analysed_as_before(self):
         with tempfile.TemporaryDirectory() as folder:
