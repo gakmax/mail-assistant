@@ -108,8 +108,8 @@ PAGES = (('/', '대시보드', 'dashboard'), ('/mail', '메일', 'mail'), ('/cal
 # because a page added there and forgotten here would be reachable by URL and by
 # nothing else on screen.
 NAV_GROUPS = (('', ('/',)),
-              ('업무', ('/mail', '/calendar', '/todo', '/drafts', '/memo', '/senders')),
-              ('돈', ('/money',)),
+              ('업무', ('/mail', '/calendar', '/todo', '/drafts', '/memo',
+                        '/senders', '/money')),
               ('도움', ('/chat', '/stats')),
               ('시스템', ('/run', '/settings')))
 # The sidebar with labels, and the same sidebar as icons only. The nine links used to
@@ -6048,25 +6048,26 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     ui.label(MONEY_NOTE).classes('ma-meta__item')
                 if not book['sums']:
                     empty('합계를 낼 수 있는 금액이 없습니다.')
-                for currency in sorted(book['sums'], key=lambda code: code != main_currency(found)):
-                    with ui.element('div').style('margin-top:8px'):
-                        with grid(minimum=170, gap=10):
-                            for kind in MONEY_KINDS:
-                                value = book['sums'][currency].get(kind)
-                                if value is None:
-                                    continue
-                                tone = css_color(MONEY_TONES.get(kind, NEUTRAL))
-                                with ui.element('div').classes('ma-kpi'):
-                                    with ui.element('div').classes('ma-kpi__icon') \
-                                            .style(f'background:{tone}1a;color:{tone}'):
-                                        ui.icon('payments')
-                                    with ui.element('div').style('min-width:0'):
-                                        ui.label(f'{kind} · {currency}') \
-                                            .classes('ma-kpi__label')
-                                        ui.label(money_text(value, currency)) \
-                                            .classes('ma-kpi__value')
-                                        ui.label(f"{book['counts'][currency][kind]}건") \
-                                            .classes('ma-kpi__hint')
+                tiles = grid(minimum=180, gap=10)
+                # 통화마다 그리드를 따로 두면 통화 하나에 종류 하나뿐인 줄이 페이지
+                # 폭을 다 쓰는 카드가 된다. 묶음은 카드 이름('입금 · USD')이 이미
+                # 말하고 있으므로, 칸은 하나로 두고 순서로만 나눈다.
+                lead = main_currency(found)
+                for currency, kind, value in [
+                        (code, kind, book['sums'][code][kind])
+                        for code in sorted(book['sums'], key=lambda c: (c != lead, c))
+                        for kind in MONEY_KINDS if kind in book['sums'][code]]:
+                    tone = css_color(MONEY_TONES.get(kind, NEUTRAL))
+                    with tiles:
+                        with ui.element('div').classes('ma-kpi'):
+                            with ui.element('div').classes('ma-kpi__icon') \
+                                    .style(f'background:{tone}1a;color:{tone}'):
+                                ui.icon('payments')
+                            with ui.element('div').style('min-width:0'):
+                                ui.label(f'{kind} · {currency}').classes('ma-kpi__label')
+                                ui.label(money_text(value, currency)).classes('ma-kpi__value')
+                                ui.label(f"{book['counts'][currency][kind]}건") \
+                                    .classes('ma-kpi__hint')
                 note = skipped_text(book)
                 if note:
                     # 합계 바로 아래. 더 아래로 내려가면 합계만 읽고 지나가게 된다.
