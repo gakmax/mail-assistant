@@ -720,13 +720,41 @@ class NoteStoreTests(unittest.TestCase):
                              [first, third, second])
 
     def test_only_the_text_moves_a_memo_to_the_front(self):
+        """The clock is pinned: a Windows one ticks about every 15ms.
+
+        Left to the real clock this asserts the tick resolution rather than the
+        ordering rule, and fails on Windows and nowhere else — which is exactly what
+        it did. The stamps below are a second apart because that is what a person
+        editing a memo actually produces.
+        """
+        stamps = ['2026-09-11T01:00:00+00:00', '2026-09-11T01:00:01+00:00',
+                  '2026-09-11T01:00:02+00:00']
         with self.opened() as store:
-            first = store.add_note('acct', '하나')
-            second = store.add_note('acct', '둘')
-            store.set_note_color(first, 'green')
-            self.assertEqual([row['id'] for row in store.notes('acct')], [second, first])
-            store.set_note_text(first, '하나 고침')
+            with patch('mail_assistant.core.now', side_effect=stamps):
+                first = store.add_note('acct', '하나')
+                second = store.add_note('acct', '둘')
+                store.set_note_color(first, 'green')      # no stamp: colour moves nothing
+                self.assertEqual([row['id'] for row in store.notes('acct')],
+                                 [second, first])
+                store.set_note_text(first, '하나 고침')
             self.assertEqual([row['id'] for row in store.notes('acct')][0], first)
+
+    def test_memos_written_in_one_tick_fall_back_on_the_id(self):
+        """Two stamps can be equal, and then something still has to decide.
+
+        `now()` is a string off a clock that may not have moved between two writes, so
+        `updated DESC` alone has nothing left to order by and sqlite may answer
+        differently on each call — the same hazard every mail list ends with `rowid`
+        for. Newest id first, which is the order they were written in.
+        """
+        with self.opened() as store:
+            with patch('mail_assistant.core.now', return_value='2026-09-11T01:00:00+00:00'):
+                first = store.add_note('acct', '하나')
+                second = store.add_note('acct', '둘')
+                store.set_note_text(first, '하나 고침')
+            for _ in range(3):
+                self.assertEqual([row['id'] for row in store.notes('acct')],
+                                 [second, first])
 
     def test_a_mail_filter_narrows_to_that_mails_own(self):
         with self.opened() as store:

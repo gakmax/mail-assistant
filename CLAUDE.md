@@ -17,7 +17,7 @@ that break silently if you don't know them.
 ## Commands
 
 ```bash
-python -m unittest discover -s tests -v    # from the repo root; 558 tests, all platforms
+python -m unittest discover -s tests -v    # from the repo root; 559 tests, all platforms
 ```
 
 ```powershell
