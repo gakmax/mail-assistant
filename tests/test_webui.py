@@ -26,6 +26,7 @@ from mail_assistant.hub import Hub
 from mail_assistant.overview import (BRIEF_DRAFTS, BRIEF_EVENTS, BRIEF_HOUR, BRIEF_OPEN,
                                      BRIEF_TEXT, DUE_DAYS, briefing_due, briefing_input,
                                      due_window, failures, oldest_open, overview)
+from mail_assistant.money import entries as money_entries, entry_of, manual_entry, totals
 from mail_assistant.webui import (CARD_TONES, COST_TONES, DEFAULT_LIST, FONT_FILE, MUTED,
                                   STATE_TONES, STATUS, USAGE_TONES, usage_chip,
                                   THEME, TOAST_MARKS, TREND_LABELS,
@@ -52,7 +53,8 @@ from mail_assistant.webui import (CARD_TONES, COST_TONES, DEFAULT_LIST, FONT_FIL
                                   MONEY_TONES, MONEY_NOTE, MONEY_HINT, MONEY_KINDS,
                                   money_view, TDS_GREEN_500, NEUTRAL,
                                   SENDER_SHOWN, SENDER_SORTS, sender_rows, sender_sort,
-                                  sender_search, sender_line,
+                                  sender_search, sender_line, merge_contacts,
+                                  note_reorder, stamp, pick_rows, PICK_SHOWN,
                                   board, board_counts, card_hint, card_rows,
                                   HOME_BLOCKS, HOME_COLS, HOME_DEFAULT, HOME_LAYOUT,
                                   home_columns, home_prefs, home_plan, home_reorder,
@@ -2056,6 +2058,147 @@ class RadiusLadderTests(unittest.TestCase):
     def test_the_old_single_token_is_gone(self):
         """--r 하나만 있던 시절의 이름이 남아 있으면 두 이름이 한 값을 가리킨다."""
         self.assertNotIn('var(--r)', THEME)
+
+
+class MergeContactTests(unittest.TestCase):
+    """집계한 거래처와 적어 둔 거래처가 겹칠 때, 무엇이 무엇을 이기는가."""
+
+    COUNTED = {'addr': 'kim@x.co.kr', 'name': '김과장', 'named': True, 'total': 14,
+               'open': 2, 'waiting': 1, 'done': 3, 'last': '2026-09-14', 'quiet': 2,
+               'since': '2026-01-02'}
+
+    def test_the_name_comes_from_the_person_and_the_numbers_never_do(self):
+        """반대로 하면 카드의 숫자와 그 카드가 여는 목록이 다른 메일을 센다."""
+        merged = merge_contacts([dict(self.COUNTED)],
+                                [{'id': 7, 'addr': 'kim@x.co.kr',
+                                  'name': '대성 김도현 과장', 'memo': '발주 담당'}])
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]['name'], '대성 김도현 과장')
+        self.assertEqual(merged[0]['total'], 14)
+        self.assertEqual(merged[0]['open'], 2)
+        self.assertEqual(merged[0]['memo'], '발주 담당')
+        self.assertEqual(merged[0]['contact'], 7)
+
+    def test_a_contact_with_no_name_keeps_the_display_name(self):
+        """이름 없이 메모만 적어 둔 경우. 빈 이름으로 덮으면 주소만 남는다."""
+        merged = merge_contacts([dict(self.COUNTED)],
+                                [{'id': 7, 'addr': 'kim@x.co.kr', 'name': '  ', 'memo': ''}])
+        self.assertEqual(merged[0]['name'], '김과장')
+
+    def test_a_contact_with_no_mail_lands_last_and_counts_nothing(self):
+        """마지막 수신이 없는 행을 0으로 세면 '가장 오래된 거래처'로 올라선다."""
+        merged = merge_contacts([dict(self.COUNTED)],
+                                [{'id': 9, 'addr': 'new@y.co.kr', 'name': '새 거래처',
+                                  'memo': ''}])
+        self.assertEqual([row['addr'] for row in merged], ['kim@x.co.kr', 'new@y.co.kr'])
+        self.assertEqual(merged[-1]['total'], 0)
+        self.assertIsNone(merged[-1]['quiet'])
+
+    def test_an_aggregate_row_with_no_contact_carries_the_empty_keys(self):
+        """화면이 row['memo']와 row['contact']를 언제나 읽는다 — 없으면 KeyError다."""
+        merged = merge_contacts([dict(self.COUNTED)], [])
+        self.assertEqual(merged[0]['memo'], '')
+        self.assertIsNone(merged[0]['contact'])
+
+
+class NoteReorderTests(unittest.TestCase):
+    """메모를 끌어다 놓는 일. 움직이지 않은 드롭은 None 이고, None 은 다시 그리지 않는다."""
+
+    WALL = [3, 1, 2]
+
+    def test_a_card_lands_before_the_one_it_was_dropped_on(self):
+        self.assertEqual(note_reorder(self.WALL, 2, 3), [2, 3, 1])
+
+    def test_a_drop_past_the_last_card_puts_it_last(self):
+        self.assertEqual(note_reorder(self.WALL, 3, None), [1, 2, 3])
+
+    def test_a_drop_that_moves_nothing_is_none(self):
+        """제자리에 놓은 것까지 벽 전체를 다시 쓰면, 이유 없는 깜빡임이 된다."""
+        self.assertIsNone(note_reorder(self.WALL, 1, 1))
+        self.assertIsNone(note_reorder(self.WALL, 2, None))
+
+    def test_a_drop_onto_the_other_wall_is_none(self):
+        """고정과 메모는 두 벽이고, 고정이 어느 벽인지를 정한다 — 끌어서 바꿀 일이 아니다."""
+        self.assertIsNone(note_reorder(self.WALL, 1, 99))
+        self.assertIsNone(note_reorder(self.WALL, 99, 1))
+
+
+class StampTests(unittest.TestCase):
+    """날짜와 시각 두 칸이 한 값이 되는 자리."""
+
+    def test_a_clock_needs_a_day(self):
+        """시각만 적힌 일정은 달력에 올라갈 자리가 없다 — 여기서 버리는 편이 낫다."""
+        self.assertEqual(stamp('', '15:00'), '')
+
+    def test_a_day_without_a_clock_is_the_day(self):
+        self.assertEqual(stamp('2026-09-25', ''), '2026-09-25')
+
+    def test_both_join_with_one_space(self):
+        self.assertEqual(stamp('2026-09-25', '15:00'), '2026-09-25 15:00')
+
+
+class PickRowTests(unittest.TestCase):
+    """메일 붙이기 피커. 적은 것이 없으면 아무것도 내놓지 않는다."""
+
+    ROWS = [{'id': 'a', 'subject': '[수주] A26090135 발주서', 'sender': '김도현 <k@x.kr>'},
+            {'id': 'b', 'subject': '9월 정산 내역', 'sender': '정산팀 <acct@y.kr>'}]
+
+    def test_nothing_typed_offers_nothing(self):
+        """최근 여섯 통을 미리 펼치면 그 여섯이 답처럼 보이는데, 붙일 메일은 대개
+        그 안에 없다."""
+        self.assertEqual(pick_rows(self.ROWS, ''), [])
+        self.assertEqual(pick_rows(self.ROWS, '   '), [])
+
+    def test_it_looks_in_the_subject_and_the_sender(self):
+        self.assertEqual([row['id'] for row in pick_rows(self.ROWS, '발주')], ['a'])
+        self.assertEqual([row['id'] for row in pick_rows(self.ROWS, '정산팀')], ['b'])
+
+    def test_it_stops_at_the_cap(self):
+        many = [dict(self.ROWS[0], id=str(n)) for n in range(20)]
+        self.assertEqual(len(pick_rows(many, '발주')), PICK_SHOWN)
+
+
+class ManualMoneyTests(unittest.TestCase):
+    """손으로 적은 금액 한 줄. 판정은 분석이 읽은 줄의 것과 같아야 한다."""
+
+    @staticmethod
+    def row(**over):
+        base = {'id': 4, 'mail_id': '', 'kind': '견적', 'currency': 'KRW',
+                'amount': '90000', 'label': '공급가액', 'evidence': '전화 견적',
+                'day': '2026-09-14', 'created': '2026-09-14 10:00:00'}
+        return {**base, **over}
+
+    def test_it_reads_like_a_line_analysis_produced(self):
+        entry = manual_entry(self.row())
+        self.assertEqual(entry['value'], 90000)
+        self.assertFalse(entry['review'])
+        self.assertEqual(entry['kind'], '견적')
+        self.assertEqual(entry['row'], 4)
+
+    def test_a_number_it_cannot_read_is_dropped_here_too(self):
+        """사람이 적었다고 더 믿지 않는다 — 같은 money_value()를 지난다."""
+        entry = manual_entry(self.row(amount='약 1,200만'))
+        self.assertIsNone(entry['value'])
+        self.assertTrue(entry['review'])
+
+    def test_a_currency_nobody_knows_is_out_of_the_total(self):
+        entry = manual_entry(self.row(currency='ZZZ'))
+        self.assertTrue(entry['review'])
+        self.assertEqual(entry['currency'], '기타')
+
+    def test_the_two_sources_add_up_together(self):
+        """totals()는 어느 쪽에서 온 줄인지 알지 못한다. 알게 되면 그 차이가 언젠가
+        '손으로 적은 것은 좀 더 믿어도 되지 않나'가 된다."""
+        found = money_entries([], [self.row(), self.row(amount='약 1,200만')])
+        book = totals(found)
+        self.assertEqual(book['sums']['KRW']['견적'], 90000)
+        self.assertEqual(book['skipped'], 1)
+
+    def test_an_analysed_line_carries_no_row_handle(self):
+        """화면이 이 한 칸으로 둘을 가른다."""
+        self.assertIsNone(entry_of({'amount': '1000', 'currency': 'KRW', 'kind': '견적'},
+                                   {'id': 'm', 'subject': 's', 'sender': '', 'received': '',
+                                    'handled': ''})['row'])
 
 
 class TypeRampTests(unittest.TestCase):

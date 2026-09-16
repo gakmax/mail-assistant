@@ -75,6 +75,9 @@ REFRESH_SECONDS = 5.0
 # 나가는 줄이 제 높이를 접는 데 주는 시간. THEME 의 --dur-base 와 같은 길이이고,
 # 둘이 갈라지면 목록이 애니메이션 도중에 다시 그려져 줄이 반쯤 접힌 채 사라진다.
 LEAVE_SECONDS = 0.2
+# 한 틱. 클래스를 뗐다가 다시 붙여 CSS 애니메이션을 처음부터 돌리는 데 드는
+# 시간이고, 기다리는 것이 아니라 브라우저가 한 번 그리게 두는 것이다.
+TURN_SECONDS = 0.02
 # 실행 and 메일 read their own numbers every second: both are screens somebody opens
 # *because* something is moving, and five seconds of a still picture reads as a hang.
 # 대시보드 keeps the slower beat — its charts and tallies are a day's shape, not a
@@ -708,8 +711,11 @@ body {{
 }}
 .ma-seg .q-btn {{
   font-size:var(--fs-cap); min-height:24px; padding:0 9px; border-radius:var(--r-s); font-weight:600;
+  transition:background-color var(--dur-base) var(--ease), color var(--dur-base) var(--ease);
 }}
-.ma-seg .q-btn__content {{ color:var(--muted); }}
+.ma-seg .q-btn__content {{
+  color:var(--muted); transition:color var(--dur-base) var(--ease);
+}}
 .ma-seg .q-btn.bg-primary .q-btn__content {{ color:#fff; }}
 .ma-sunken {{
   display:block; background:var(--sunken); border:1px solid var(--hair);
@@ -1420,6 +1426,32 @@ a.ma-sender:hover {{
 }}
 .ma-say b {{ font-weight:600; color:var(--subtle); }}
 
+/* 메모를 끄는 손잡이. 카드 전체를 끌 수 없는 이유가 여기서는 두 겹이다 — 대시보드
+   카드처럼 안에 누를 것이 있기도 하고, 메모의 본문은 아예 textarea 라서 끌 수 있게
+   만들면 글자를 선택할 수 없는 카드가 된다. hover 에서만 나타나는 것은 메모 스무 장에
+   손잡이 스무 개가 늘 서 있으면 읽을 것이 아니라 피할 것이 되기 때문. */
+.ma-memo__grip {{
+  position:absolute; top:0; left:0; right:0; height:16px; z-index:2;
+  display:grid; place-items:center; cursor:grab; opacity:0;
+  border-radius:var(--r-m) var(--r-m) 0 0;
+  transition:opacity var(--dur-fast) var(--ease);
+}}
+.ma-memo:hover .ma-memo__grip {{ opacity:.55; }}
+.ma-memo__grip:active {{ cursor:grabbing; }}
+/* 끌려가는 카드는 제자리에 흐리게 남는다 — 사라지면 벽에 구멍이 생기고, 그 구멍이
+   어디로 갈지를 말해 주지 않는다. */
+.ma-memo.is-dragging {{ opacity:.35; }}
+/* 떨어질 자리는 카드 *사이*에 서는 선이다. 카드 전체를 칠하면 그 카드와 바꾼다는
+   뜻으로 읽히는데 실제로 일어나는 일은 '이 카드 앞에 선다'이고, 카드 안쪽에 그으면
+   inner shadow 가 되어 TDS 가 쓰지 않기로 한 것이 된다 — 그래서 격자의 틈에 둔다. */
+.ma-memo.is-over:after {{
+  content:''; position:absolute; left:-7px; top:2px; bottom:2px; width:3px;
+  border-radius:var(--r-full); background:var(--brand);
+}}
+.ma-wall.is-over {{
+  outline:2px dashed var(--line); outline-offset:4px; border-radius:var(--r-l);
+}}
+
 /* 거래처 카드는 전체가 링크라, 고치기와 지우기는 그 위에 얹힌다. hover 에서만
    나타나는 것은 메모 카드와 같은 이유다 — 카드 스무 장에 버튼 마흔 개가 늘 서 있으면
    읽을 것이 아니라 피할 것이 된다. */
@@ -1470,6 +1502,11 @@ a.ma-sender:hover {{
    것은 height:auto 에서 애니메이션이 되지 않기 때문이고, 같은 이유로 대시보드의
    수집 기록 접기도 0fr↔1fr 을 쓴다. 전부 --dur-* 안이다. */
 @keyframes ma-in {{ from {{ opacity:0; transform:translateY(-6px); }} }}
+/* 칸을 바꿔 여는 것 — 원문/한글 번역, 목록/막대, 메모의 세 갈래. 줄이 늘어나는 것과
+   길이는 같고 방향만 다르다: 줄은 위에서 내려앉고 이쪽은 제자리에서 올라온다. 바뀐
+   것이 '다른 줄'이 아니라 '같은 자리의 다른 내용'이기 때문이다. */
+@keyframes ma-turn {{ from {{ opacity:0; transform:translateY(4px); }} }}
+.ma-turn {{ animation:ma-turn var(--dur-base) var(--ease); }}
 @keyframes ma-out {{
   from {{ opacity:1; grid-template-rows:1fr; }}
   to {{ opacity:0; grid-template-rows:0fr; }}
@@ -2199,6 +2236,32 @@ def note_wall(views, kind=''):
     shown = [view for view in views if keep_note(view, kind)]
     return {'pinned': [view for view in shown if view['pinned']],
             'rest': [view for view in shown if not view['pinned']]}
+
+
+def note_reorder(ids, moved, before=None):
+    """`ids` with `moved` lifted out and put back before `before`, or None if unchanged.
+
+    None and not the list, for the reason home_reorder() and drag_drop() both return
+    None: a drop that moved nothing would still rewrite every position and rebuild the
+    wall, which reads as a flicker with no cause — and a rebuild here costs whatever
+    somebody was typing into a card.
+
+    고정 and the rest are two walls, so a drag never crosses between them: the caller
+    passes one wall's ids. 고정 is what decides which wall a memo is on, and a drag
+    that silently unpinned a card would be answering a question nobody asked.
+    """
+    order = [ident for ident in ids]
+    if moved not in order or moved == before:
+        return None
+    was = list(order)
+    order.remove(moved)
+    if before is None:
+        order.append(moved)
+    elif before in order:
+        order.insert(order.index(before), moved)
+    else:
+        return None
+    return order if order != was else None
 
 
 def note_signature(views):
@@ -3394,7 +3457,10 @@ def tally(pairs, key, token, tones=None):
     whole job. It also costs no `resize` when 화면 배치 changes a column's width.
     """
     from nicegui import ui
-    with ui.element('div').classes('ma-bars'):
+    # 목록↔막대를 오갈 때 이 블록은 통째로 다시 지어지므로 애니메이션은 저절로 돈다.
+    # 5초 beat 의 refresh 에서도 돌지만, 그 beat 가 이 카드를 다시 짓는 것은 숫자가
+    # 바뀌었을 때뿐이고 그때는 다시 읽어 달라는 뜻이 맞다.
+    with ui.element('div').classes('ma-bars ma-turn'):
         for name, value, percent in bar_rows(pairs):
             with ui.link(target=href('/mail', token, **{key: name})) \
                     .classes('ma-bars__row'):
@@ -3975,7 +4041,7 @@ def memo_paper(view):
     THEME saying nothing but a colour each.
     """
     from nicegui import ui
-    return ui.element('div').classes('ma-memo').style(
+    return ui.element('div').classes('ma-memo ma-in').style(
         f"background:{view['ground']};border-color:{view['edge']}55;"
         f"border-left-color:{view['edge']}")
 
@@ -5725,10 +5791,20 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
 
             def turn(tab):
                 """Which of the two readings is on screen. Visibility, never a refresh:
-                the other one is already built and a rebuild would cost the scroll."""
+                the other one is already built and a rebuild would cost the scroll.
+
+                Which is also why the animation has to be re-armed by hand: a CSS
+                animation runs when its element is created, and neither of these two
+                is being created. Dropping the class and putting it back on the next
+                tick is what restarts it — the same trick .ma-beam avoids needing by
+                living outside its refreshable.
+                """
                 reading['tab'] = tab if view['translated'] else 'origin'
                 origin.set_visibility(reading['tab'] != 'korean')
                 korean.set_visibility(reading['tab'] == 'korean')
+                shown = korean if reading['tab'] == 'korean' else origin
+                shown.classes(remove='ma-turn')
+                ui.timer(TURN_SECONDS, lambda: shown.classes(add='ma-turn'), once=True)
                 # set_text on an element that outlives the switch, never a refresh.
                 told.set_text('번역 복사' if reading['tab'] == 'korean' else '원문 복사')
 
@@ -6620,13 +6696,16 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
         rows = list(opened.notes(account, mail_id))
         return note_views(rows, opened.mail_subjects(row['mail_id'] for row in rows))
 
-    def memo_cards(views, rebuild, fresh=None, on_save=None, linked=True):
+    def memo_cards(views, rebuild, fresh=None, on_save=None, linked=True, on_move=None):
         """The memo card, wherever it is drawn.
 
         Both the 메모 화면 and the 메일 detail draw this; what differs between them is
         only what a rebuild means, so that is the one thing passed in. `linked` is
         False inside a mail's own detail, where naming the mail every card already
-        belongs to is the same thing said once per card.
+        belongs to is the same thing said once per card. `on_move` is None there too:
+        a mail's memos are the memos *about that mail*, which is not an order somebody
+        chose, and offering a grip that reorders a subset of a wall would be offering
+        an order that the 메모 화면 then draws differently.
         """
         def save(ident, text):
             store(directory).set_note_text(ident, text or '')
@@ -6673,6 +6752,20 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
         for view in views:
             ident = view['id']
             with memo_paper(view) as paper:
+                if on_move is not None:
+                    # The card is the drop target and the grip is what is draggable —
+                    # the 대시보드's rule, and here it earns its keep twice over: the
+                    # body of a memo *is* a textarea, and a card you cannot select text
+                    # in is a card you cannot edit.
+                    paper.on('dragover', js_handler=SLOT_OVER)
+                    paper.on('dragleave', js_handler=SLOT_LEAVE)
+                    paper.on('drop', lambda event, i=ident: on_move(event.args, i),
+                             js_handler=SLOT_DROP)
+                    grip = ui.element('div').classes('ma-memo__grip').props('draggable=true')
+                    grip.on('dragstart', js_handler=slot_drag_start(str(ident)))
+                    grip.on('dragend', js_handler=SLOT_END)
+                    with grip:
+                        ui.icon('drag_indicator').style(f'color:{MUTED};font-size:var(--ic-s)')
                 area = ui.textarea(value=view['text'], placeholder='메모를 적어 주세요') \
                     .classes('w-full')
                 area.props('borderless autogrow dense debounce=600'
@@ -6759,6 +6852,36 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             live['signature'] = note_signature(views)
             counts = note_tally(views)
             data = note_wall(views, state['filter'])
+
+            def moved(payload, before=None):
+                """Put a memo down where it was dropped, and write the whole wall.
+
+                A drag never crosses between 고정 and 메모: 고정 is what decides which
+                wall a card is on, and a drop that silently unpinned one would answer a
+                question nobody asked. note_reorder() enforces it by returning None
+                when `before` belongs to the other wall — the same None a drop that
+                moved nothing returns, so neither costs a rebuild.
+
+                A rebuild is expensive here in the one way that matters: every card is
+                a textarea somebody may be inside. Quasar flushes a debounced input on
+                blur and the drag blurred it, so what was typed is already saved by the
+                time this runs.
+                """
+                try:
+                    ident = int(payload)
+                except (TypeError, ValueError):
+                    return
+                for wall_key in ('pinned', 'rest'):
+                    ids = [view['id'] for view in data[wall_key]]
+                    if ident not in ids:
+                        continue
+                    order = note_reorder(ids, ident, before)
+                    if order is None:
+                        return
+                    store(directory).order_notes(order)
+                    bump()
+                    rebuild()
+                    return
             with ui.element('div').style('display:flex;gap:8px;align-items:center;'
                                          'flex-wrap:wrap;margin-bottom:14px'):
                 ui.button('새 메모', icon='add', on_click=add) \
@@ -6785,9 +6908,18 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 # empty tracks, so a 고정 wall holding one memo drew it a metre wide
                 # above a 메모 wall of ordinary cards.
                 with grid(minimum=250, gap=12) \
+                        .classes('ma-wall') \
                         .style('align-items:start;margin-bottom:16px;'
-                               'grid-template-columns:repeat(auto-fill,minmax(250px,1fr))'):
-                    memo_cards(data[key], rebuild, live['fresh'], resync)
+                               'grid-template-columns:repeat(auto-fill,minmax(250px,1fr))') \
+                        as wall:
+                    memo_cards(data[key], rebuild, live['fresh'], resync, on_move=moved)
+                # The wall itself takes a drop, which is what 'put it last' means. The
+                # card's own drop calls stopPropagation, so this only fires in the gap
+                # past the last card.
+                wall.on('dragover', js_handler=SLOT_OVER)
+                wall.on('dragleave', js_handler=SLOT_LEAVE)
+                wall.on('drop', lambda event: moved(event.args, None),
+                        js_handler=SLOT_DROP)
             live['fresh'] = None
 
         with page_shell('/memo'):

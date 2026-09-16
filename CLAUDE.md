@@ -240,24 +240,50 @@ apart. Two of those rules exist because nicegui's own defaults fight the page:
 header band and stops a long log line wrapping, and every surface that stacks text
 (`.ma-card`, `.ma-sunken`, `.ma-note`) therefore declares `display:block`.
 
-**Radius is a ladder of five and motion is three lengths and one curve.** Colour and
-type were tokenised from the start and these two were not, so they drifted to nine
-radii (`2·4·5·6·7·8·9·10·12`, with only `--r` named) and two durations used
-interchangeably — `.14s` nineteen times, `.12s` twelve — with nothing anywhere saying
-why 5 was not 7 or `.12` not `.14`. There was no reason; that was the whole finding.
-`--r-xs/-s/-m/-l/-full` (6/8/10/12/999) and `--dur-fast/-base/-slow` (.12/.2/.32) with
-one `--ease` replace them, and each has a job: `--dur-fast` for anything that repaints
-(opacity, colour, background), `--dur-base` for the three hover lifts that actually
-move something, `--dur-slow` for the fold — which is why `SIDE_EASE` is now
-`var(--dur-slow) var(--ease)` rather than a figure only this file knows. Three things
-stay off the ladder and a test names each: circles (`50%`), and anything whose radius
-is really its own height — the bar fills, the drop indicators and the scrollbar thumbs
-all take `--r-full` — and the two ambient loops (`ma-beat` 1.7s, `ma-beam` 5s), which
-are background rather than interaction. A test fails on any `border-radius` or
+**The ladders are TDS's, and `toss_design.md` is what they answer to.** Radius, type,
+colour, shadow and motion are all tokens, and none of the values are ours: the file in
+the repo root is the system these screens are built on. That matters most where it is
+tempting to re-decide — radius went from a ladder of five we invented (6/8/10/12/999)
+to TDS's nine (4/8/12/14/16/20/24/32/999), and the reason is not that nine is better
+than five. It is that the ladder is no longer ours to choose. TDS puts a badge at 6 and
+an S button at 10, off its own ladder, so those arrive as `--r-badge` and `--r-btn-s`:
+a value off the ladder has to be *named* or it is back to being a stray number.
+
+Type is the same finding where it costs reading rather than looking. Seventeen sizes
+were in use — 9.5 through 25, with 11 and 11.5 and 12 all present and nothing saying
+which was which. `--fs-h1/-h3/-h4/-t1/-t2/-b2/-b3/-cap/-caps` are TDS's ramp; `--ic-s/-m/-l`
+is a *separate* ladder, because a 19px icon is not 'one step larger than body text'.
+Where TDS's own step is a phone's and this is a 1440px desktop, the ramp is still what
+gets picked from — the doc says a desktop surface designs its own hierarchy rather than
+carrying the mobile one across, so a card title is `label-m` (15/600) and not
+`title-1` (18/600), and it is still a named step.
+
+Shadow is four rungs (`--shadow-1/-2/-3/-toast`), all navy-900 at a low alpha, and flat
+is the default: a shadow appears on a floating surface and nowhere else. **`box-shadow:inset`
+is not available** — TDS's pressed state is the `--press` overlay, not an inner shadow —
+which is why the 메모 drop indicator is a bar in the grid gap rather than a rule inside
+the card. Motion is `--dur-fast/-base/-slow` (.12/.2/.32) with `--ease` and `--ease-out`,
+and this file had already arrived at those numbers on its own before TDS was applied.
+`--stagger` (.03s) is not a fourth rung: nothing lasts that long, it is the beat between
+two rows arriving together.
+
+Three things stay off the ladders and a test names each: circles (`50%`); anything whose
+radius is really its own height — bar fills, drop indicators, scrollbar thumbs all take
+`--r-full`; and the two ambient loops (`ma-beat` 1.7s, `ma-beam` 5s), which are background
+rather than interaction. A test fails on any `border-radius`, `font-size`, `box-shadow` or
 `transition` in `THEME` that carries its own number.
 
-**A toast's surface never changes; its icon is what says whether it worked.** All 79
-`ui.notify` calls were typed `None` — `'설정을 저장했어요'` and `'저장하지 못했어요'`
+**Colour still comes from `style.py`, and that is what keeps the workbook in step.** The
+TDS palette is carried across to sRGB there, once, with the OKLCH it came from written
+beside each value; `css_color()` is how a screen reads it. `DASH_*` deliberately does not
+follow — those are the dark 대시보드 sheet's, and TDS green-500 is a deep green that would
+vanish on a black card. `toss_design.md` says out loud that its own colour tokens are
+reconstructions rather than a published table, so if a value turns out to be wrong there
+is exactly one place to fix it.
+
+**A toast's surface never changes; its icon is what says whether it worked.** It is
+TDS's toast: a `fill-primary` (grey-900) surface at `--r-l` with `--shadow-toast`, and a
+20px green circle carrying a white check. All 79 `ui.notify` calls were typed `None` — `'설정을 저장했어요'` and `'저장하지 못했어요'`
 arrived as the same grey box, and the reader had to finish the sentence to learn which
 one it was. `toast(message, mark=…)` is the only caller now and `TOAST_MARKS` has
 exactly three: `done`, `fail`, and `wait` for a booking whose answer comes later —
@@ -646,6 +672,57 @@ the only way to be finished with one was to mark the mail 완료 — a different
 `board()` skips the flag, so `board_counts()` and the 대시보드 tally drop the same card
 at the same moment; the mail itself is untouched, and the only way back is the 메일
 detail's 할 일 판에 다시 올리기, which is why that button has to live there.
+
+**A 일정, a 할 일, a 거래처 and a 금액 are all added in a sheet, and the sheet is
+what made the second question askable.** The rows of placeholders these replace were not
+short because the thing being added is simple — they were short because a row of boxes can
+only ask for what fits across a card, so a 일정 could not say whether it was finished and
+a 할 일 always landed in 대기. `sheet()` is the one frame (TDS dialog: `--r-2xl`, 24px
+inside, `--shadow-3`, two 48px CTAs) and `lab()`/`say()`/`mail_picker()` are what goes in
+it; four screens share them because a second form language is what one screen labelling
+its own fields turns into. The 확인 button is the sheet's single brand fill, 취소 is
+`fill-secondary` — a 48px button with no ground does not read as a button.
+
+**A mail attached to a 일정 or a 할 일 is a link, never an owner.** `event.mail_id` and
+`todo.mail_id` open that mail and do nothing else. The calendar key stays `'@' + rowid`
+because `is_event_key()` gates on it, and a mail id there would send 메일 화면 looking for
+an id no mail can carry. Moving a hand-written 할 일 card does **not** move the attached
+mail's 처리 상태 — that is exactly what tells it apart from the cards analysis makes, and
+`board()` carries `mail` separately from `key` for the same reason.
+
+**A 거래처 that was written down and one that was counted are overlaid by address, and
+the counts always win.** `merge_contacts()` takes every number from `Store.senders()`'
+GROUP BY and only the *name* from `contact`. The other way round and a card's number
+disagrees with the list that card opens. A 거래처 with no mail yet draws 받은 메일 없음
+rather than 전체 0, because a zero reads as a count somebody took. Deleting one deletes the
+name and the memo; the mail and its numbers stay.
+
+**A 금액 somebody typed is not more trustworthy than one a model read.** `money.entries()`
+reads the `money` table beside the mail `result` JSON and hands both to `totals()` in one
+shape, so nothing below it can tell them apart — because the moment it could, that
+difference becomes 'surely a hand-written one can be trusted'. A manual row goes through
+the same `money_value()`, so '약 1,200만' is dropped there exactly as it is when Codex
+reads it; the sheet says so while you type rather than after you press the button. What it
+does *not* carry is `needs_review`: a model being unsure and a person writing something
+down are different facts.
+
+**Rows arrive and leave, and only a drop talks to the server.** `.ma-in` lands a new row
+from above (`--stagger` between siblings, capped at five so the seventh is a rhythm and
+not a delay); `.ma-out` folds a leaving row's own height with `grid-template-rows`, because
+`auto` does not animate, and `LEAVE_SECONDS` is what stops the rebuild pulling the list out
+from under it. `.ma-turn` is the same length in the other direction, for content swapped in
+place rather than a row appearing. The 원문/한글 번역 swap has to re-arm it by hand — a CSS
+animation runs when its element is *created* and that swap creates nothing — which is the
+same reason `.ma-beam` lives outside its refreshable.
+
+**A memo is dragged by its grip, and 고정 is a wall the drag never crosses.** The
+대시보드's rule, and here it earns its keep twice: a memo's body is a textarea, and a card
+you cannot select text in is a card you cannot edit. `note_reorder()` returns None for a
+drop that moved nothing *and* for a drop whose target is on the other wall, so neither
+costs a rebuild — and a rebuild costs whatever somebody was typing. `Store.order_notes()`
+writes 1..n over the whole wall rather than one row: `position` 0 means 'nobody has dragged
+this wall yet', and a sparse column would leave the untouched cards on the old sort, which
+reads as the card jumping somewhere it was not dropped.
 
 **A 직접 추가한 일정 rides in the same field as a mail id, and `EVENT_MARK` is why
 that is safe.** Every panel that draws an entry — the calendar, 오늘 일정, the 마감
@@ -1126,12 +1203,13 @@ each call — the list reshuffling between two refreshes, and a Windows-only CI 
 that does not reproduce on the dev box. `page()`, `search()` and `unedited_drafts()`
 all end `, rowid DESC`, which is the order the mails actually arrived in.
 
-**Schema changes are `ALTER TABLE ADD COLUMN` only.** `Store.migrate()` adds what
-is missing to `mail` and nothing else; installed databases hold the only copy of
-collected mail. A whole new table is different and allowed: it goes in
-`Store.__init__`'s `executescript` as `CREATE TABLE IF NOT EXISTS`, which is how
-`log` arrived, and `LogStore` repeats the same statement so whichever of the two
-opens the file first is fine. The window opens its own connection on the UI thread — sqlite connections
+**Schema changes are `ALTER TABLE ADD COLUMN` only.** `Store.migrate()` adds what is
+missing to `mail`, and `SIDE_COLUMNS` does the same for the tables that are not `mail`
+(`event.mail_id`, `todo.mail_id`/`note`, `note.position`); installed databases hold the
+only copy of collected mail. A whole new table is different and allowed: it goes in
+`Store.__init__`'s `executescript` as `CREATE TABLE IF NOT EXISTS`, which is how `log`
+arrived and how `contact` and `money` did, and `LogStore` repeats the same statement so
+whichever of the two opens the file first is fine. The window opens its own connection on the UI thread — sqlite connections
 are not shareable across threads, and WAL is what lets the worker keep writing.
 
 **A version printed from an attribute is a version that will read `?`.**
