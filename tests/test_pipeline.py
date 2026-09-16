@@ -16,7 +16,7 @@ from unittest.mock import call, patch, MagicMock
 
 from mail_assistant.core import (ANALYZING, FAILED, HANDLED, HEADERS, NO_RETRY,
                                  PRIORITY_ORDER, ROOM_MARK, Store,
-                                 account_key, STATES, STATE_SQL, state_where, wait_cutoff,
+                                 account_key, STATES, STATE_SQL, state_where, wait_cutoff, KST,
                                  WAITING, PROGRESS, day_bounds, filter_rows,
                                  local_text, parse_mail, row_view, sql_text, state_of,
                                  thread_key, message_ids, address_of, display_name,
@@ -922,9 +922,23 @@ class SenderTests(unittest.TestCase):
             finally:
                 store.db.close()
 
+    @contextmanager
+    def frozen(self):
+        """달력을 양쪽에 똑같이 물려 둔다.
+
+        senders()는 today를 받고 search()는 받지 않는다 — state_where()가 제 기본값으로
+        시계를 읽기 때문이다. 앱에서는 둘 다 진짜 오늘이라 어긋날 수 없지만, 테스트가
+        한쪽만 TODAY로 얼리면 그 사이에 걸친 메일 하나가 하루가 지날 때마다 편을 바꾼다.
+        이 테스트는 2026-09-15에는 통과하고 16일에는 실패했다 — 재던 것이 아니라 날짜를
+        재고 있었던 것이다.
+        """
+        stamp = datetime.datetime.combine(self.TODAY, datetime.time(9, 0), tzinfo=KST)
+        with patch('mail_assistant.core.local_now', return_value=stamp):
+            yield
+
     def test_the_card_and_the_list_it_opens_count_the_same_mail(self):
         """카드는 GROUP BY로 세고 목록은 sender_addr로 거른다. 둘은 같아야 한다."""
-        with tempfile.TemporaryDirectory() as folder:
+        with tempfile.TemporaryDirectory() as folder, self.frozen():
             store = self.store(folder, self.PLAN)
             try:
                 for row in store.senders(self.ACCOUNT, self.TODAY):
@@ -1107,10 +1121,16 @@ class WaitingReplyTests(unittest.TestCase):
     def test_the_fallback_window_filters_on_the_same_judgement(self):
         """app.py는 SQL이 아니라 filter_rows()로 거른다 — 드롭다운에 값만 생기고
         거르는 쪽이 모르면, 그 화면은 아무것도 없는 목록을 조용히 보여 준다."""
+        # 세 줄 모두 self.TODAY 기준이고, 거르는 쪽 시계도 같은 날에 물려 둔다.
+        # 'fresh'가 datetime.date.today()였을 때는 고정된 TODAY와 진짜 오늘과
+        # filter_rows()가 읽는 시계, 셋이 서로 다른 날을 가리켰다 — 오늘과 내일은
+        # 우연히 맞았고 일주일 뒤에는 fresh가 대기 쪽으로 넘어갔다.
         plan = [('late', self.TODAY - datetime.timedelta(days=6), True, ''),
-                ('fresh', datetime.date.today(), True, ''),
+                ('fresh', self.TODAY, True, ''),
                 ('quiet', self.TODAY - datetime.timedelta(days=6), False, '')]
-        with tempfile.TemporaryDirectory() as folder:
+        stamp = datetime.datetime.combine(self.TODAY, datetime.time(9, 0), tzinfo=KST)
+        with tempfile.TemporaryDirectory() as folder, \
+                patch('mail_assistant.core.local_now', return_value=stamp):
             store = self.store(folder, plan)
             try:
                 views = [row_view(row) for row in store.page(self.ACCOUNT)]
