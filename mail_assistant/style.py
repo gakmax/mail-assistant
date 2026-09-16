@@ -36,18 +36,47 @@ DASH_RED = bgr(248, 113, 113)
 DASH_BLUE = bgr(96, 165, 250)
 DASH_GREEN = bgr(74, 222, 128)
 DASH_LINK = bgr(125, 185, 255)   # on the dark card
-LINK = bgr(37, 99, 235)          # on the white data sheets
 
-NEUTRAL = bgr(75, 85, 99)   # BGR: slate for '보통', between the status colours and CALM
+# TDS — toss_design.md 의 팔레트. 저기에는 OKLCH 로 적혀 있고 여기 있는 것은 그것을
+# sRGB 로 옮긴 값이다. 옮겨 오는 이유는 하나다: Excel COM 은 BGR 정수만 받고 화면은
+# css_color() 로 같은 정수를 읽으므로, 두 매체의 색이 갈라질 자리가 여기 말고는 없다.
+# 문서 자신이 "토큰 패키지가 공개되지 않아 이 값들은 산문 위에 서 있다"고 적어 두었다 —
+# 실제 토스 렌더값과 다를 수 있고, 다르다는 것이 확인되면 고칠 곳도 여기 한 곳뿐이다.
+TDS_BLUE_500 = bgr(40, 135, 238)    # oklch(0.624 0.176 254) — 화면당 하나의 primary CTA
+TDS_BLUE_600 = bgr(16, 101, 204)    # oklch(0.522 0.176 257) — pressed
+TDS_BLUE_50 = bgr(234, 245, 255)    # oklch(0.965 0.020 250) — brand-weak 바탕
+# 회색은 cool-blue 가 섞여 있다. 토스는 순검정을 쓰지 않는다.
+TDS_GREY_900 = bgr(20, 31, 44)      # oklch(0.234 0.030 254) — 본문
+TDS_GREY_800 = bgr(45, 58, 72)      # oklch(0.342 0.030 253)
+TDS_GREY_700 = bgr(75, 87, 101)     # oklch(0.452 0.028 253) — 보조 본문
+TDS_GREY_600 = bgr(106, 116, 128)   # oklch(0.555 0.022 253)
+TDS_GREY_500 = bgr(135, 145, 156)   # oklch(0.652 0.020 252) — 곁줄
+TDS_GREY_400 = bgr(167, 176, 185)   # oklch(0.752 0.016 251) — disabled, 강한 선
+TDS_GREY_300 = bgr(197, 203, 210)   # oklch(0.840 0.012 248)
+TDS_GREY_200 = bgr(222, 227, 231)   # oklch(0.913 0.008 247) — 기본 헤어라인
+TDS_GREY_150 = bgr(224, 228, 232)   # oklch(0.918 0.007 247) — 카드 안의 더 연한 줄
+TDS_GREY_100 = bgr(238, 241, 244)   # oklch(0.957 0.005 247) — 보조 표면, 입력칸 바탕
+TDS_GREY_50 = bgr(246, 248, 250)    # oklch(0.978 0.003 247)
+TDS_RED_500 = bgr(240, 56, 72)      # oklch(0.628 0.218 22)
+TDS_GREEN_500 = bgr(0, 119, 56)     # oklch(0.493 0.143 154)
+TDS_ORANGE_500 = bgr(255, 136, 0)   # oklch(0.748 0.183 56)
+TDS_NAVY_900 = bgr(1, 10, 37)       # oklch(0.155 0.060 261) — 그림자와 scrim 의 밑색
+
+# 화면과 밝은 시트가 함께 쓰는 이름들. 값은 위의 TDS 팔레트를 가리킨다 — 이름은 역할이고
+# 값은 시스템이 정한다. 위의 DASH_* 는 어두운 대시보드 시트 전용이라 따라가지 않는다:
+# TDS_GREEN_500 은 깊은 초록이어서 검은 카드 위에서 읽히지 않는다.
+NEUTRAL = TDS_GREY_700      # '보통' — 상태색과 CALM 사이
+LINK = TDS_BLUE_500         # 밝은 데이터 시트 위의 파랑, 그리고 화면의 강조색
+URGENT = TDS_RED_500
+SOON = TDS_ORANGE_500
+CALM = TDS_GREY_500         # 낮은 우선순위와 곁줄
+LINE = TDS_GREY_200         # 격자선
+OK = TDS_GREEN_500          # 화면의 '됐다'. 어두운 시트는 DASH_GREEN 을 계속 쓴다
 
 HEADER_FILL = 0xEADFD4      # BGR: pale slate, the existing header colour
 TODAY_FILL = 0xF7EBDE       # BGR: pale blue for today's calendar cell
-URGENT = 0x0000C0           # BGR: deep red
-SOON = 0x0070D0             # BGR: amber
-CALM = 0x808080             # BGR: grey for low priority and side notes
-LINE = 0xD0D0D0             # BGR: grid line grey
 FONT = '맑은 고딕'
-STYLE_VERSION = '3'
+STYLE_VERSION = '4'
 STYLE_PROPERTY = 'MailAssistantStyle'
 
 CENTER, LEFT, TOP = -4108, -4131, -4160

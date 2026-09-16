@@ -50,7 +50,7 @@ from mail_assistant.webui import (CARD_TONES, COST_TONES, DEFAULT_LIST, FONT_FIL
                                   THREAD_SHOWN, thread_view, thread_line, thread_clip,
                                   ATTACH_NOTE, size_text, attachment_rows,
                                   MONEY_TONES, MONEY_NOTE, MONEY_HINT, MONEY_KINDS,
-                                  money_view, DASH_GREEN, NEUTRAL,
+                                  money_view, TDS_GREEN_500, NEUTRAL,
                                   SENDER_SHOWN, SENDER_SORTS, sender_rows, sender_sort,
                                   sender_search, sender_line,
                                   board, board_counts, card_hint, card_rows,
@@ -291,7 +291,7 @@ class MoneyScreenTests(unittest.TestCase):
     def test_every_kind_has_a_tone_and_only_입금_is_green(self):
         """들어오는 돈과 나가는 돈이 한 목록에 선다. 견적은 아직 돈이 아니라 중립이다."""
         self.assertEqual(set(MONEY_TONES), set(MONEY_KINDS))
-        self.assertEqual(MONEY_TONES['입금'], DASH_GREEN)
+        self.assertEqual(MONEY_TONES['입금'], TDS_GREEN_500)
         self.assertEqual(MONEY_TONES['견적'], NEUTRAL)
 
     def test_a_row_that_is_out_of_the_total_says_so_on_the_row(self):
@@ -2023,14 +2023,23 @@ class PaletteTests(unittest.TestCase):
 
 
 class RadiusLadderTests(unittest.TestCase):
-    """반경은 다섯 단계이고, 그 밖의 값은 원과 막대뿐이다.
+    """반경은 TDS 의 아홉 단계이고, 그 밖의 값은 원과, 이름이 붙은 둘뿐이다.
 
     이 테스트가 있는 이유는 사다리가 생기기 전의 상태다 — 2·4·5·6·7·8·9·10·12px
     아홉 값이 토큰 없이 흩어져 있었고, 5px과 7px이 왜 다른지 말하는 규칙이 코드
-    어디에도 없었다. 없었기 때문이다.
+    어디에도 없었다. 없었기 때문이다. 지금 아홉인 것은 아홉이 다섯보다 나아서가
+    아니라 사다리를 우리가 고르지 않기 때문이고, 그래서 TDS 자신이 제 사다리 밖에
+    두는 둘(badge 6, S 버튼 10)도 값이 아니라 *이름*으로 들어와 있다.
     """
 
-    LADDER = ('--r-xs', '--r-s', '--r-m', '--r-l', '--r-full')
+    LADDER = ('--r-xs', '--r-s', '--r-m', '--r-l', '--r-xl',
+              '--r-2xl', '--r-3xl', '--r-4xl', '--r-full')
+    NAMED = ('--r-badge', '--r-btn-s')
+
+    def test_the_component_exceptions_are_named(self):
+        """6과 10은 사다리에 없다. 이름이 없으면 그냥 흩어진 숫자로 돌아간다."""
+        for token in self.NAMED:
+            self.assertIn(f'{token}:', THEME, token)
 
     def test_the_ladder_is_declared_once(self):
         for token in self.LADDER:
@@ -2047,6 +2056,64 @@ class RadiusLadderTests(unittest.TestCase):
     def test_the_old_single_token_is_gone(self):
         """--r 하나만 있던 시절의 이름이 남아 있으면 두 이름이 한 값을 가리킨다."""
         self.assertNotIn('var(--r)', THEME)
+
+
+class TypeRampTests(unittest.TestCase):
+    """글자 크기도 사다리다 — 이것이 반경에서 배운 것을 한 번 더 적용한 자리다.
+
+    열일곱 값이 쓰이고 있었다: 9.5 · 10.5 · 11 · 11.5 · 12 · 12.5 · 13 · 13.5 · 14 ·
+    14.5 · 15 · 16 · 16.5 · 18 · 19 · 21 · 25. 11과 11.5가 둘 다 있었고 어느 것이
+    무엇이었는지 말하는 규칙은 없었다 — 반경이 아홉 값으로 흩어져 있던 것과 같은
+    일이고, 다만 이쪽은 보는 것이 아니라 읽는 것이라 값이 더 비싸다.
+
+    이름은 TDS 의 것이다. body-2 가 산문의 기본이고, body-3 은 한 화면에 쉰 줄이
+    서는 표가 받는 칸이며, caption 은 무언가의 밑에 붙는 줄이다.
+    """
+
+    RAMP = ('--fs-h1', '--fs-h3', '--fs-h4', '--fs-t1', '--fs-t2',
+            '--fs-b2', '--fs-b3', '--fs-cap', '--fs-caps')
+    ICONS = ('--ic-s', '--ic-m', '--ic-l')
+
+    def test_the_ramp_is_declared_once(self):
+        for token in self.RAMP:
+            self.assertIn(f'{token}:', THEME, token)
+
+    def test_an_icon_is_not_type(self):
+        """아이콘은 16/20/24 의 제 사다리를 쓴다. 본문 램프에 섞으면 19px 아이콘이
+        '본문보다 한 칸 큰 글자'라는 뜻이 되어 버린다."""
+        for token in self.ICONS:
+            self.assertIn(f'{token}:', THEME, token)
+
+    def test_nothing_sizes_itself_off_the_ramp(self):
+        found = re.findall(r'font-size:\s*([^;}\n]+)', THEME)
+        self.assertTrue(found)
+        stray = sorted({value.strip() for value in found
+                        if 'var(--fs-' not in value and 'var(--ic-' not in value
+                        and value.strip() != 'inherit'})
+        self.assertEqual(stray, [], f'램프 밖의 글자 크기: {stray}')
+
+
+class ShadowLadderTests(unittest.TestCase):
+    """그림자는 넷이고, 평면이 기본이다 — 떠 있는 표면에만 나타난다.
+
+    넷 다 navy-900 의 낮은 알파이고, 각자 제 자리가 있다: 메뉴·tooltip·dialog·toast.
+    inner shadow 는 쓰지 않는다 — 눌린 것은 --press overlay 이지 그림자가 아니다.
+    """
+
+    LADDER = ('--shadow-1', '--shadow-2', '--shadow-3', '--shadow-toast')
+
+    def test_the_four_are_declared(self):
+        for token in self.LADDER:
+            self.assertIn(f'{token}:', THEME, token)
+
+    def test_no_box_shadow_carries_its_own_blur(self):
+        """none·focus ring·사다리의 넷만 남는다."""
+        allowed = {'none'} | {f'var({token})' for token in self.LADDER}
+        stray = sorted({value.strip().replace(' !important', '')
+                        for value in re.findall(r'box-shadow:\s*([^;}\n]+)', THEME)
+                        if value.strip().replace(' !important', '') not in allowed
+                        and '0 0 0' not in value})
+        self.assertEqual(stray, [], f'사다리 밖의 그림자: {stray}')
 
 
 class MotionLadderTests(unittest.TestCase):
@@ -2123,9 +2190,16 @@ class ToastTests(unittest.TestCase):
             self.assertTrue(icon, mark)
 
     def test_the_surface_is_the_same_slate_for_all_three(self):
-        """색이 아니라 아이콘이 결과를 말한다 — 표면은 hover 카드와 같은 먹색이다."""
+        """색이 아니라 아이콘이 결과를 말한다 — 표면은 hover 카드와 같은 먹색이다.
+
+        TDS 의 toast 규격 그대로다: fill-primary(grey-900) 표면에 radius-l, 그리고
+        네 그림자 중 제 이름이 붙은 것. 먹색을 리터럴로 적어 두면 팔레트가 움직일 때
+        토스트만 제자리에 남으므로 --ink 로 묻는다.
+        """
         surface = THEME.split('.ma-toast {', 1)[1].split('}', 1)[0]
-        self.assertIn('#27272a', surface)
+        self.assertIn('background:var(--ink)', surface)
+        self.assertIn('border-radius:var(--r-l)', surface)
+        self.assertIn('box-shadow:var(--shadow-toast)', surface)
         for mark in TOAST_MARKS:
             self.assertIn(f'.ma-toast--{mark} .q-notification__icon', THEME)
 

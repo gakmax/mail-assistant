@@ -35,7 +35,9 @@ from .money import (CURRENCIES as MONEY_CURRENCIES, KINDS as MONEY_KINDS,
 from .notify import enabled as notify_enabled
 from .settings import (DEFAULTS, FIELDS, GRADE_NOTE, NO_MODELS, RECOMMEND_WHY,
                        field_errors, model_label, model_rows, normalize, read_models)
-from .style import CALM, DASH_GREEN, LINK, NEUTRAL, SOON, URGENT, css_color
+from .style import (CALM, LINK, NEUTRAL, SOON, TDS_BLUE_50, TDS_GREEN_500, TDS_GREY_50,
+                    TDS_GREY_100, TDS_GREY_150, TDS_GREY_200, TDS_GREY_700, TDS_GREY_900,
+                    URGENT, css_color)
 from .usage import (CALM as USAGE_CALM, FULL as USAGE_FULL, WARN as USAGE_WARN,
                     Meter as UsageMeter)
 # The one module here that is not a screen's: update.py is stdlib-only, so the
@@ -43,17 +45,19 @@ from .usage import (CALM as USAGE_CALM, FULL as USAGE_FULL, WARN as USAGE_WARN,
 from .update import WATCH_SECONDS
 
 SERIES = css_color(LINK)      # one hue: every count bar measures the same thing
-INK = '#18181b'
-SUBTLE = '#52525b'            # body text that is not a heading and not a side note
-MUTED = css_color(CALM)
-CARD = '#ffffff'              # a card floats on BG; anything inset uses SUNKEN
-SUNKEN = '#f7f8fa'
-BG = '#f4f5f7'
-LINE = '#e4e4e7'
-HAIR = '#eff0f2'              # the lighter rule inside a card, where LINE reads heavy
+# The names are roles and the values are TDS's. Nothing here picks a colour: every
+# one of them resolves through style.py, which is the only place a hex lives.
+INK = css_color(TDS_GREY_900)     # grey-900, never pure black — TDS's own rule
+SUBTLE = css_color(TDS_GREY_700)  # body text that is not a heading and not a side note
+MUTED = css_color(CALM)           # grey-500
+CARD = '#ffffff'                  # a card floats on BG; anything inset uses SUNKEN
+SUNKEN = css_color(TDS_GREY_100)  # fill-secondary: the ground a text field rests on
+BG = css_color(TDS_GREY_50)
+LINE = css_color(TDS_GREY_200)    # the one hairline TDS declares
+HAIR = css_color(TDS_GREY_150)    # the lighter rule inside a card, where LINE reads heavy
 BRAND = css_color(LINK)
-BRAND_SOFT = '#e8effc'
-OK = css_color(DASH_GREEN)
+BRAND_SOFT = css_color(TDS_BLUE_50)
+OK = css_color(TDS_GREEN_500)
 # A status palette, not a categorical one: every bar is labelled, and 보통·낮음 are
 # grey on purpose so 긴급·높음 are the only two colours competing for attention.
 STATUS = {'긴급': css_color(URGENT), '높음': css_color(SOON),
@@ -213,17 +217,17 @@ COUNT_CARDS = {
 }
 TREND_LABELS = (('collected', '수집'), ('analyzed', '분석'), ('exported', '반영'))
 TREND_TONES = {'collected': css_color(LINK), 'analyzed': css_color(NEUTRAL),
-               'exported': css_color(DASH_GREEN)}
+               'exported': OK}
 # The kanban's three columns. '' and 처리 already existed; 진행 is the new middle one.
 COLUMNS = (('', '대기'), (PROGRESS, '진행'), (HANDLED, '완료'))
 # Tag colours for the 상태 column. 'N회 실패' carries its count and is matched separately,
 # in red — the 분석 실패 card is already red, and amber now belongs to 분석 중, which is
 # the one state in this column that is happening right now.
-STATE_TONES = {HANDLED: css_color(DASH_GREEN), PROGRESS: css_color(LINK),
+STATE_TONES = {HANDLED: OK, PROGRESS: css_color(LINK),
                '미처리': '#52525b', '분석 대기': css_color(CALM),
                ANALYZING: css_color(SOON)}
 # The kanban lane dots. Same three states, same three colours as the 상태 tags above.
-LANE_TONES = {'': css_color(CALM), PROGRESS: css_color(LINK), HANDLED: css_color(DASH_GREEN)}
+LANE_TONES = {'': css_color(CALM), PROGRESS: css_color(LINK), HANDLED: OK}
 
 # 메모 paper. (key, name, ground, edge) — the only palette in this file that is not
 # style.py's, because the window has no 메모 화면 to drift apart from and Excel never
@@ -332,7 +336,7 @@ def rail_css(scope):
    shoulder with the row rather than teleporting there on the first frame. */
 {scope} .ma-badge {{
   top:2px; right:4px; padding:0 3px;
-  min-width:15px; height:15px; line-height:13px; font-size:9.5px;
+  min-width:15px; height:15px; line-height:13px; font-size:var(--fs-caps);
   background:var(--brand); border-color:var(--card); color:#fff;
 }}
 {scope} .ma-side__item.is-live .ma-badge {{ border-color:var(--brand-soft); }}
@@ -343,7 +347,7 @@ def rail_css(scope):
   content:attr(data-name); position:absolute; left:calc(100% + 8px); top:50%;
   transform:translateY(-50%); z-index:40; pointer-events:none; opacity:0;
   background:var(--ink); color:#fff; border-radius:var(--r-s); padding:4px 9px;
-  font-size:11.5px; font-weight:600; white-space:nowrap; box-shadow:var(--shadow);
+  font-size:var(--fs-cap); font-weight:600; white-space:nowrap; box-shadow:var(--shadow-1);
   transition:opacity var(--dur-fast) var(--ease);
 }}
 {scope} .ma-side__item:hover::after {{ opacity:1; }}
@@ -368,23 +372,47 @@ THEME = f'''
   src:url('/vendor/pretendard/{FONT_FILE}') format('woff2-variations');
 }}
 :root {{
+  /* Colour comes from style.py and nowhere else, so the workbook and the pages
+     cannot drift apart. The values there are TDS's OKLCH palette carried across to
+     sRGB; toss_design.md is what they answer to. */
   --ink:{INK}; --subtle:{SUBTLE}; --muted:{MUTED};
   --bg:{BG}; --card:{CARD}; --sunken:{SUNKEN};
   --line:{LINE}; --hair:{HAIR};
   --brand:{BRAND}; --brand-soft:{BRAND_SOFT};
   --urgent:{css_color(URGENT)}; --soon:{css_color(SOON)}; --ok:{OK};
-  --shadow:0 1px 2px rgba(24,24,27,.04), 0 1px 3px rgba(24,24,27,.06);
-  /* Radius is a ladder of five, not nine values nobody can tell apart. It was
-     2·4·5·6·7·8·9·10·12 with only --r named, and no rule anywhere said why 5 was
-     not 7 — because there was no reason. Each step now has a job: a tag, a chip or
-     a control, a panel inside a card, a card, and a pill. */
-  --r-xs:6px; --r-s:8px; --r-m:10px; --r-l:12px; --r-full:999px;
-  /* Three lengths and one curve, which is the whole motion budget. .12s and .14s
-     were both in use — nineteen times and twelve — and the difference was never a
-     decision. The curve is ease-out-expo: everything on this site is a thing
-     arriving, so it lands rather than coasting to a stop. */
+  /* Radius is TDS's own nine-step ladder. It was five steps of our own invention
+     (6·8·10·12) and the reason it is nine now is not that nine is better than
+     five: it is that the ladder is no longer ours to choose. A step still has to
+     have a job, which is what the two component tokens below are for — TDS itself
+     puts a badge at 6 and an S button at 10, off its own ladder, and a value that
+     is off the ladder has to be *named* or it is back to being a stray number. */
+  --r-xs:4px; --r-s:8px; --r-m:12px; --r-l:14px; --r-xl:16px;
+  --r-2xl:20px; --r-3xl:24px; --r-4xl:32px; --r-full:999px;
+  --r-badge:6px; --r-btn-s:10px;
+  /* Type, the same way. Seventeen sizes were in use — 9.5 through 25, with 11 and
+     11.5 and 12 all present and nothing saying which was which — and this is the
+     radius finding repeated in the one place it costs reading rather than looking.
+     The names are TDS's: body-2 is what prose defaults to, body-3 is what a table
+     row gets because fifty of them are on screen at once, and caption is the line
+     under something. */
+  --fs-h1:28px; --fs-h3:22px; --fs-h4:20px; --fs-t1:18px; --fs-t2:17px;
+  --fs-b2:15px; --fs-b3:13px; --fs-cap:12px; --fs-caps:11px;
+  /* An icon is not type. TDS sizes them 16/20/24/32 and calls 24 the workhorse;
+     these pages are denser than a phone, so the workhorse here is 20. */
+  --ic-s:16px; --ic-m:20px; --ic-l:24px;
+  /* Four shadows, all navy-900 at a low alpha, and flat is the default: a shadow
+     appears on a floating surface and nowhere else. */
+  --shadow-1:0 1px 2px rgba(1,10,37,.04), 0 1px 1px rgba(1,10,37,.04);
+  --shadow-2:0 4px 12px rgba(1,10,37,.06), 0 1px 2px rgba(1,10,37,.04);
+  --shadow-3:0 12px 32px rgba(1,10,37,.10), 0 2px 6px rgba(1,10,37,.06);
+  --shadow-toast:0 8px 24px rgba(1,10,37,.16);
+  /* Three lengths and two curves, which is the whole motion budget — and the one
+     part of TDS this file had already arrived at on its own. --ease-out is the
+     snappier one, for a surface arriving from off-screen. Nothing bounces, nothing
+     fades for longer than --dur-slow. */
   --dur-fast:.12s; --dur-base:.2s; --dur-slow:.32s;
   --ease:cubic-bezier(.22,.61,.36,1);
+  --ease-out:cubic-bezier(.16,1,.3,1);
   /* Pressed is an overlay on the resting fill, never a shadow, and disabled dims
      the whole node rather than repainting it — a button that greys its ground and
      keeps its label has stopped looking like the button it still is. */
@@ -482,13 +510,13 @@ body {{
   transition:max-width {SIDE_EASE}, opacity var(--dur-fast) var(--ease);
 }}
 .ma-side__name {{
-  font-size:13.5px; font-weight:700; letter-spacing:-.01em; white-space:nowrap;
+  font-size:var(--fs-b3); font-weight:700; letter-spacing:-.01em; white-space:nowrap;
 }}
-.ma-side__ver {{ font-size:10.5px; color:var(--muted); }}
+.ma-side__ver {{ font-size:var(--fs-caps); color:var(--muted); }}
 /* A pinned height, because the rail turns this heading into a 1px rule and a height
    cannot animate away from auto. The border is transparent until it is the rule. */
 .ma-side__group {{
-  font-size:10.5px; font-weight:700; letter-spacing:.06em;
+  font-size:var(--fs-caps); font-weight:700; letter-spacing:.06em;
   color:var(--muted); padding:13px 10px 5px;
   height:{SIDE_GROUP}px; box-sizing:border-box; overflow:hidden;
   border-top:1px solid transparent;
@@ -498,7 +526,7 @@ body {{
 .ma-side__item {{
   position:relative; display:flex; align-items:center; gap:9px;
   padding:7px 10px; border-radius:var(--r-m); text-decoration:none;
-  color:var(--subtle); font-size:13px; font-weight:500;
+  color:var(--subtle); font-size:var(--fs-b3); font-weight:500;
   transition:background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
              padding {SIDE_EASE};
 }}
@@ -506,7 +534,7 @@ body {{
 .ma-side__item.is-live {{
   background:var(--brand-soft); color:var(--brand); font-weight:600;
 }}
-.ma-side__item .q-icon {{ font-size:18px; flex:none; }}
+.ma-side__item .q-icon {{ font-size:var(--ic-m); flex:none; }}
 .ma-side__label {{
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:160px;
   transition:max-width {SIDE_EASE}, opacity var(--dur-fast) var(--ease);
@@ -518,7 +546,7 @@ body {{
   position:absolute; right:10px; top:7px;
   min-width:19px; height:19px; padding:0 6px;
   border-radius:var(--r-full); background:var(--sunken); border:1px solid var(--line);
-  color:var(--muted); font-size:10.5px; font-weight:700; line-height:17px;
+  color:var(--muted); font-size:var(--fs-caps); font-weight:700; line-height:17px;
   text-align:center;
   transition:right {SIDE_EASE}, top {SIDE_EASE}, min-width {SIDE_EASE},
              height {SIDE_EASE}, padding {SIDE_EASE}, font-size {SIDE_EASE},
@@ -551,34 +579,37 @@ body {{
   max-width:1240px; margin:0 auto; padding:0 20px;
   display:flex; align-items:center; gap:10px; height:56px;
 }}
-.ma-bar__title {{ font-size:14px; font-weight:700; letter-spacing:-.01em; }}
+.ma-bar__title {{ font-size:var(--fs-b2); font-weight:700; letter-spacing:-.01em; }}
 .ma-chip {{
   display:flex; align-items:center; gap:6px; flex:none;
   border:1px solid var(--line); border-radius:var(--r-full); padding:3px 11px 3px 9px;
-  background:var(--card); font-size:11.5px; color:var(--muted);
+  background:var(--card); font-size:var(--fs-cap); color:var(--muted);
 }}
 .ma-chip__dot {{ width:7px; height:7px; border-radius:50%; flex:none; }}
 .ma-chip.is-live .ma-chip__dot {{ animation:ma-beat 1.7s ease-in-out infinite; }}
 @keyframes ma-beat {{ 0%,100% {{ opacity:1; }} 50% {{ opacity:.3; }} }}
 .ma-pill {{
   display:flex; align-items:center; gap:5px; flex:none; text-decoration:none;
-  border-radius:var(--r-full); padding:4px 11px; font-size:11.5px; font-weight:600;
+  border-radius:var(--r-full); padding:4px 11px; font-size:var(--fs-cap); font-weight:600;
   background:var(--brand-soft); color:var(--brand);
 }}
 .ma-pill:hover {{ background:#dce7fb; }}
-.ma-pill .q-icon {{ font-size:14px; }}
+.ma-pill .q-icon {{ font-size:var(--ic-m); }}
 .ma-page {{ max-width:1240px; margin:0 auto; padding:20px 20px 56px; }}
-.ma-lede {{ color:var(--muted); font-size:12.5px; line-height:1.6; margin-bottom:14px; }}
+.ma-lede {{ color:var(--muted); font-size:var(--fs-b3); line-height:1.6; margin-bottom:14px; }}
 
 .ma-card {{
   display:block; background:var(--card); border:1px solid var(--line);
-  border-radius:var(--r-l); box-shadow:var(--shadow); padding:16px 18px;
+  border-radius:var(--r-xl); box-shadow:var(--shadow-1); padding:16px 18px;
 }}
+/* A dialog is a floating surface, not a card that happens to be on top of one:
+   TDS gives it the next rung up and the deepest of the four shadows. */
+.q-dialog .ma-card {{ border-radius:var(--r-2xl); box-shadow:var(--shadow-3); }}
 .ma-card--flush {{ padding:0; overflow:hidden; }}
 .ma-head {{
   display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:12px;
 }}
-.ma-head__title {{ font-size:13.5px; font-weight:700; letter-spacing:-.01em; }}
+.ma-head__title {{ font-size:var(--fs-b2); font-weight:600; letter-spacing:-.01em; }}
 .ma-grid {{ display:grid; gap:14px; }}
 .ma-stack {{ display:grid; gap:14px; align-content:start; }}
 /* Equal columns, so a card carried from one to the other still looks like itself —
@@ -608,13 +639,13 @@ body {{
 .ma-slot__grip {{
   position:absolute; top:0; left:0; right:0; height:14px; z-index:2;
   display:grid; place-items:center; cursor:grab; opacity:0;
-  border-radius:var(--r-l) var(--r-l) 0 0;
-  background:linear-gradient(var(--sunken), rgba(247,248,250,0));
+  border-radius:var(--r-xl) var(--r-xl) 0 0;
+  background:linear-gradient(var(--sunken), rgba(238,241,244,0));
   transition:opacity var(--dur-fast) var(--ease);
 }}
 .ma-slot:hover > .ma-slot__grip {{ opacity:1; }}
 .ma-slot__grip:active {{ cursor:grabbing; }}
-.ma-slot__grip .q-icon {{ font-size:13px; color:var(--muted); }}
+.ma-slot__grip .q-icon {{ font-size:var(--ic-m); color:var(--muted); }}
 .ma-slot.is-dragging {{ opacity:.45; }}
 /* Where it would land. On a card: the gap above it. On a column: one more grid row at
    the end, which is what an append is. */
@@ -627,7 +658,7 @@ body {{
 }}
 .ma-pagetop {{ display:flex; align-items:center; justify-content:flex-end; margin-bottom:8px; }}
 .ma-menu {{ display:grid; gap:8px; padding:12px 14px; min-width:184px; }}
-.ma-menu__label {{ font-size:11px; font-weight:600; color:var(--muted); }}
+.ma-menu__label {{ font-size:var(--fs-caps); font-weight:600; color:var(--muted); }}
 /* A count row, which is the same picture the canvas drew and a real link besides: a
    0 keeps its row, its hover and its href, where a 0 bar drew nothing at all. */
 .ma-bars {{ display:grid; gap:2px; }}
@@ -638,12 +669,12 @@ body {{
 }}
 .ma-bars__row:hover {{ background:var(--sunken); }}
 .ma-bars__name {{
-  font-size:12px; color:var(--ink);
+  font-size:var(--fs-cap); color:var(--ink);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }}
 .ma-bars__track {{ height:11px; border-radius:var(--r-full); background:var(--hair); }}
 .ma-bars__fill {{ display:block; height:100%; border-radius:var(--r-full); }}
-.ma-bars__num {{ font-size:11px; font-weight:600; color:var(--subtle); text-align:right; }}
+.ma-bars__num {{ font-size:var(--fs-caps); font-weight:600; color:var(--subtle); text-align:right; }}
 .ma-bars__num--zero {{ color:var(--muted); }}
 /* 합산: one bar for the whole. The 2px gaps are the only thing separating 보통 from
    낮음 — two greys that touch have no edge — so they are structure, not decoration. */
@@ -656,12 +687,12 @@ body {{
 }}
 .ma-leg:hover {{ background:var(--sunken); }}
 .ma-leg__dot {{ width:8px; height:8px; border-radius:50%; flex:none; }}
-.ma-leg__name {{ font-size:12px; color:var(--ink); white-space:nowrap; }}
-.ma-leg__num {{ font-size:11.5px; font-weight:600; color:var(--subtle); }}
-.ma-leg__pct {{ font-size:11px; color:var(--muted); text-align:right; }}
+.ma-leg__name {{ font-size:var(--fs-cap); color:var(--ink); white-space:nowrap; }}
+.ma-leg__num {{ font-size:var(--fs-cap); font-weight:600; color:var(--subtle); }}
+.ma-leg__pct {{ font-size:var(--fs-caps); color:var(--muted); text-align:right; }}
 .ma-leg__gone {{
-  font-size:10.5px; color:var(--urgent); border:1px dashed currentColor;
-  border-radius:var(--r-xs); padding:0 5px; line-height:1.5; justify-self:start;
+  font-size:var(--fs-caps); color:var(--urgent); border:1px dashed currentColor;
+  border-radius:var(--r-badge); padding:0 5px; line-height:1.5; justify-self:start;
 }}
 .ma-fill {{ min-width:0; }}
 .ma-seg {{
@@ -669,7 +700,7 @@ body {{
   border-radius:var(--r-m); padding:2px; box-shadow:none;
 }}
 .ma-seg .q-btn {{
-  font-size:11.5px; min-height:24px; padding:0 9px; border-radius:var(--r-s); font-weight:600;
+  font-size:var(--fs-cap); min-height:24px; padding:0 9px; border-radius:var(--r-s); font-weight:600;
 }}
 .ma-seg .q-btn__content {{ color:var(--muted); }}
 .ma-seg .q-btn.bg-primary .q-btn__content {{ color:#fff; }}
@@ -680,23 +711,23 @@ body {{
 
 .ma-kpi {{
   display:flex; align-items:flex-start; gap:12px;
-  background:var(--card); border:1px solid var(--line); border-radius:var(--r-l);
-  box-shadow:var(--shadow); padding:14px 16px; text-decoration:none; color:inherit;
+  background:var(--card); border:1px solid var(--line); border-radius:var(--r-xl);
+  box-shadow:var(--shadow-1); padding:14px 16px; text-decoration:none; color:inherit;
   transition:box-shadow var(--dur-base) var(--ease), transform var(--dur-base) var(--ease),
              border-color var(--dur-base) var(--ease);
 }}
 a.ma-kpi:hover {{
-  box-shadow:0 4px 10px rgba(24,24,27,.07); transform:translateY(-1px);
+  box-shadow:var(--shadow-2); transform:translateY(-1px);
   border-color:#d7d8dc;
 }}
 .ma-kpi__icon {{
   display:grid; place-items:center; width:34px; height:34px; border-radius:var(--r-m);
   background:var(--sunken); color:var(--muted); flex:none;
 }}
-.ma-kpi__icon .q-icon {{ font-size:19px; }}
-.ma-kpi__label {{ font-size:12px; color:var(--muted); }}
-.ma-kpi__value {{ font-size:25px; font-weight:700; line-height:1.2; letter-spacing:-.02em; }}
-.ma-kpi__hint {{ font-size:11px; color:var(--muted); }}
+.ma-kpi__icon .q-icon {{ font-size:var(--ic-m); }}
+.ma-kpi__label {{ font-size:var(--fs-cap); color:var(--muted); }}
+.ma-kpi__value {{ font-size:var(--fs-h1); font-weight:700; line-height:1.2; letter-spacing:-.02em; }}
+.ma-kpi__hint {{ font-size:var(--fs-caps); color:var(--muted); }}
 
 /* 거래처 카드. A whole card is the link — the name, the counts and the last-seen line
    all answer one question ('이 사람과 무엇이 남았나') and so all go to one place, the
@@ -705,18 +736,18 @@ a.ma-kpi:hover {{
    flex column with align-items:start and would shrink-wrap this to its longest word. */
 .ma-sender {{ display:block; text-decoration:none; color:inherit; padding:14px 16px; }}
 a.ma-sender:hover {{
-  box-shadow:0 4px 10px rgba(24,24,27,.07); transform:translateY(-1px);
+  box-shadow:var(--shadow-2); transform:translateY(-1px);
   border-color:#d7d8dc;
 }}
 .ma-sender__name {{
-  display:block; font-size:14px; font-weight:650; color:var(--ink);
+  display:block; font-size:var(--fs-b2); font-weight:650; color:var(--ink);
   letter-spacing:-.01em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }}
 .ma-sender__addr {{
-  display:block; font-size:11.5px; color:var(--muted); margin-top:2px;
+  display:block; font-size:var(--fs-cap); color:var(--muted); margin-top:2px;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }}
-.ma-sender__foot {{ display:block; font-size:11px; color:var(--muted); margin-top:8px; }}
+.ma-sender__foot {{ display:block; font-size:var(--fs-caps); color:var(--muted); margin-top:8px; }}
 
 /* 오늘의 AI 브리핑. The one card on the 대시보드 that is written rather than counted,
    so it is the one card that gets a moving edge — a beam everywhere is a beam nowhere,
@@ -749,7 +780,7 @@ a.ma-sender:hover {{
   .ma-slot__grip {{ transition:none; }}
 }}
 .ma-brief__lede {{
-  display:block; font-size:15px; font-weight:650; line-height:1.55;
+  display:block; font-size:var(--fs-b2); font-weight:650; line-height:1.55;
   letter-spacing:-.012em; color:var(--ink);
 }}
 .ma-brief__grid {{
@@ -765,10 +796,10 @@ a.ma-sender:hover {{
    own sections — 우선 확인 beside 오늘 할 일 beside 다가오는 일정 is three questions,
    and they should not have to be read to be told apart. */
 .ma-brief__head {{ display:flex; align-items:center; gap:5px; margin-bottom:5px; }}
-.ma-brief__title {{ font-size:11.5px; font-weight:700; color:var(--sec,var(--brand)); }}
+.ma-brief__title {{ font-size:var(--fs-cap); font-weight:700; color:var(--sec,var(--brand)); }}
 .ma-brief__line {{
   display:flex; gap:7px; align-items:baseline;
-  font-size:12.5px; line-height:1.68; color:var(--ink);
+  font-size:var(--fs-b3); line-height:1.68; color:var(--ink);
 }}
 .ma-brief__line::before {{
   content:''; flex:none; width:4px; height:4px; border-radius:50%;
@@ -781,12 +812,12 @@ a.ma-sender:hover {{
 .ma-brief__pin {{
   display:inline-flex; align-items:center; gap:5px; max-width:100%;
   text-decoration:none; border:1px solid var(--line); border-radius:var(--r-full);
-  padding:3px 11px 3px 9px; font-size:11.5px; color:var(--subtle);
+  padding:3px 11px 3px 9px; font-size:var(--fs-cap); color:var(--subtle);
   background:var(--card);
   transition:border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }}
 .ma-brief__pin:hover {{ border-color:var(--brand); color:var(--brand); }}
-.ma-brief__pin .q-icon {{ font-size:13px; flex:none; }}
+.ma-brief__pin .q-icon {{ font-size:var(--ic-m); flex:none; }}
 /* ui.label is a div; the q-tooltip beside it is a q-tooltip, so > div is the text. */
 .ma-brief__pin > div {{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
 
@@ -798,12 +829,12 @@ a.ma-sender:hover {{
    뜨는 순간은 대개 읽던 것이 화면에 그대로 있는 순간이라 그 색덩어리가 목록보다 크다.
    표면은 hover 카드·차트 tooltip과 같은 먹색으로 두고, 결과는 아이콘 하나가 말한다. */
 .ma-toast {{
-  background:#27272a !important; color:#fafafa;
-  border-radius:var(--r-m) !important;
-  font-family:{FONT_STACK}; font-size:12.5px; line-height:1.5;
-  box-shadow:0 8px 24px rgba(24,24,27,.24) !important;
+  background:var(--ink) !important; color:#fff;
+  border-radius:var(--r-l) !important;
+  font-family:{FONT_STACK}; font-size:var(--fs-b2); line-height:1.4;
+  box-shadow:var(--shadow-toast) !important;
 }}
-.ma-toast .q-notification__icon {{ font-size:19px; color:#a1a1aa; }}
+.ma-toast .q-notification__icon {{ font-size:var(--ic-m); color:#a1a1aa; }}
 .ma-toast--done .q-notification__icon {{ color:{OK}; }}
 .ma-toast--fail .q-notification__icon {{ color:#fca5a5; }}
 .ma-toast--wait .q-notification__icon {{ color:#fcd34d; }}
@@ -812,29 +843,29 @@ a.ma-sender:hover {{
 .ma-toast .q-btn {{ color:#93b8ff !important; font-weight:600; }}
 
 .q-tooltip.ma-hint {{
-  background:#27272a; color:#fafafa; border-radius:var(--r-m); padding:9px 11px;
-  max-width:360px; font-size:12px; line-height:1.6; letter-spacing:-.005em;
-  box-shadow:0 8px 24px rgba(24,24,27,.24); font-family:{FONT_STACK};
+  background:var(--ink); color:#fff; border-radius:var(--r-m); padding:9px 11px;
+  max-width:360px; font-size:var(--fs-cap); line-height:1.6; letter-spacing:-.005em;
+  box-shadow:var(--shadow-2); font-family:{FONT_STACK};
 }}
 .ma-hint__title {{
-  font-weight:700; font-size:12.5px; margin-bottom:2px; overflow-wrap:anywhere;
+  font-weight:700; font-size:var(--fs-b3); margin-bottom:2px; overflow-wrap:anywhere;
 }}
 .ma-hint__row {{ color:#d4d4d8; overflow-wrap:anywhere; }}
 .ma-hint__bad {{ color:#fca5a5; }}
-.ma-hint__why {{ color:#a1a1aa; font-size:11.5px; margin-top:5px; overflow-wrap:anywhere; }}
+.ma-hint__why {{ color:#a1a1aa; font-size:var(--fs-cap); margin-top:5px; overflow-wrap:anywhere; }}
 
 .ma-meta {{ display:flex; gap:8px; flex-wrap:wrap; align-items:center; }}
-.ma-meta__item {{ font-size:12px; color:var(--muted); }}
+.ma-meta__item {{ font-size:var(--fs-cap); color:var(--muted); }}
 .ma-dot {{ width:7px; height:7px; border-radius:50%; flex:none; }}
 .ma-empty {{
-  color:var(--muted); font-size:12.5px; padding:18px 0; text-align:center;
+  color:var(--muted); font-size:var(--fs-b3); padding:18px 0; text-align:center;
 }}
 .ma-scroll {{ overflow-y:auto; }}
 .ma-scroll::-webkit-scrollbar {{ width:9px; height:9px; }}
 .ma-scroll::-webkit-scrollbar-thumb {{ background:#d9dade; border-radius:var(--r-full); }}
 .ma-scroll::-webkit-scrollbar-track {{ background:transparent; }}
 .ma-log {{
-  font-size:11.5px; line-height:1.85; color:var(--subtle);
+  font-size:var(--fs-cap); line-height:1.85; color:var(--subtle);
   font-variant-numeric:tabular-nums;
 }}
 
@@ -842,7 +873,7 @@ a.ma-sender:hover {{
    a row hover, and nothing here is clickable. The mail decides how many columns it
    has, so the wrapper scrolls sideways rather than the panel doing it. */
 .ma-sheet__wrap {{ display:block; overflow-x:auto; max-width:100%; margin:8px 0 10px; }}
-.ma-sheet {{ border-collapse:collapse; font-size:12px; line-height:1.6; background:var(--card); }}
+.ma-sheet {{ border-collapse:collapse; font-size:var(--fs-cap); line-height:1.6; background:var(--card); }}
 .ma-sheet td, .ma-sheet th {{
   border:1px solid var(--line); padding:5px 9px; text-align:left;
   vertical-align:top; color:var(--ink); white-space:nowrap;
@@ -851,7 +882,7 @@ a.ma-sender:hover {{
 
 /* Quasar overrides: the table is the one place the defaults fight the page. */
 .ma-table thead tr th {{
-  background:var(--sunken); color:var(--muted); font-size:11.5px; font-weight:600;
+  background:var(--sunken); color:var(--muted); font-size:var(--fs-cap); font-weight:600;
   border-bottom:1px solid var(--line); position:sticky; top:0; z-index:1;
 }}
 /* A sortable header. q-table's own sort would only reorder the page it was handed,
@@ -859,31 +890,32 @@ a.ma-sender:hover {{
 .ma-table thead tr th.ma-th {{ cursor:pointer; user-select:none; white-space:nowrap; }}
 .ma-table thead tr th.ma-th:hover {{ color:var(--ink); background:#eef0f3; }}
 .ma-table thead tr th.ma-th.is-live {{ color:var(--brand); }}
-.ma-th__arrow {{ font-size:14px; margin-left:3px; vertical-align:-2px; opacity:0; }}
+.ma-th__arrow {{ font-size:var(--fs-b2); margin-left:3px; vertical-align:-2px; opacity:0; }}
 .ma-th:hover .ma-th__arrow {{ opacity:.45; }}
 .ma-th.is-live .ma-th__arrow {{ opacity:1; }}
-.ma-table tbody td {{ font-size:12.5px; border-bottom:1px solid var(--hair); }}
+.ma-table tbody td {{ font-size:var(--fs-b3); border-bottom:1px solid var(--hair); }}
 .ma-table tbody tr {{ cursor:pointer; }}
 .ma-table tbody tr:hover {{ background:var(--sunken); }}
 .ma-tag {{
-  display:inline-flex; align-items:center; border-radius:var(--r-xs); padding:1px 7px;
-  font-size:11px; font-weight:600; line-height:1.75; white-space:nowrap;
+  display:inline-flex; align-items:center; height:22px; padding:0 8px;
+  border-radius:var(--r-badge); font-size:var(--fs-cap); font-weight:600;
+  line-height:1; white-space:nowrap;
 }}
 .ma-foot {{
   display:flex; gap:6px; align-items:center; flex-wrap:wrap;
   padding:9px 12px; border-top:1px solid var(--hair); background:var(--card);
 }}
 .ma-field {{
-  display:block; font-size:11px; font-weight:600; color:var(--muted);
+  display:block; font-size:var(--fs-caps); font-weight:600; color:var(--muted);
   margin:12px 0 3px; letter-spacing:.01em;
 }}
 .ma-field:first-child {{ margin-top:0; }}
 .ma-radio {{ display:block; margin:0 0 2px -6px; }}
-.ma-radio .q-radio__label {{ font-size:13px; color:var(--ink); }}
+.ma-radio .q-radio__label {{ font-size:var(--fs-b3); color:var(--ink); }}
 /* The 모델 dropdown. Quasar sizes a select's text for a form somebody fills in all
    day; this one is read far more often than it is changed, so the closed control
    matches the card's own body text rather than shouting one size larger. */
-.ma-select .q-field__native {{ font-size:13px; color:var(--ink); font-weight:600; }}
+.ma-select .q-field__native {{ font-size:var(--fs-b3); color:var(--ink); font-weight:600; }}
 .ma-alert {{
   display:flex; gap:7px; align-items:flex-start; border-radius:var(--r-m); padding:9px 11px;
   color:var(--urgent); background:rgba(192,0,0,.06); border:1px solid rgba(192,0,0,.14);
@@ -902,17 +934,17 @@ a.ma-sender:hover {{
 .ma-part--brand {{ border-left-color:var(--brand); }}
 .ma-part--ok {{ border-left-color:var(--ok); }}
 .ma-part__head {{ display:flex; align-items:center; gap:6px; margin-bottom:5px; }}
-.ma-part__head .q-icon {{ font-size:15px; flex:none; }}
-.ma-part__label {{ font-size:11.5px; font-weight:700; color:var(--ink); }}
+.ma-part__head .q-icon {{ font-size:var(--ic-m); flex:none; }}
+.ma-part__label {{ font-size:var(--fs-cap); font-weight:700; color:var(--ink); }}
 .ma-part__body {{
-  display:block; font-size:13px; line-height:1.68; color:var(--ink);
+  display:block; font-size:var(--fs-b3); line-height:1.68; color:var(--ink);
   white-space:pre-wrap; overflow-wrap:anywhere;
 }}
 .ma-part__foot {{
   display:flex; align-items:center; gap:8px; flex-wrap:wrap;
   margin-top:7px; padding-top:6px; border-top:1px solid var(--hair);
 }}
-.ma-part__link {{ font-size:12px; color:var(--brand); text-decoration:none; }}
+.ma-part__link {{ font-size:var(--fs-cap); color:var(--brand); text-decoration:none; }}
 .ma-part__link:hover {{ text-decoration:underline; }}
 
 .ma-row {{
@@ -935,20 +967,20 @@ a.ma-sender:hover {{
 .ma-tally {{ display:flex; gap:0; padding:12px 18px 10px; }}
 .ma-tally__cell {{ flex:1 1 0; display:grid; gap:2px; min-width:0; }}
 .ma-tally__head {{ display:flex; align-items:center; gap:6px; }}
-.ma-tally__n {{ font-size:21px; font-weight:700; line-height:1.15; letter-spacing:-.02em; }}
+.ma-tally__n {{ font-size:var(--fs-h3); font-weight:700; line-height:1.15; letter-spacing:-.02em; }}
 .ma-due {{
   display:flex; gap:8px; align-items:center; flex-wrap:nowrap;
   padding:2px 18px 2px 12px; border-bottom:1px solid var(--hair);
 }}
 .ma-due:last-child {{ border-bottom:none; }}
 .ma-due:hover {{ background:var(--sunken); }}
-.ma-due__day {{ font-size:12px; color:var(--subtle); flex:none; min-width:76px; }}
+.ma-due__day {{ font-size:var(--fs-cap); color:var(--subtle); flex:none; min-width:76px; }}
 .ma-due__title {{
-  font-size:12.5px; color:var(--ink); font-weight:500; text-decoration:none;
+  font-size:var(--fs-b3); color:var(--ink); font-weight:500; text-decoration:none;
   min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }}
 .ma-due__title:hover {{ color:var(--brand); text-decoration:underline; }}
-.ma-due__left {{ font-size:12px; color:var(--muted); flex:none; }}
+.ma-due__left {{ font-size:var(--fs-cap); color:var(--muted); flex:none; }}
 /* The text already says 지남; the colour only makes it findable at a glance. */
 .ma-due__left.is-missed {{ color:var(--urgent); font-weight:600; }}
 .ma-due.is-done .ma-due__day, .ma-due.is-done .ma-due__left {{ color:var(--muted); }}
@@ -963,7 +995,7 @@ a.ma-sender:hover {{
   padding:12px 14px; border-bottom:1px solid var(--hair);
 }}
 .ma-count {{
-  font-size:11px; font-weight:700; color:var(--muted); background:var(--sunken);
+  font-size:var(--fs-caps); font-weight:700; color:var(--muted); background:var(--sunken);
   border-radius:var(--r-full); padding:1px 8px;
 }}
 .ma-lane {{
@@ -978,7 +1010,7 @@ a.ma-sender:hover {{
   transition:box-shadow var(--dur-base) var(--ease), border-color var(--dur-base) var(--ease),
              opacity var(--dur-base) var(--ease);
 }}
-.ma-note:hover {{ box-shadow:var(--shadow); border-color:#d7d8dc; }}
+.ma-note:hover {{ box-shadow:var(--shadow-1); border-color:#d7d8dc; }}
 .ma-note:active {{ cursor:grabbing; }}
 .ma-note__foot {{
   display:flex; align-items:center; gap:2px; margin-top:6px;
@@ -997,7 +1029,7 @@ a.ma-sender:hover {{
 .ma-card.is-over .ma-lane {{ background:var(--brand-soft); }}
 .ma-drop {{
   border:1px dashed var(--line); border-radius:var(--r-m); padding:17px 0;
-  text-align:center; color:var(--muted); font-size:12.5px;
+  text-align:center; color:var(--muted); font-size:var(--fs-b3);
   transition:border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }}
 .ma-card.is-over .ma-drop {{ border-color:var(--brand); color:var(--brand); }}
@@ -1016,10 +1048,10 @@ a.ma-sender:hover {{
   transition:box-shadow var(--dur-base) var(--ease);
 }}
 .ma-memo:hover {{
-  box-shadow:0 2px 4px rgba(24,24,27,.05), 0 6px 16px rgba(24,24,27,.08);
+  box-shadow:var(--shadow-2);
 }}
 .ma-memo__body {{
-  display:block; color:var(--ink); font-size:13px; line-height:1.7;
+  display:block; color:var(--ink); font-size:var(--fs-b3); line-height:1.7;
   white-space:pre-wrap; overflow-wrap:anywhere;
 }}
 /* Quasar's borderless input still brings a control box, a bottom slot for the hint
@@ -1030,7 +1062,7 @@ a.ma-sender:hover {{
 .ma-memo .q-field__control:before, .ma-memo .q-field__control:after {{ display:none; }}
 .ma-memo .q-field__bottom {{ display:none; }}
 .ma-memo .q-field__native {{
-  color:var(--ink); font-size:13px; line-height:1.7; padding:0; min-height:0;
+  color:var(--ink); font-size:var(--fs-b3); line-height:1.7; padding:0; min-height:0;
   overflow-wrap:anywhere;
 }}
 .ma-memo .q-field__native::placeholder {{ color:rgba(24,24,27,.38); }}
@@ -1039,7 +1071,7 @@ a.ma-sender:hover {{
   margin-top:5px; padding-top:5px; border-top:1px solid rgba(24,24,27,.07);
 }}
 .ma-memo__when {{
-  font-size:10.5px; color:rgba(24,24,27,.46); flex:none;
+  font-size:var(--fs-caps); color:rgba(24,24,27,.46); flex:none;
   font-variant-numeric:tabular-nums;
 }}
 /* Revealed on hover, like the kanban card's grip: six swatches and two buttons on
@@ -1062,16 +1094,16 @@ a.ma-sender:hover {{
   display:inline-flex; align-items:center; gap:5px; max-width:100%;
   background:rgba(255,255,255,.62); border:1px solid rgba(24,24,27,.08);
   border-radius:var(--r-full); padding:2px 9px 2px 7px; margin-top:7px;
-  font-size:11px; color:var(--subtle); text-decoration:none; cursor:pointer;
+  font-size:var(--fs-caps); color:var(--subtle); text-decoration:none; cursor:pointer;
 }}
 .ma-memo__link:hover {{ background:#fff; color:var(--ink); }}
-.ma-memo__link .q-icon {{ font-size:13px; flex:none; opacity:.7; }}
+.ma-memo__link .q-icon {{ font-size:var(--ic-m); flex:none; opacity:.7; }}
 .ma-memo__link span {{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
 .ma-wall__head {{
   display:flex; align-items:center; gap:7px; margin:2px 0 9px;
-  font-size:11px; font-weight:700; letter-spacing:.05em; color:var(--muted);
+  font-size:var(--fs-caps); font-weight:700; letter-spacing:.05em; color:var(--muted);
 }}
-.ma-wall__head .q-icon {{ font-size:14px; }}
+.ma-wall__head .q-icon {{ font-size:var(--ic-m); }}
 .ma-wall__rule {{ flex:1 1 auto; height:1px; background:var(--line); }}
 
 /* 초안 만들기: its own heading, its own fold, and the two pickers. The control sits
@@ -1081,12 +1113,12 @@ a.ma-sender:hover {{
   border-radius:var(--r-m); padding:8px 10px; margin-bottom:8px;
 }}
 .ma-maker__top {{ display:flex; align-items:center; gap:7px; }}
-.ma-maker__title {{ font-size:12.5px; font-weight:700; color:var(--ink); }}
+.ma-maker__title {{ font-size:var(--fs-b3); font-weight:700; color:var(--ink); }}
 .ma-maker__row {{
   display:flex; align-items:center; gap:9px; flex-wrap:wrap; margin-top:8px;
 }}
 .ma-maker__label {{
-  flex:none; width:30px; font-size:11px; font-weight:600; color:var(--muted);
+  flex:none; width:30px; font-size:var(--fs-caps); font-weight:600; color:var(--muted);
 }}
 
 /* A block that opens and shuts in place. grid-template-rows and not height: a
@@ -1118,11 +1150,11 @@ a.ma-sender:hover {{
 .ma-chat .q-scrollarea__thumb:hover {{ opacity:.5; }}
 .ma-chat .q-message {{ max-width:min(76%, 660px); margin-bottom:12px; }}
 .ma-chat .q-message-sent {{ margin-left:auto; }}
-.ma-chat .q-message-name {{ font-size:11px; color:var(--muted); margin-bottom:3px; }}
-.ma-chat .q-message-stamp {{ font-size:10.5px; color:var(--muted); opacity:1; }}
+.ma-chat .q-message-name {{ font-size:var(--fs-caps); color:var(--muted); margin-bottom:3px; }}
+.ma-chat .q-message-stamp {{ font-size:var(--fs-caps); color:var(--muted); opacity:1; }}
 .ma-chat .q-message-text {{
   background:var(--sunken); color:var(--ink); border:1px solid var(--hair);
-  border-radius:var(--r-l); padding:8px 12px; font-size:13px; line-height:1.65;
+  border-radius:var(--r-l); padding:8px 12px; font-size:var(--fs-b3); line-height:1.65;
   min-height:0; overflow-wrap:anywhere;
 }}
 .ma-chat .q-message-sent .q-message-text {{
@@ -1178,15 +1210,15 @@ a.ma-sender:hover {{
 .ma-room:hover {{ background:var(--sunken); }}
 .ma-room.is-open {{ background:var(--brand-soft); border-color:#d8e3fb; }}
 .ma-room__top {{ display:flex; align-items:center; gap:6px; min-width:0; }}
-.ma-room__icon {{ font-size:15px; color:var(--muted); flex:none; }}
+.ma-room__icon {{ font-size:var(--fs-b2); color:var(--muted); flex:none; }}
 .ma-room.is-open .ma-room__icon {{ color:var(--brand); }}
 .ma-room__title {{
-  font-size:12.5px; font-weight:600; color:var(--ink);
+  font-size:var(--fs-b3); font-weight:600; color:var(--ink);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0;
 }}
-.ma-room__when {{ font-size:10.5px; color:var(--muted); flex:none; }}
+.ma-room__when {{ font-size:var(--fs-caps); color:var(--muted); flex:none; }}
 .ma-room__last {{
-  display:block; font-size:11.5px; color:var(--muted); margin-top:2px;
+  display:block; font-size:var(--fs-cap); color:var(--muted); margin-top:2px;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }}
 
@@ -1201,11 +1233,11 @@ a.ma-sender:hover {{
 .ma-chat .ma-md__h {{ font-weight:700; margin:2px 0 4px; }}
 .ma-chat code {{
   background:rgba(24,24,27,.06); border-radius:var(--r-xs); padding:0 4px;
-  font-size:12px; font-family:{MONO};
+  font-size:var(--fs-cap); font-family:{MONO};
 }}
 .ma-chat pre {{
   background:rgba(24,24,27,.055); border-radius:var(--r-s); padding:8px 10px;
-  margin:0 0 6px; overflow-x:auto; font-size:12px; line-height:1.6;
+  margin:0 0 6px; overflow-x:auto; font-size:var(--fs-cap); line-height:1.6;
   font-family:{MONO};
 }}
 .ma-chat pre code {{ background:none; padding:0; font-size:inherit; }}
@@ -1220,20 +1252,20 @@ a.ma-sender:hover {{
 .ma-today__row:last-child {{ border-bottom:none; }}
 .ma-today__row:hover {{ background:var(--sunken); }}
 .ma-today__title {{
-  font-size:12.5px; color:var(--ink); font-weight:500; text-decoration:none;
+  font-size:var(--fs-b3); color:var(--ink); font-weight:500; text-decoration:none;
   min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }}
 .ma-today__title:hover {{ color:var(--brand); text-decoration:underline; }}
-.ma-today__kind {{ font-size:11.5px; color:var(--muted); flex:none; }}
+.ma-today__kind {{ font-size:var(--fs-cap); color:var(--muted); flex:none; }}
 
 /* The 일정 tooltip. Native title= waits a second, wraps where it likes and wears the
    desktop's own chrome; this is the same slate the chart tooltips use, so a hover on
    the calendar and a hover on a bar are recognisably the same gesture. */
 .ma-tip {{
   position:fixed; z-index:9999; left:0; top:0; max-width:320px; pointer-events:none;
-  background:#27272a; color:#fafafa; border-radius:var(--r-m); padding:9px 11px;
-  font-size:12px; line-height:1.6; letter-spacing:-.005em;
-  box-shadow:0 8px 24px rgba(24,24,27,.24);
+  background:var(--ink); color:#fff; border-radius:var(--r-m); padding:9px 11px;
+  font-size:var(--fs-cap); line-height:1.6; letter-spacing:-.005em;
+  box-shadow:var(--shadow-2);
   opacity:0; transform:translateY(3px);
   transition:opacity var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
   font-family:{FONT_STACK};
@@ -1241,21 +1273,21 @@ a.ma-sender:hover {{
 .ma-tip.is-on {{ opacity:1; transform:translateY(0); }}
 .ma-tip__head {{ display:flex; align-items:center; gap:6px; margin-bottom:3px; }}
 .ma-tip__dot {{ width:7px; height:7px; border-radius:50%; flex:none; }}
-.ma-tip__title {{ font-weight:700; font-size:12.5px; overflow-wrap:anywhere; }}
+.ma-tip__title {{ font-weight:700; font-size:var(--fs-b3); overflow-wrap:anywhere; }}
 .ma-tip__row {{ color:#d4d4d8; overflow-wrap:anywhere; }}
-.ma-tip__row b {{ color:#fafafa; font-weight:600; }}
+.ma-tip__row b {{ color:#fff; font-weight:600; }}
 .ma-tip__miss {{ color:#fca5a5; font-weight:600; }}
-.ma-tip__hint {{ color:#a1a1aa; font-size:11px; margin-top:4px; }}
+.ma-tip__hint {{ color:#a1a1aa; font-size:var(--fs-caps); margin-top:4px; }}
 
 /* FullCalendar ships its own chrome; these lines make it this app's chrome. */
 .fc {{
   --fc-border-color:{HAIR}; --fc-page-bg-color:{CARD};
   --fc-neutral-bg-color:{SUNKEN}; --fc-today-bg-color:{BRAND_SOFT};
-  font-size:12.5px;
+  font-size:var(--fs-b3);
 }}
 .fc .fc-button {{
   background:{CARD}; border:1px solid {LINE}; color:{SUBTLE}; box-shadow:none;
-  text-transform:none; font-size:12px; font-weight:600; padding:4px 11px;
+  text-transform:none; font-size:var(--fs-cap); font-weight:600; padding:4px 11px;
   border-radius:var(--r-s);
 }}
 .fc .fc-button:hover {{ background:{SUNKEN}; color:{INK}; border-color:{LINE}; }}
@@ -1268,18 +1300,18 @@ a.ma-sender:hover {{
   background:{SUNKEN}; border-color:{HAIR}; color:{MUTED}; opacity:1;
 }}
 .fc .fc-col-header-cell-cushion {{
-  color:{MUTED}; font-size:11.5px; font-weight:600; padding:8px 4px;
+  color:{MUTED}; font-size:var(--fs-cap); font-weight:600; padding:8px 4px;
 }}
-.fc .fc-daygrid-day-number {{ color:{SUBTLE}; font-size:12px; padding:5px 7px; }}
+.fc .fc-daygrid-day-number {{ color:{SUBTLE}; font-size:var(--fs-cap); padding:5px 7px; }}
 .fc .fc-daygrid-event {{
-  border:none; border-radius:var(--r-xs); padding:1px 5px; font-size:11.5px;
+  border:none; border-radius:var(--r-xs); padding:1px 5px; font-size:var(--fs-cap);
 }}
 .fc .fc-list-day-cushion {{ background:{SUNKEN}; }}
 .fc .fc-timegrid-event {{ border:none; border-radius:var(--r-xs); padding:1px 4px; }}
 .fc .fc-timegrid-event .fc-event-main {{ padding:0; }}
 /* One row per event: icon, then time, then whatever room the title has left. */
 .ma-ev {{ display:flex; align-items:center; gap:4px; min-width:0; overflow:hidden; }}
-.ma-ev__icon {{ font-size:13px; line-height:1; flex:none; opacity:.92; }}
+.ma-ev__icon {{ font-size:var(--fs-b3); line-height:1; flex:none; opacity:.92; }}
 .ma-ev__time {{ font-weight:700; flex:none; font-variant-numeric:tabular-nums; }}
 .ma-ev__title {{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
 /* In 주 the block is as tall as the event is long, so the title may wrap. */
@@ -1291,15 +1323,30 @@ a.ma-sender:hover {{
   border-color:{css_color(URGENT)}; border-top-color:transparent; border-bottom-color:transparent;
 }}
 .fc-theme-standard td, .fc-theme-standard th {{ border-color:{HAIR}; }}
-.q-field--outlined .q-field__control {{ border-radius:var(--r-m); }}
-.q-btn {{ border-radius:var(--r-m); }}
+/* text-field — 48px, radius-m, and a grey-100 ground that turns white under the
+   caret. Resting on the card's own white is what made a form read as a stack of
+   outlines; resting on grey-100 makes the focused field the only white one on it. */
+.q-field--outlined .q-field__control {{
+  border-radius:var(--r-m); background:var(--sunken);
+  transition:background var(--dur-base) var(--ease);
+}}
+.q-field--outlined.q-field--focused .q-field__control {{ background:var(--card); }}
+.q-field--outlined .q-field__control:before {{ border-color:var(--line); }}
+/* button — M is the workhorse at 40px/radius-m, which is what .q-btn already was.
+   TDS pairs the radius with the size, so the dense one drops to its own rung. */
+.q-btn {{ border-radius:var(--r-m); min-height:40px; font-weight:600; }}
 /* Quasar sizes a dense button at 14px type in a 2.5em box, which stands a head taller
    than the 12.5px text it sits beside — a row of four of them read as the loudest
    thing on the page. Specificity is deliberately one class, so the segmented control
    (.ma-seg .q-btn) and the round icon buttons below keep their own sizes. */
-.q-btn--dense {{ font-size:12.5px; min-height:27px; padding:1px 10px; font-weight:600; }}
-.q-btn--dense .q-icon {{ font-size:15px; }}
-.q-btn--dense.q-btn--round {{ min-height:26px; min-width:26px; padding:0; }}
+.q-btn--dense {{
+  font-size:var(--fs-b3); min-height:32px; padding:0 12px; font-weight:600;
+  border-radius:var(--r-btn-s);
+}}
+.q-btn--dense .q-icon {{ font-size:var(--ic-m); }}
+.q-btn--dense.q-btn--round {{
+  min-height:32px; min-width:32px; padding:0; border-radius:var(--r-full);
+}}
 /* The 메일 detail, opened over the list rather than under it: wide enough for the two
    columns and the draft, short enough that the page behind it still frames it. */
 .ma-modal {{ width:min(1060px, 95vw); max-width:95vw; max-height:86vh; overflow-y:auto; }}
@@ -1338,8 +1385,8 @@ def chart_base(left=8, right=16, top=16, bottom=8):
     return {'grid': {'left': left, 'right': right, 'top': top, 'bottom': bottom,
                      'containLabel': True},
             'textStyle': {'fontFamily': CHART_FONT},
-            'tooltip': {'trigger': 'axis', 'backgroundColor': '#27272a', 'borderWidth': 0,
-                        'textStyle': {'color': '#fafafa', 'fontSize': 12},
+            'tooltip': {'trigger': 'axis', 'backgroundColor': INK, 'borderWidth': 0,
+                        'textStyle': {'color': '#fff', 'fontSize': 12},
                         'axisPointer': {'type': 'shadow',
                                         'shadowStyle': {'color': 'rgba(24,24,27,0.04)'}}},
             'animationDuration': 420}
@@ -2530,7 +2577,7 @@ SIZE_UNITS = (('GB', 1024 ** 3), ('MB', 1024 ** 2), ('KB', 1024), ('B', 1))
 # 더 강하게 적용된다: 견적·청구·계약은 전부 '아직 일어나지 않은 돈'이라 서로 구분할
 # 이유가 색만큼 크지 않은 반면, 입금은 '이미 들어온 돈'이라 종류가 아니라 상태다.
 # 종류 자체는 태그의 글자가 이미 말하고 있고, 색이 답하는 질문은 '끝났는가' 하나다.
-MONEY_TONES = {'견적': NEUTRAL, '청구': NEUTRAL, '입금': DASH_GREEN, '계약': NEUTRAL,
+MONEY_TONES = {'견적': NEUTRAL, '청구': NEUTRAL, '입금': TDS_GREEN_500, '계약': NEUTRAL,
                '기타': NEUTRAL}
 # 확인 필요가 걸린 줄. 합계에서 빠졌다는 사실이 줄 자체에도 보여야 한다 — 합계 밑의
 # 한 문장만으로는 '어느 줄이' 빠졌는지 말하지 않는다.
@@ -2987,8 +3034,8 @@ def donut_option(pairs, tones=None):
     """
     return {
         'textStyle': {'fontFamily': CHART_FONT}, 'animationDuration': 420,
-        'tooltip': {'trigger': 'item', 'backgroundColor': '#27272a', 'borderWidth': 0,
-                    'textStyle': {'color': '#fafafa', 'fontSize': 12}},
+        'tooltip': {'trigger': 'item', 'backgroundColor': INK, 'borderWidth': 0,
+                    'textStyle': {'color': '#fff', 'fontSize': 12}},
         'series': [{'type': 'pie', 'radius': ['56%', '82%'], 'center': ['50%', '52%'],
                     'padAngle': 1.5, 'itemStyle': {'borderRadius': 3},
                     'label': {'show': False}, 'labelLine': {'show': False},
