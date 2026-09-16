@@ -122,10 +122,12 @@ SIDE_RAIL = 64
 SIDE_BREAK = 1200
 # The fold is one gesture, so everything that moves with it shares one curve and one
 # duration: a width that slides while its labels blink reads as two things happening.
-SIDE_EASE = '.22s cubic-bezier(.4,0,.2,1)'
+# It spends the tokens rather than its own figures — the fold is the slowest thing on
+# the site and 'slowest' is a step on the ladder, not a number only this file knows.
+SIDE_EASE = 'var(--dur-slow) var(--ease)'
 # Said once, under the two pickers: both are things the reader would otherwise have
 # to press the button to find out.
-DRAFT_NOTE = '받은 메일과 같은 언어로 씁니다. 서명과 연락처는 넣지 않습니다.'
+DRAFT_NOTE = '받은 메일과 같은 언어로 써요. 서명과 연락처는 넣지 않아요.'
 # A heading row that may carry a dense control — the 원문/한글 번역 toggle is the
 # tallest of them — beside one that carries nothing but the heading.
 HEAD_ROW = 30
@@ -315,9 +317,9 @@ def rail_css(scope):
 {scope} .ma-side__item::after {{
   content:attr(data-name); position:absolute; left:calc(100% + 8px); top:50%;
   transform:translateY(-50%); z-index:40; pointer-events:none; opacity:0;
-  background:var(--ink); color:#fff; border-radius:7px; padding:4px 9px;
+  background:var(--ink); color:#fff; border-radius:var(--r-s); padding:4px 9px;
   font-size:11.5px; font-weight:600; white-space:nowrap; box-shadow:var(--shadow);
-  transition:opacity .12s ease;
+  transition:opacity var(--dur-fast) var(--ease);
 }}
 {scope} .ma-side__item:hover::after {{ opacity:1; }}
 {scope} .ma-side__fold .q-icon {{ transform:rotate(180deg); }}
@@ -346,13 +348,74 @@ THEME = f'''
   --line:{LINE}; --hair:{HAIR};
   --brand:{BRAND}; --brand-soft:{BRAND_SOFT};
   --urgent:{css_color(URGENT)}; --soon:{css_color(SOON)}; --ok:{OK};
-  --r:12px; --shadow:0 1px 2px rgba(24,24,27,.04), 0 1px 3px rgba(24,24,27,.06);
+  --shadow:0 1px 2px rgba(24,24,27,.04), 0 1px 3px rgba(24,24,27,.06);
+  /* Radius is a ladder of five, not nine values nobody can tell apart. It was
+     2·4·5·6·7·8·9·10·12 with only --r named, and no rule anywhere said why 5 was
+     not 7 — because there was no reason. Each step now has a job: a tag, a chip or
+     a control, a panel inside a card, a card, and a pill. */
+  --r-xs:6px; --r-s:8px; --r-m:10px; --r-l:12px; --r-full:999px;
+  /* Three lengths and one curve, which is the whole motion budget. .12s and .14s
+     were both in use — nineteen times and twelve — and the difference was never a
+     decision. The curve is ease-out-expo: everything on this site is a thing
+     arriving, so it lands rather than coasting to a stop. */
+  --dur-fast:.12s; --dur-base:.2s; --dur-slow:.32s;
+  --ease:cubic-bezier(.22,.61,.36,1);
+  /* Pressed is an overlay on the resting fill, never a shadow, and disabled dims
+     the whole node rather than repainting it — a button that greys its ground and
+     keeps its label has stopped looking like the button it still is. */
+  --press:rgba(0,0,0,.26); --disabled:.30;
 }}
 body {{
   font-family:{FONT_STACK};
   background:var(--bg); color:var(--ink);
   -webkit-font-smoothing:antialiased;
+  /* Proportional by default, and tabular only where digits sit in a column. It was
+     tabular everywhere, which is a table setting applied to prose: '미처리 11건' had
+     the 1s padded out to the width of a 0, so every count in a briefing sentence, a
+     summary or a memo read with a gap in it. What actually needs to line up is the
+     list, the sheet, the KPI figure, the log and the money — each says so below. */
+  font-variant-numeric:proportional-nums;
+}}
+/* The five places a digit is being compared with the digit above it. */
+.ma-table tbody td, .ma-table thead tr th,
+.ma-sheet td, .ma-sheet th,
+.ma-kpi__value, .ma-tally__n,
+.ma-part__label, .ma-log, .ma-due__left, .ma-memo__when {{
   font-variant-numeric:tabular-nums;
+}}
+
+/* Where the keyboard is. There was no rule at all — not one :focus-visible and not
+   one outline in the whole file — so what a Tab press looked like was whatever
+   Quasar happened to give, in Quasar's blue, and nothing here decided it. It is
+   :focus-visible and not :focus so a mouse press does not draw a ring on the thing
+   it just pressed, and the ring is drawn with outline rather than box-shadow so it
+   survives overflow:hidden and cannot move anything. shoot.ps1 cannot press a key,
+   so this is one of the things no test in this project can see. */
+:where(a, button, [tabindex], input, textarea, select,
+       .q-btn, .q-field__native, .q-checkbox, .q-radio, .q-toggle):focus-visible {{
+  outline:2px solid var(--brand); outline-offset:2px; border-radius:var(--r-xs);
+}}
+/* A text field is the one control whose own border can say it: the ring would sit
+   outside the rounded control and read as a second box around it. */
+.q-field--outlined.q-field--focused .q-field__control:after {{
+  border-width:1.5px !important; border-color:var(--brand) !important;
+}}
+
+/* Pressed and disabled, said once for the whole site. Pressed is an overlay on the
+   fill the surface already has — never a shadow, never a second colour — so a brand
+   button and a grey one darken by the same amount and a ghost button darkens from
+   nothing. It is painted as a background *image* over the background colour rather
+   than through ::before, because .q-btn:before is already Quasar's elevation shadow
+   and .q-focus-helper is its own hover machinery; a background layer needs neither. */
+.q-btn:active:not(.disabled), a.ma-kpi:active, a.ma-sender:active,
+.ma-side__item:active, .ma-brief__pin:active, .ma-memo__link:active {{
+  background-image:linear-gradient(var(--press), var(--press));
+}}
+/* Disabled dims the whole node instead of repainting its ground. A button that goes
+   grey underneath and keeps its own label has stopped looking like the button it
+   still is, so the reader has to read it to find out it is off. */
+.q-btn.disabled, .q-btn[disabled], .q-field--disabled, [disabled] {{
+  opacity:var(--disabled) !important; filter:none !important;
 }}
 /* nicegui's page wrapper is a flex column with align-items:start, which
    shrink-wraps the header band to the width of the widest card. */
@@ -379,11 +442,11 @@ body {{
 }}
 .ma-side__brand {{
   display:flex; align-items:center; gap:9px; flex:1; min-width:0;
-  text-decoration:none; color:inherit; transition:opacity .12s ease;
+  text-decoration:none; color:inherit; transition:opacity var(--dur-fast) var(--ease);
 }}
-.ma-side__fold {{ flex:none; transition:opacity .12s ease; }}
+.ma-side__fold {{ flex:none; transition:opacity var(--dur-fast) var(--ease); }}
 .ma-side__mark {{
-  display:grid; place-items:center; width:28px; height:28px; border-radius:8px;
+  display:grid; place-items:center; width:28px; height:28px; border-radius:var(--r-s);
   background:var(--brand); color:#fff; flex:none;
 }}
 .ma-side__mark svg {{ width:16px; height:16px; display:block; }}
@@ -391,7 +454,7 @@ body {{
    vanish under it, and overflow is what keeps it from spilling on the way. */
 .ma-side__words {{
   display:flex; flex-direction:column; min-width:0; max-width:160px; overflow:hidden;
-  transition:max-width {SIDE_EASE}, opacity .14s ease;
+  transition:max-width {SIDE_EASE}, opacity var(--dur-fast) var(--ease);
 }}
 .ma-side__name {{
   font-size:13.5px; font-weight:700; letter-spacing:-.01em; white-space:nowrap;
@@ -405,13 +468,14 @@ body {{
   height:{SIDE_GROUP}px; box-sizing:border-box; overflow:hidden;
   border-top:1px solid transparent;
   transition:height {SIDE_EASE}, padding {SIDE_EASE}, margin {SIDE_EASE},
-             color .14s ease, border-top-color .14s ease;
+             color var(--dur-fast) var(--ease), border-top-color var(--dur-fast) var(--ease);
 }}
 .ma-side__item {{
   position:relative; display:flex; align-items:center; gap:9px;
-  padding:7px 10px; border-radius:9px; text-decoration:none;
+  padding:7px 10px; border-radius:var(--r-m); text-decoration:none;
   color:var(--subtle); font-size:13px; font-weight:500;
-  transition:background .12s ease, color .12s ease, padding {SIDE_EASE};
+  transition:background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
+             padding {SIDE_EASE};
 }}
 .ma-side__item:hover {{ background:var(--sunken); color:var(--ink); }}
 .ma-side__item.is-live {{
@@ -420,7 +484,7 @@ body {{
 .ma-side__item .q-icon {{ font-size:18px; flex:none; }}
 .ma-side__label {{
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:160px;
-  transition:max-width {SIDE_EASE}, opacity .14s ease;
+  transition:max-width {SIDE_EASE}, opacity var(--dur-fast) var(--ease);
 }}
 /* Out of the flow in both widths: in the row it sits at the end and in the rail on
    the icon's shoulder, and only a box that is positioned either way can travel
@@ -428,13 +492,14 @@ body {{
 .ma-badge {{
   position:absolute; right:10px; top:7px;
   min-width:19px; height:19px; padding:0 6px;
-  border-radius:999px; background:var(--sunken); border:1px solid var(--line);
+  border-radius:var(--r-full); background:var(--sunken); border:1px solid var(--line);
   color:var(--muted); font-size:10.5px; font-weight:700; line-height:17px;
   text-align:center;
   transition:right {SIDE_EASE}, top {SIDE_EASE}, min-width {SIDE_EASE},
              height {SIDE_EASE}, padding {SIDE_EASE}, font-size {SIDE_EASE},
-             line-height {SIDE_EASE}, background .14s ease, border-color .14s ease,
-             color .14s ease;
+             line-height {SIDE_EASE}, background var(--dur-fast) var(--ease),
+             border-color var(--dur-fast) var(--ease),
+             color var(--dur-fast) var(--ease);
 }}
 .ma-side__item.is-live .ma-badge {{
   background:var(--brand); border-color:var(--brand); color:#fff;
@@ -464,7 +529,7 @@ body {{
 .ma-bar__title {{ font-size:14px; font-weight:700; letter-spacing:-.01em; }}
 .ma-chip {{
   display:flex; align-items:center; gap:6px; flex:none;
-  border:1px solid var(--line); border-radius:999px; padding:3px 11px 3px 9px;
+  border:1px solid var(--line); border-radius:var(--r-full); padding:3px 11px 3px 9px;
   background:var(--card); font-size:11.5px; color:var(--muted);
 }}
 .ma-chip__dot {{ width:7px; height:7px; border-radius:50%; flex:none; }}
@@ -472,7 +537,7 @@ body {{
 @keyframes ma-beat {{ 0%,100% {{ opacity:1; }} 50% {{ opacity:.3; }} }}
 .ma-pill {{
   display:flex; align-items:center; gap:5px; flex:none; text-decoration:none;
-  border-radius:999px; padding:4px 11px; font-size:11.5px; font-weight:600;
+  border-radius:var(--r-full); padding:4px 11px; font-size:11.5px; font-weight:600;
   background:var(--brand-soft); color:var(--brand);
 }}
 .ma-pill:hover {{ background:#dce7fb; }}
@@ -482,7 +547,7 @@ body {{
 
 .ma-card {{
   display:block; background:var(--card); border:1px solid var(--line);
-  border-radius:var(--r); box-shadow:var(--shadow); padding:16px 18px;
+  border-radius:var(--r-l); box-shadow:var(--shadow); padding:16px 18px;
 }}
 .ma-card--flush {{ padding:0; overflow:hidden; }}
 .ma-head {{
@@ -624,7 +689,7 @@ a.ma-sender:hover {{
              var(--card);
 }}
 .ma-beam::before {{
-  content:''; position:absolute; inset:-1px; border-radius:calc(var(--r) + 1px);
+  content:''; position:absolute; inset:-1px; border-radius:calc(var(--r-l) + 1px);
   padding:1px; pointer-events:none;
   background:conic-gradient(from var(--ma-angle), transparent 0 56%,
              var(--brand-soft) 70%, var(--brand) 84%, transparent 93% 100%);
@@ -650,7 +715,7 @@ a.ma-sender:hover {{
 }}
 .ma-brief__sec {{
   display:block; background:var(--card); border:1px solid var(--hair);
-  border-radius:10px; padding:10px 13px;
+  border-radius:var(--r-m); padding:10px 13px;
 }}
 /* Four headings in one blue read as one list broken into columns. The icon and the
    hue are the section's own, taken by position (BRIEF_MARKS) because Codex names its
@@ -672,9 +737,10 @@ a.ma-sender:hover {{
 }}
 .ma-brief__pin {{
   display:inline-flex; align-items:center; gap:5px; max-width:100%;
-  text-decoration:none; border:1px solid var(--line); border-radius:999px;
+  text-decoration:none; border:1px solid var(--line); border-radius:var(--r-full);
   padding:3px 11px 3px 9px; font-size:11.5px; color:var(--subtle);
-  background:var(--card); transition:border-color .12s ease, color .12s ease;
+  background:var(--card);
+  transition:border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }}
 .ma-brief__pin:hover {{ border-color:var(--brand); color:var(--brand); }}
 .ma-brief__pin .q-icon {{ font-size:13px; flex:none; }}
@@ -685,8 +751,25 @@ a.ma-sender:hover {{
    button. The same slate as the 일정 tooltip and the chart tooltips, so a hover is
    recognisably one gesture across the app; .q-tooltip is in the selector because
    Quasar's own grey would otherwise win on equal specificity. */
+/* 알림. Quasar의 type= 은 표면 전체를 초록이나 빨강으로 칠하는데, 이 앱에서 토스트가
+   뜨는 순간은 대개 읽던 것이 화면에 그대로 있는 순간이라 그 색덩어리가 목록보다 크다.
+   표면은 hover 카드·차트 tooltip과 같은 먹색으로 두고, 결과는 아이콘 하나가 말한다. */
+.ma-toast {{
+  background:#27272a !important; color:#fafafa;
+  border-radius:var(--r-m) !important;
+  font-family:{FONT_STACK}; font-size:12.5px; line-height:1.5;
+  box-shadow:0 8px 24px rgba(24,24,27,.24) !important;
+}}
+.ma-toast .q-notification__icon {{ font-size:19px; color:#a1a1aa; }}
+.ma-toast--done .q-notification__icon {{ color:{OK}; }}
+.ma-toast--fail .q-notification__icon {{ color:#fca5a5; }}
+.ma-toast--wait .q-notification__icon {{ color:#fcd34d; }}
+/* 접수만 된 일을 여는 링크. 워커가 할 일을 예약한 토스트는 '어디서 보는지'까지
+   말해야 문장이 끝난다 — 실행 화면을 여는 것이 그 한 걸음이다. */
+.ma-toast .q-btn {{ color:#93b8ff !important; font-weight:600; }}
+
 .q-tooltip.ma-hint {{
-  background:#27272a; color:#fafafa; border-radius:9px; padding:9px 11px;
+  background:#27272a; color:#fafafa; border-radius:var(--r-m); padding:9px 11px;
   max-width:360px; font-size:12px; line-height:1.6; letter-spacing:-.005em;
   box-shadow:0 8px 24px rgba(24,24,27,.24); font-family:{FONT_STACK};
 }}
@@ -705,7 +788,7 @@ a.ma-sender:hover {{
 }}
 .ma-scroll {{ overflow-y:auto; }}
 .ma-scroll::-webkit-scrollbar {{ width:9px; height:9px; }}
-.ma-scroll::-webkit-scrollbar-thumb {{ background:#d9dade; border-radius:9px; }}
+.ma-scroll::-webkit-scrollbar-thumb {{ background:#d9dade; border-radius:var(--r-full); }}
 .ma-scroll::-webkit-scrollbar-track {{ background:transparent; }}
 .ma-log {{
   font-size:11.5px; line-height:1.85; color:var(--subtle);
@@ -740,7 +823,7 @@ a.ma-sender:hover {{
 .ma-table tbody tr {{ cursor:pointer; }}
 .ma-table tbody tr:hover {{ background:var(--sunken); }}
 .ma-tag {{
-  display:inline-flex; align-items:center; border-radius:6px; padding:1px 7px;
+  display:inline-flex; align-items:center; border-radius:var(--r-xs); padding:1px 7px;
   font-size:11px; font-weight:600; line-height:1.75; white-space:nowrap;
 }}
 .ma-foot {{
@@ -759,7 +842,7 @@ a.ma-sender:hover {{
    matches the card's own body text rather than shouting one size larger. */
 .ma-select .q-field__native {{ font-size:13px; color:var(--ink); font-weight:600; }}
 .ma-alert {{
-  display:flex; gap:7px; align-items:flex-start; border-radius:9px; padding:9px 11px;
+  display:flex; gap:7px; align-items:flex-start; border-radius:var(--r-m); padding:9px 11px;
   color:var(--urgent); background:rgba(192,0,0,.06); border:1px solid rgba(192,0,0,.14);
 }}
 .ma-alert--warn {{
@@ -770,7 +853,7 @@ a.ma-sender:hover {{
    one — four colours would be none. */
 .ma-part {{
   display:block; background:var(--card); border:1px solid var(--hair);
-  border-left:3px solid var(--line); border-radius:10px;
+  border-left:3px solid var(--line); border-radius:var(--r-m);
   padding:10px 13px; margin-bottom:9px;
 }}
 .ma-part--brand {{ border-left-color:var(--brand); }}
@@ -798,7 +881,7 @@ a.ma-sender:hover {{
 /* 대시보드 마감: a checklist, so a deadline that is done can still be seen being done. */
 .ma-due__head {{ display:flex; gap:10px; align-items:baseline; padding:0 18px 5px; }}
 .ma-progress {{
-  color:var(--brand); border-radius:999px; margin:0 18px 4px !important;
+  color:var(--brand); border-radius:var(--r-full); margin:0 18px 4px !important;
   width:auto !important;
 }}
 /* The same bar inside a card that already has its own padding — the 18px above is
@@ -838,18 +921,19 @@ a.ma-sender:hover {{
 }}
 .ma-count {{
   font-size:11px; font-weight:700; color:var(--muted); background:var(--sunken);
-  border-radius:999px; padding:1px 8px;
+  border-radius:var(--r-full); padding:1px 8px;
 }}
 .ma-lane {{
   padding:10px 12px; display:grid; gap:8px; align-content:start;
-  transition:background .14s ease;
+  transition:background var(--dur-fast) var(--ease);
 }}
 .ma-note {{
   display:block; position:relative; cursor:grab;
   background:var(--card); border:1px solid var(--line);
   border-left:3px solid var(--line);
-  border-radius:10px; padding:10px 12px;
-  transition:box-shadow .14s ease, border-color .14s ease, opacity .14s ease;
+  border-radius:var(--r-m); padding:10px 12px;
+  transition:box-shadow var(--dur-base) var(--ease), border-color var(--dur-base) var(--ease),
+             opacity var(--dur-base) var(--ease);
 }}
 .ma-note:hover {{ box-shadow:var(--shadow); border-color:#d7d8dc; }}
 .ma-note:active {{ cursor:grabbing; }}
@@ -862,16 +946,16 @@ a.ma-sender:hover {{
 .ma-note.is-dragging {{ opacity:.35; }}
 .ma-note__grip {{
   position:absolute; top:7px; right:7px; color:var(--muted);
-  opacity:0; transition:opacity .14s ease;
+  opacity:0; transition:opacity var(--dur-fast) var(--ease);
 }}
 .ma-note:hover .ma-note__grip {{ opacity:.5; }}
 .ma-note__text {{ padding-right:18px; }}
 .ma-card.is-over {{ border-color:var(--brand); box-shadow:0 0 0 3px var(--brand-soft); }}
 .ma-card.is-over .ma-lane {{ background:var(--brand-soft); }}
 .ma-drop {{
-  border:1px dashed var(--line); border-radius:10px; padding:17px 0;
+  border:1px dashed var(--line); border-radius:var(--r-m); padding:17px 0;
   text-align:center; color:var(--muted); font-size:12.5px;
-  transition:border-color .14s ease, color .14s ease;
+  transition:border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }}
 .ma-card.is-over .ma-drop {{ border-color:var(--brand); color:var(--brand); }}
 
@@ -884,9 +968,9 @@ a.ma-sender:hover {{
    screen that is nothing but text they are in the middle of. A grid leaves gaps
    instead, which is the trade the kanban lanes already make. */
 .ma-memo {{
-  display:block; position:relative; border-radius:10px; padding:10px 12px 6px;
+  display:block; position:relative; border-radius:var(--r-m); padding:10px 12px 6px;
   border:1px solid transparent; border-left:3px solid transparent;
-  transition:box-shadow .14s ease;
+  transition:box-shadow var(--dur-base) var(--ease);
 }}
 .ma-memo:hover {{
   box-shadow:0 2px 4px rgba(24,24,27,.05), 0 6px 16px rgba(24,24,27,.08);
@@ -920,7 +1004,7 @@ a.ma-sender:hover {{
    a keyboard, which never hovers anything. */
 .ma-memo__acts {{
   display:flex; align-items:center; gap:2px; margin-left:auto;
-  opacity:0; transition:opacity .14s ease;
+  opacity:0; transition:opacity var(--dur-fast) var(--ease);
 }}
 .ma-memo:hover .ma-memo__acts, .ma-memo:focus-within .ma-memo__acts {{ opacity:1; }}
 .ma-memo__pal {{ display:flex; align-items:center; gap:3px; margin-right:3px; }}
@@ -934,7 +1018,7 @@ a.ma-sender:hover {{
 .ma-memo__link {{
   display:inline-flex; align-items:center; gap:5px; max-width:100%;
   background:rgba(255,255,255,.62); border:1px solid rgba(24,24,27,.08);
-  border-radius:999px; padding:2px 9px 2px 7px; margin-top:7px;
+  border-radius:var(--r-full); padding:2px 9px 2px 7px; margin-top:7px;
   font-size:11px; color:var(--subtle); text-decoration:none; cursor:pointer;
 }}
 .ma-memo__link:hover {{ background:#fff; color:var(--ink); }}
@@ -951,7 +1035,7 @@ a.ma-sender:hover {{
    on the block it opens for the reason 접기 sits on the sidebar — one gesture. */
 .ma-maker {{
   display:block; background:var(--sunken); border:1px solid var(--hair);
-  border-radius:10px; padding:8px 10px; margin-bottom:8px;
+  border-radius:var(--r-m); padding:8px 10px; margin-bottom:8px;
 }}
 .ma-maker__top {{ display:flex; align-items:center; gap:7px; }}
 .ma-maker__title {{ font-size:12.5px; font-weight:700; color:var(--ink); }}
@@ -987,7 +1071,7 @@ a.ma-sender:hover {{
    The right gutter clears Quasar's overlay thumb: a sent bubble is margin-left:auto
    and sat directly under it, so the scrollbar crossed my own message. */
 .ma-chat .q-scrollarea__content {{ width:100%; padding:6px 20px 6px 14px; }}
-.ma-chat .q-scrollarea__thumb {{ width:6px; border-radius:6px; opacity:.28; }}
+.ma-chat .q-scrollarea__thumb {{ width:6px; border-radius:var(--r-full); opacity:.28; }}
 .ma-chat .q-scrollarea__thumb:hover {{ opacity:.5; }}
 .ma-chat .q-message {{ max-width:min(76%, 660px); margin-bottom:12px; }}
 .ma-chat .q-message-sent {{ margin-left:auto; }}
@@ -995,7 +1079,7 @@ a.ma-sender:hover {{
 .ma-chat .q-message-stamp {{ font-size:10.5px; color:var(--muted); opacity:1; }}
 .ma-chat .q-message-text {{
   background:var(--sunken); color:var(--ink); border:1px solid var(--hair);
-  border-radius:12px; padding:8px 12px; font-size:13px; line-height:1.65;
+  border-radius:var(--r-l); padding:8px 12px; font-size:13px; line-height:1.65;
   min-height:0; overflow-wrap:anywhere;
 }}
 .ma-chat .q-message-sent .q-message-text {{
@@ -1016,7 +1100,7 @@ a.ma-sender:hover {{
 .ma-said .q-message {{ margin-bottom:2px; }}
 .ma-said__copy {{
   color:var(--muted); opacity:.4; margin:0 0 8px 2px;
-  transition:opacity .12s ease, color .12s ease;
+  transition:opacity var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }}
 .ma-said:hover .ma-said__copy, .ma-said__copy:focus {{ opacity:1; color:var(--brand); }}
 
@@ -1045,7 +1129,7 @@ a.ma-sender:hover {{
 .ma-rooms__find {{ padding:0 12px 8px; width:100%; }}
 .ma-rooms__list {{ flex:1 1 auto; min-height:0; padding:0 6px 8px; }}
 .ma-room {{
-  border-radius:10px; padding:8px 10px; cursor:pointer; display:block;
+  border-radius:var(--r-m); padding:8px 10px; cursor:pointer; display:block;
   border:1px solid transparent;
 }}
 .ma-room:hover {{ background:var(--sunken); }}
@@ -1073,11 +1157,11 @@ a.ma-sender:hover {{
 .ma-chat li::marker {{ color:var(--muted); }}
 .ma-chat .ma-md__h {{ font-weight:700; margin:2px 0 4px; }}
 .ma-chat code {{
-  background:rgba(24,24,27,.06); border-radius:4px; padding:0 4px;
+  background:rgba(24,24,27,.06); border-radius:var(--r-xs); padding:0 4px;
   font-size:12px; font-family:{MONO};
 }}
 .ma-chat pre {{
-  background:rgba(24,24,27,.055); border-radius:8px; padding:8px 10px;
+  background:rgba(24,24,27,.055); border-radius:var(--r-s); padding:8px 10px;
   margin:0 0 6px; overflow-x:auto; font-size:12px; line-height:1.6;
   font-family:{MONO};
 }}
@@ -1104,10 +1188,11 @@ a.ma-sender:hover {{
    the calendar and a hover on a bar are recognisably the same gesture. */
 .ma-tip {{
   position:fixed; z-index:9999; left:0; top:0; max-width:320px; pointer-events:none;
-  background:#27272a; color:#fafafa; border-radius:9px; padding:9px 11px;
+  background:#27272a; color:#fafafa; border-radius:var(--r-m); padding:9px 11px;
   font-size:12px; line-height:1.6; letter-spacing:-.005em;
   box-shadow:0 8px 24px rgba(24,24,27,.24);
-  opacity:0; transform:translateY(3px); transition:opacity .12s ease, transform .12s ease;
+  opacity:0; transform:translateY(3px);
+  transition:opacity var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
   font-family:{FONT_STACK};
 }}
 .ma-tip.is-on {{ opacity:1; transform:translateY(0); }}
@@ -1128,7 +1213,7 @@ a.ma-sender:hover {{
 .fc .fc-button {{
   background:{CARD}; border:1px solid {LINE}; color:{SUBTLE}; box-shadow:none;
   text-transform:none; font-size:12px; font-weight:600; padding:4px 11px;
-  border-radius:8px;
+  border-radius:var(--r-s);
 }}
 .fc .fc-button:hover {{ background:{SUNKEN}; color:{INK}; border-color:{LINE}; }}
 .fc .fc-button-primary:not(:disabled).fc-button-active,
@@ -1143,9 +1228,11 @@ a.ma-sender:hover {{
   color:{MUTED}; font-size:11.5px; font-weight:600; padding:8px 4px;
 }}
 .fc .fc-daygrid-day-number {{ color:{SUBTLE}; font-size:12px; padding:5px 7px; }}
-.fc .fc-daygrid-event {{ border:none; border-radius:5px; padding:1px 5px; font-size:11.5px; }}
+.fc .fc-daygrid-event {{
+  border:none; border-radius:var(--r-xs); padding:1px 5px; font-size:11.5px;
+}}
 .fc .fc-list-day-cushion {{ background:{SUNKEN}; }}
-.fc .fc-timegrid-event {{ border:none; border-radius:5px; padding:1px 4px; }}
+.fc .fc-timegrid-event {{ border:none; border-radius:var(--r-xs); padding:1px 4px; }}
 .fc .fc-timegrid-event .fc-event-main {{ padding:0; }}
 /* One row per event: icon, then time, then whatever room the title has left. */
 .ma-ev {{ display:flex; align-items:center; gap:4px; min-width:0; overflow:hidden; }}
@@ -1161,8 +1248,8 @@ a.ma-sender:hover {{
   border-color:{css_color(URGENT)}; border-top-color:transparent; border-bottom-color:transparent;
 }}
 .fc-theme-standard td, .fc-theme-standard th {{ border-color:{HAIR}; }}
-.q-field--outlined .q-field__control {{ border-radius:9px; }}
-.q-btn {{ border-radius:9px; }}
+.q-field--outlined .q-field__control {{ border-radius:var(--r-m); }}
+.q-btn {{ border-radius:var(--r-m); }}
 /* Quasar sizes a dense button at 14px type in a 2.5em box, which stands a head taller
    than the 12.5px text it sits beside — a row of four of them read as the loudest
    thing on the page. Specificity is deliberately one class, so the segmented control
@@ -2431,7 +2518,7 @@ def open_file(path, label):
     try:
         os.startfile(str(path))
     except Exception as exc:
-        ui.notify(f'{label}을 열지 못했습니다: {type(exc).__name__}: {exc}')
+        toast(f'{label}을 열지 못했어요 · {type(exc).__name__}: {exc}', mark='fail')
 
 
 def size_text(count):
@@ -2607,6 +2694,29 @@ def window_size(screen=None, margin=WINDOW_MARGIN):
 
 
 # ---------------------------------------------------------------- page
+
+# 토스트가 답하는 질문은 '됐나'이고, 그것을 말하는 것은 아이콘이다 — 표면은 언제나 같은
+# 먹색이다. 성공에 초록 바탕을 깔면 실패는 빨간 바탕이 되고, 알림 하나가 그 순간 화면에서
+# 가장 큰 색덩어리가 된다. 이 함수가 있는 이유는 ui.notify 79곳이 전부 무표정한 회색이어서
+# '저장했어요'와 '저장하지 못했어요'가 글자를 읽기 전까지 같은 모양이었다는 것이다.
+# 세 가지뿐이다: 됐다, 안 됐다, 접수는 됐고 결과는 나중에 — 마지막 것이 이 앱에는 유난히
+# 많다. 다시 분석도 브리핑도 초안도 전부 워커에게 넘기는 예약이기 때문이다.
+TOAST_MARKS = {'done': 'check_circle', 'fail': 'error_outline', 'wait': 'hourglass_top'}
+
+
+def toast(message, mark='', **extra):
+    """토스트 한 줄. mark 없이 부르면 지금까지와 똑같은 회색 한 줄이다.
+
+    say()가 아닌 이유는 update_panel 안에 제 이름의 say(text)가 이미 있기 때문이다 —
+    그 안에서 toast를 부르려다 지역 say를 부르면 토스트 대신 카드 밑의 라벨이 바뀐다.
+    note_tally()가 note_counts()가 아닌 것과 같은 이유다.
+    """
+    from nicegui import ui
+    icon = TOAST_MARKS.get(mark, '')
+    if icon:
+        extra.setdefault('icon', icon)
+    ui.notify(message, classes=f'ma-toast ma-toast--{mark}' if icon else 'ma-toast', **extra)
+
 
 def section(title, *, top=True):
     """A heading inside a card. Cards carry the frame, so this is only type."""
@@ -3238,10 +3348,10 @@ def manual_panel(directory, account, token, on_change):
     def add():
         problem = event_error(title.value, start.value, deadline.value)
         if problem:
-            ui.notify(problem)
+            toast(problem, mark='fail')
             return
         if not account:
-            ui.notify('설정을 먼저 저장하세요.')
+            toast('아직 설정이 비어 있어요. 설정 화면에서 메일 주소부터 저장해 주세요', mark='fail')
             return
         store(directory).add_event(account, (title.value or '').strip(),
                                    (start.value or '').strip(),
@@ -3651,8 +3761,8 @@ def shell(current, token, chrome=None, watch=None, usage=None):
             """
             found = await watch()
             if found:
-                ui.notify(f"새 버전 {found.get('version', '')}이(가) 나왔습니다. "
-                          '실행 화면에서 설치할 수 있습니다.', type='info', timeout=10000)
+                toast(f"새 버전 {found.get('version', '')}이(가) 나왔어요. "
+                          '실행 화면에서 설치할 수 있어요', timeout=10000)
 
         if chrome is not None:
             # Built while the page is, never inside a handler that has refreshed:
@@ -4005,36 +4115,36 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             if busy['now']:
                 return
             if not view['analysed']:
-                ui.notify('분석이 끝난 뒤에 초안을 만들 수 있습니다.')
+                toast('분석이 끝난 뒤에 초안을 만들 수 있어요', mark='fail')
                 return
             busy['now'] = True
             go.props('loading')
-            ui.notify('초안을 만드는 중입니다. 분석이 돌고 있으면 그 뒤에 처리됩니다.')
+            toast('초안을 만드는 중이에요. 분석이 돌고 있으면 그 뒤에 처리돼요', mark='wait')
             try:
                 subject, text = await nicerun.io_bound(
                     helpers.draft, draft_input(view), picks['tone'], picks['way'], config)
             except Exception as exc:
                 go.props(remove='loading')
-                ui.notify(str(exc) or f'초안을 만들지 못했습니다: {type(exc).__name__}')
+                toast(str(exc) or f'초안을 만들지 못했어요 · {type(exc).__name__}', mark='fail')
                 return
             finally:
                 busy['now'] = False
             if not store(directory).set_reply_draft(view['id'], subject, text):
                 go.props(remove='loading')
-                ui.notify('분석이 끝난 뒤에 초안을 만들 수 있습니다.')
+                toast('분석이 끝난 뒤에 초안을 만들 수 있어요', mark='fail')
                 return
             # The next mail is usually answered in the same voice as this one.
             app.storage.user['draft'] = dict(picks)
             bump()      # 검토 전 초안 is a 대시보드 card, and this is what moves it
-            ui.notify('새 초안으로 바꿨습니다. 고쳐 쓰면 그대로 저장됩니다.'
-                      if view['draft'] else '초안을 만들었습니다. 고쳐 쓰면 그대로 저장됩니다.')
+            toast('새 초안으로 바꿨어요. 고쳐 쓰면 그대로 저장돼요' if view['draft']
+                      else '초안을 만들었어요. 고쳐 쓰면 그대로 저장돼요', mark='done')
             after()     # refresh last: it deletes the button this is running in
 
         with ui.element('div').classes('ma-maker'):
             with ui.element('div').classes('ma-maker__top'):
                 ui.icon('auto_awesome').style(f'color:{BRAND};font-size:16px')
                 ui.label('AI로 초안 만들기').classes('ma-maker__title')
-                ui.label('말투와 방향을 고르세요.').classes('ma-meta__item')
+                ui.label('말투와 방향을 골라 주세요.').classes('ma-meta__item')
                 ui.space()
                 opener = ui.button(on_click=fold).props('flat dense round size=sm') \
                     .style(f'color:{MUTED}').tooltip('펼치기·접기')
@@ -4206,13 +4316,13 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             if close:
                 close()
             refresh()
-            ui.notify(f'{version} 버전은 건너뜁니다. 다음 버전이 나오면 다시 알려 드립니다.')
+            toast(f'{version} 버전은 건너뛸게요. 다음 버전이 나오면 다시 알려 드려요', mark='done')
 
         def later():
             updater.asked = True
             if close:
                 close()
-            ui.notify('실행 화면의 업데이트에서 언제든 설치할 수 있습니다.')
+            toast('실행 화면의 업데이트에서 언제든 설치할 수 있어요')
 
         with ui.element('div').style('display:flex;gap:6px;margin-top:14px;flex-wrap:wrap'):
             ui.button('지금 업데이트', icon='system_update_alt', on_click=take) \
@@ -4244,14 +4354,14 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
         def unskip():
             update.remember(config_path, {'update_skip': ''})
             config['update_skip'] = ''
-            say('건너뛴 버전을 초기화했습니다. 지금 확인을 누르면 다시 알려 드립니다.')
+            say('건너뛴 버전을 초기화했어요. 지금 확인을 누르면 다시 알려 드려요.')
             block.refresh()
 
         async def recheck():
-            say('확인하는 중입니다…')
+            say('확인하는 중이에요…')
             result = await nicerun.io_bound(updater.recheck)
             say(recheck_text(result, updater.offer))
-            ui.notify(recheck_text(result, updater.offer))
+            toast(recheck_text(result, updater.offer))
             # Last, because this is what deletes the button we were clicked from.
             block.refresh()
 
@@ -4299,24 +4409,24 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
 
         async def again():
             if meter.read is None:
-                ui.notify('이 환경에서는 Codex 사용량을 확인할 수 없습니다.')
+                toast('이 환경에서는 Codex 사용량을 확인할 수 없어요', mark='fail')
                 return
-            say('확인하는 중입니다…')
+            say('확인하는 중이에요…')
             # look(), not watch(): a button press is the one read that must not be
             # answered out of the cache it is pressed to get past.
             await nicerun.io_bound(meter.look)
             say('')                  # whatever happened is in the card's own lines now
-            ui.notify(meter.message or '사용량을 다시 읽었습니다.')
+            toast(meter.message or '사용량을 다시 읽었어요', mark='done')
             block.refresh()          # last: it deletes the button this is running in
 
         @ui.refreshable
         def block():
             view = meter.view()
             if meter.read is None:
-                empty('이 환경에서는 Codex 사용량을 확인할 수 없습니다.')
+                empty('이 환경에서는 Codex 사용량을 확인할 수 없어요.')
                 return
             if not view['known']:
-                empty('아직 사용량을 읽지 못했습니다. 아래 버튼으로 확인하세요.')
+                empty('아직 사용량을 읽지 못했어요. 아래 버튼으로 확인해 주세요.')
             else:
                 tone = USAGE_TONES.get(view['level'], MUTED)
                 with ui.element('div').classes('ma-row').style('border:none;padding:0'):
@@ -4382,12 +4492,12 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             """A booking, like 다시 분석: the worker owns the Codex slot, not this page."""
             account = account_of(config)
             if not account:
-                ui.notify('설정에서 메일 주소를 먼저 입력하세요.')
+                toast('설정에서 메일 주소를 먼저 입력해 주세요', mark='fail')
                 return
             store(directory).set_meta('briefing_ask:' + account, '1')
             if collecting():
                 hub.wake()
-            ui.notify(briefing_text(collecting()))
+            toast(briefing_text(collecting()), mark='wait')
 
         @ui.refreshable
         def brief_block():
@@ -4802,13 +4912,13 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
 
         def ask_delete(ids):
             if not ids:
-                ui.notify('선택된 메일이 없습니다.')
+                toast('고른 메일이 없어요', mark='fail')
                 return
             wanted['ids'] = list(ids)
             warn.set_text(f'메일 {len(ids)}건을 지웁니다. 분석 결과와 답변 초안, 이 메일에 대한 '
-                          '상담 기록도 함께 사라지며 되돌릴 수 없습니다. 직접 쓴 메모는 '
-                          '지워지지 않고 메모 화면에 남습니다. 이미 엑셀에 반영된 행은 '
-                          '그대로 남고, 서버에서 같은 메일을 다시 가져오지도 않습니다.')
+                          '상담 기록도 함께 사라지며 되돌릴 수 없어요. 직접 쓴 메모는 '
+                          '지워지지 않고 메모 화면에 남아요. 이미 엑셀에 반영된 행은 '
+                          '그대로 남고, 서버에서 같은 메일을 다시 가져오지도 않아요.')
             confirm.open()
 
         def erase():
@@ -4822,7 +4932,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 remember(selected=None)
                 detail.close()
             rows.refresh()
-            ui.notify(f'{len(ids)}건을 삭제했습니다.')
+            toast(f'{len(ids)}건을 지웠어요', mark='done')
 
         def fetch_once():
             """One POP3 round, right now, on whichever thread io_bound gave us.
@@ -4851,32 +4961,32 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             """
             if hub is not None and hub.running():
                 hub.wake()
-                ui.notify('지금 확인을 요청했습니다. 수집이 끝나면 목록에 나타납니다.')
+                toast('지금 확인을 요청했어요. 수집이 끝나면 목록에 나타나요', mark='wait')
                 return
             if not services or not services.get('read_password'):
-                ui.notify('이 환경에서는 메일을 가져올 수 없습니다. Windows에서 실행하세요.')
+                toast('이 환경에서는 메일을 가져올 수 없어요. Windows에서 실행해 주세요', mark='fail')
                 return
             # Only what a fetch needs: this button never opens the workbook, so an
             # unset 엑셀 파일 must not stand between the user and their mail.
             errors = [text for key, text in field_errors(config).items()
                       if key in ('email', 'host', 'port')]
             if errors:
-                ui.notify('설정을 먼저 확인하세요: ' + ' '.join(errors))
+                toast('설정을 먼저 확인해 주세요 · ' + ' '.join(errors), mark='fail')
                 return
             fetch.props(add='loading')
             try:
                 message = await nicerun.io_bound(fetch_once)
             except LookupError:
-                ui.notify('메일 전용 비밀번호가 없습니다. 설정에서 입력하세요.')
+                toast('메일 전용 비밀번호가 없어요. 설정에서 입력해 주세요', mark='fail')
             except Exception as exc:
-                ui.notify(f'가져오지 못했습니다: {exc}')
+                toast(f'가져오지 못했어요 · {exc}', mark='fail')
                 if hub is not None:
                     hub.log(f'지금 가져오기 실패: {exc}')
             else:
                 said = collect_text(message, hub is not None and hub.running())
                 if hub is not None:
                     hub.log('지금 가져오기: ' + said)
-                ui.notify(said)
+                toast(said)
                 rows.refresh()
             finally:
                 fetch.props(remove='loading')
@@ -4952,18 +5062,18 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 def mark(value):
                     ids = picked()
                     if not ids:
-                        ui.notify('선택된 메일이 없습니다.')
+                        toast('고른 메일이 없어요', mark='fail')
                         return
                     store(directory).set_handled_many(ids, value)
                     bump()
                     table.selected.clear()
                     rows.refresh()
-                    ui.notify(f"{len(ids)}건을 {'처리 완료' if value else '미처리'}로 바꿨습니다.")
+                    toast(f"{len(ids)}건을 {'처리 완료' if value else '미처리'}로 바꿨어요", mark='done')
 
                 def again():
                     ids = picked()
                     if not ids:
-                        ui.notify('선택된 메일이 없습니다.')
+                        toast('고른 메일이 없어요', mark='fail')
                         return
                     # reset() skips whatever Codex is holding right now, and says how
                     # many it skipped: clearing a result that is already on its way
@@ -4974,7 +5084,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                         hub.wake()
                     table.selected.clear()
                     rows.refresh()
-                    ui.notify(reanalyze_text(asked, len(ids), running=collecting()))
+                    toast(reanalyze_text(asked, len(ids), running=collecting()), mark='wait')
 
                 def step(delta):
                     remember(page=max(0, min(data['pages'] - 1, state['page'] + delta)))
@@ -5025,7 +5135,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 # `await None` raised inside the handler — which killed the ui.notify
                 # after it, so the button copied and said nothing.
                 ui.clipboard.write(draft.value or '')
-                ui.notify('답변 초안을 클립보드에 복사했습니다.')
+                toast('답변 초안을 클립보드에 복사했어요', mark='done')
 
             def toggle():
                 store(directory).set_handled(view['id'], '' if view['handled'] else HANDLED)
@@ -5040,13 +5150,13 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     hub.wake()
                 touched['now'] = True
                 panel.refresh()
-                ui.notify(reanalyze_text(asked, 1, running=collecting()))
+                toast(reanalyze_text(asked, 1, running=collecting()), mark='wait')
 
             def unhide():
                 store(directory).set_todo_hidden(view['id'], False)
                 bump()
                 panel.refresh()
-                ui.notify('할 일 판에 다시 올렸습니다.')
+                toast('할 일 판에 다시 올렸어요', mark='done')
 
             def showing():
                 """The text the panel is showing, which is what 복사 copies."""
@@ -5056,8 +5166,8 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             def take():
                 # Not awaited: nicegui 3's clipboard.write() returns None.
                 ui.clipboard.write(showing())
-                ui.notify(('번역을 클립보드에 복사했습니다.' if reading['tab'] == 'korean'
-                           else '원문을 클립보드에 복사했습니다.'))
+                toast(('번역을 클립보드에 복사했어요' if reading['tab'] == 'korean'
+                       else '원문을 클립보드에 복사했어요'), mark='done')
 
             def made():
                 """A draft has just been written into the analysis. Keep the pickers
@@ -5086,13 +5196,13 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     return
                 reading['busy'] = True
                 ask.props('loading')
-                ui.notify('번역을 요청했습니다. 분석이 돌고 있으면 그 뒤에 처리됩니다.')
+                toast('번역을 요청했어요. 분석이 돌고 있으면 그 뒤에 처리돼요', mark='wait')
                 try:
                     language, text = await nicerun.io_bound(
                         helpers.translate, view['body'], view['subject'], config)
                 except Exception as exc:
                     ask.props(remove='loading')
-                    ui.notify(str(exc) or f'번역하지 못했습니다: {type(exc).__name__}')
+                    toast(str(exc) or f'번역하지 못했어요 · {type(exc).__name__}', mark='fail')
                     return
                 finally:
                     reading['busy'] = False
@@ -5102,7 +5212,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 # in, and anything under ui. after it has no client left to resolve.
                 # 영어 원문을, not 영어을(를): a particle chosen by hand is one that
                 # is wrong half the time, and the noun after it takes the same one.
-                ui.notify(f'{language} 원문을 한국어로 옮겼습니다.'.lstrip())
+                toast(f'{language} 원문을 한국어로 옮겼어요'.lstrip(), mark='done')
                 panel.refresh()
 
             def fix_money(entry):
@@ -5121,7 +5231,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     bump()
                     touched['now'] = True
                     fixing.close()
-                    ui.notify('금액을 고쳤습니다. 합계에 반영됩니다.')
+                    toast('금액을 고쳤어요. 합계에 반영했어요', mark='done')
                     panel.refresh()
 
                 with fixing, card('금액 고치기', 'edit').style('max-width:420px'):
@@ -5162,10 +5272,10 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                                                   view['id'], index,
                                                   directory / ATTACH_DIR)
                 except Exception as exc:
-                    ui.notify(f'첨부를 꺼내지 못했습니다: {type(exc).__name__}: {exc}')
+                    toast(f'첨부를 꺼내지 못했어요 · {type(exc).__name__}: {exc}', mark='fail')
                     return
                 if path is None:
-                    ui.notify('첨부를 찾지 못했습니다. 원문이 손상되었을 수 있습니다.')
+                    toast('첨부를 찾지 못했어요. 원문이 손상된 것 같아요', mark='fail')
                     return
                 open_file(path, '첨부')
 
@@ -5178,7 +5288,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 """
                 account = account_of(config)
                 if not account:
-                    ui.notify('설정에서 메일 주소를 먼저 저장하세요.')
+                    toast('설정에서 메일 주소를 먼저 저장해 주세요', mark='fail')
                     return
                 store(directory).delete_empty_notes(account)
                 fresh['id'] = store(directory).add_note(account, color=DEFAULT_NOTE_COLOR,
@@ -5662,21 +5772,21 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             """
             if card_row['kind'] == 'mail':
                 store(directory).set_todo_hidden(card_row['key'], True)
-                said = '할 일 판에서 치웠습니다. 메일은 그대로 있고, 메일 화면에서 다시 올릴 수 있습니다.'
+                said = '할 일 판에서 치웠어요. 메일은 그대로 있고, 메일 화면에서 다시 올릴 수 있어요.'
             else:
                 store(directory).delete_todo(card_row['key'])
-                said = '할 일을 지웠습니다.'
+                said = '할 일을 지웠어요.'
             bump()
             lanes.refresh()
-            ui.notify(said)
+            toast(said, mark='done')
 
         def add():
             text = (entry.value or '').strip()
             if not text:
-                ui.notify('할 일을 입력하세요.')
+                toast('할 일을 입력해 주세요', mark='fail')
                 return
             if not account:
-                ui.notify('설정을 먼저 저장하세요.')
+                toast('설정을 먼저 저장해 주세요', mark='fail')
                 return
             store(directory).add_todo(account, text, (due.value or '').strip())
             bump()
@@ -5810,7 +5920,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             def copy():
                 # See the 메일 detail's copy(): clipboard.write() is not awaitable.
                 ui.clipboard.write(draft.value or '')
-                ui.notify('초안을 복사했습니다.')
+                toast('초안을 복사했어요', mark='done')
 
             def done():
                 store(directory).set_handled(view['id'], HANDLED)
@@ -5969,13 +6079,13 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             bump()
             # Before the rebuild, never after: refresh() deletes the slot this handler
             # is running in, and ui.notify then has no client to resolve.
-            ui.notify('메모를 지웠습니다.')
+            toast('메모를 지웠어요', mark='done')
             rebuild()
 
         for view in views:
             ident = view['id']
             with memo_paper(view) as paper:
-                area = ui.textarea(value=view['text'], placeholder='메모를 적으세요') \
+                area = ui.textarea(value=view['text'], placeholder='메모를 적어 주세요') \
                     .classes('w-full')
                 area.props('borderless autogrow dense debounce=600'
                            + (' autofocus' if ident == fresh else ''))
@@ -6034,7 +6144,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
 
         def add():
             if not account:
-                ui.notify('설정에서 메일 주소를 먼저 저장하세요.')
+                toast('설정에서 메일 주소를 먼저 저장해 주세요', mark='fail')
                 return
             sweep()
             live['fresh'] = store(directory).add_note(account, color=DEFAULT_NOTE_COLOR)
@@ -6171,7 +6281,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
         def copy(text):
             """The answer as Codex wrote it, not the HTML rich_text() made of it."""
             ui.clipboard.write(text)
-            ui.notify('답변을 클립보드에 복사했습니다.')
+            toast('답변을 클립보드에 복사했어요', mark='done')
 
         @ui.refreshable
         def thread():
@@ -6218,7 +6328,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             if busy['now'] or not question:
                 return
             if not account:
-                ui.notify('설정을 먼저 저장하세요.')
+                toast('설정을 먼저 저장해 주세요', mark='fail')
                 return
             # The room is captured here, not read at the end: an answer takes tens of
             # seconds and the reader may well have moved to another thread by then. It
@@ -6251,7 +6361,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             rooms.refresh()
             if state['room'] != room:
                 # Answered into a thread nobody is looking at; the list already says so.
-                ui.notify('다른 대화의 답변이 도착했습니다.')
+                toast('다른 대화의 답변이 도착했어요')
                 return
             thread.refresh()
             await scroll()
@@ -6273,7 +6383,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
 
         async def start_room():
             if not account:
-                ui.notify('설정을 먼저 저장하세요.')
+                toast('설정을 먼저 저장해 주세요', mark='fail')
                 return
             state['room'] = store(directory).new_room(account)
             state['query'] = ''
@@ -6309,10 +6419,10 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 thread.refresh()
                 rooms.refresh()
                 head.refresh()
-                ui.notify('대화를 지웠습니다.')
+                toast('대화를 지웠어요', mark='done')
             asking = ui.dialog()
             with asking, card('대화 삭제', 'delete_outline'):
-                ui.label('이 대화와 주고받은 내용을 모두 지웁니다. 되돌릴 수 없습니다.') \
+                ui.label('이 대화와 주고받은 내용을 모두 지워요. 되돌릴 수 없어요.') \
                     .classes('ma-lede')
                 with ui.element('div').classes('ma-foot'):
                     ui.space()
@@ -6704,26 +6814,26 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
 
         def begin():
             if not can_start:
-                ui.notify('메일 도우미 창이 이미 실행 중입니다. 수집기는 하나만 돌 수 있습니다. '
-                          '창에서 시작하거나, 창을 닫고 이 화면을 다시 여세요.')
+                toast('메일 도우미 창이 이미 실행 중이에요. 수집기는 하나만 돌 수 있어요. '
+                      '창에서 시작하거나, 창을 닫고 이 화면을 다시 열어 주세요', mark='fail')
                 return
             errors = field_errors(config)
             if errors:
-                ui.notify('설정을 먼저 확인하세요: ' + ' '.join(errors.values()))
+                toast('설정을 먼저 확인해 주세요 · ' + ' '.join(errors.values()), mark='fail')
                 return
             if not services or not services.get('read_password'):
-                ui.notify('이 환경에서는 워커를 시작할 수 없습니다. Windows에서 실행하세요.')
+                toast('이 환경에서는 워커를 시작할 수 없어요. Windows에서 실행해 주세요', mark='fail')
                 return
             try:
                 services['read_password'](config['email'])
             except LookupError:
-                ui.notify('메일 전용 비밀번호가 없습니다. 설정에서 입력하세요.')
+                toast('메일 전용 비밀번호가 없어요. 설정에서 입력해 주세요', mark='fail')
                 return
             except Exception as exc:
-                ui.notify(f'자격 증명을 읽지 못했습니다: {type(exc).__name__}: {exc}')
+                toast(f'자격 증명을 읽지 못했어요 · {type(exc).__name__}: {exc}', mark='fail')
                 return
             if hub.start(dict(config)):
-                hub.log('시작했습니다. 창을 닫아도 계속 실행됩니다.')
+                hub.log('시작했어요. 창을 닫아도 계속 돌아요.')
             body.refresh()
 
         def stop():
@@ -6733,44 +6843,44 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
 
         def now():
             if hub.wake():
-                hub.log('지금 확인을 요청했습니다.')
+                hub.log('지금 확인을 요청했어요.')
             else:
-                ui.notify('실행 중이 아닙니다.')
+                toast('실행 중이 아니에요', mark='fail')
 
         def reveal(path, label):
             open_file(path, label)
 
         async def test():
             if not services:
-                ui.notify('이 환경에서는 연결 테스트를 할 수 없습니다.')
+                toast('이 환경에서는 연결 테스트를 할 수 없어요', mark='fail')
                 return
             try:
                 password = services['read_password'](config['email'])
             except Exception as exc:
-                ui.notify(f'비밀번호를 읽지 못했습니다: {exc}')
+                toast(f'비밀번호를 읽지 못했어요 · {exc}', mark='fail')
                 return
-            ui.notify('연결 테스트 중…')
+            toast('연결을 확인하는 중이에요…', mark='wait')
             try:
                 message = await nicerun.io_bound(services['check_connection'], config, password)
             except Exception as exc:
                 hub.log(f'연결 테스트 실패: {type(exc).__name__}: {exc}')
-                ui.notify(f'실패: {exc}')
+                toast(f'연결하지 못했어요 · {exc}', mark='fail')
             else:
                 hub.log(message)
-                ui.notify(message)
+                toast(message, mark='done')
             body.refresh()
 
         def codex_login():
             if not services:
-                ui.notify('이 환경에서는 Codex 로그인을 열 수 없습니다.')
+                toast('이 환경에서는 Codex 로그인을 열 수 없어요', mark='fail')
                 return
             try:
                 subprocess.Popen(services['codex_command']() + ['login'],
                                  env=services['codex_environment'](),
                                  creationflags=getattr(subprocess, 'CREATE_NEW_CONSOLE', 0))
-                hub.log('Codex 로그인 창을 열었습니다. 로그인 후 상태를 다시 확인하세요.')
+                hub.log('Codex 로그인 창을 열었어요. 로그인한 뒤에 상태를 다시 확인해 주세요.')
             except Exception as exc:
-                ui.notify(f'Codex 로그인을 열지 못했습니다: {exc}')
+                toast(f'Codex 로그인을 열지 못했어요 · {exc}', mark='fail')
 
         with page_shell('/run'):
             with card().style('padding:12px 14px;margin-bottom:14px'):
@@ -6833,12 +6943,12 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
 
         def save():
             if validate():
-                ui.notify('빨간 글씨로 표시된 항목을 고친 뒤 저장하세요.')
+                toast('빨간 글씨로 표시된 항목을 고친 뒤 저장해 주세요', mark='fail')
                 return
             try:
                 updated = normalize(values)
             except ValueError as exc:
-                ui.notify(str(exc))
+                toast(str(exc), mark='fail')
                 return
             temp = config_path.with_suffix('.tmp')
             # Merge: webhook and the update keys are not on this form and must survive.
@@ -6846,47 +6956,48 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                             encoding='utf-8')
             temp.replace(config_path)
             config.update(updated)
-            hub.log('설정을 저장했습니다.')
-            ui.notify('설정을 저장했습니다.')
+            hub.log('설정을 저장했어요.')
+            toast('설정을 저장했어요', mark='done')
 
         def save_password():
             secret = (password_box.value or '').strip()
             if not secret:
-                ui.notify('비밀번호를 입력하세요.')
+                toast('비밀번호를 입력해 주세요', mark='fail')
                 return
             if not services:
-                ui.notify('이 환경에서는 자격 증명을 저장할 수 없습니다.')
+                toast('이 환경에서는 자격 증명을 저장할 수 없어요', mark='fail')
                 return
             remember_secret(secret)
             try:
                 services['save_password'](values['email'], secret)
                 stored = services['read_password'](values['email'])
             except Exception as exc:
-                ui.notify(f'저장 실패: {type(exc).__name__}: {exc}')
+                toast(f'저장하지 못했어요 · {type(exc).__name__}: {exc}', mark='fail')
                 return
             password_box.set_value('')
-            ui.notify('비밀번호를 저장했습니다.' if stored == secret
-                      else '경고: 저장된 값이 입력과 다릅니다. 다시 입력해 보세요.')
+            toast('비밀번호를 저장했어요' if stored == secret
+                      else '저장된 값이 입력과 달라요. 다시 입력해 주세요',
+                      mark='done' if stored == secret else 'fail')
 
         def drop_password():
             if not services or not services.get('delete_password'):
-                ui.notify('이 환경에서는 자격 증명을 지울 수 없습니다.')
+                toast('이 환경에서는 자격 증명을 지울 수 없어요', mark='fail')
                 return
             try:
                 services['delete_password'](values['email'])
             except LookupError:
-                ui.notify('저장된 비밀번호가 없습니다.')
+                toast('저장된 비밀번호가 없어요', mark='fail')
                 return
             except Exception as exc:
-                ui.notify(f'삭제 실패: {type(exc).__name__}: {exc}')
+                toast(f'삭제하지 못했어요 · {type(exc).__name__}: {exc}', mark='fail')
                 return
-            hub.log('저장된 메일 전용 비밀번호를 삭제했습니다.')
-            ui.notify('삭제했습니다.')
+            hub.log('저장된 메일 전용 비밀번호를 삭제했어요.')
+            toast('삭제했어요', mark='done')
 
         @ui.refreshable
         def report_block():
             if not found['steps'] and not found['codex']:
-                empty('위 버튼으로 점검을 실행하세요.')
+                empty('위 버튼으로 점검을 눌러 주세요.')
                 return
             for label, ok, detail in found['steps']:
                 with ui.element('div').classes('ma-row'):
@@ -6906,7 +7017,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
 
         async def check_mail():
             if not services:
-                ui.notify('이 환경에서는 점검할 수 없습니다.')
+                toast('이 환경에서는 점검할 수 없어요', mark='fail')
                 return
             try:
                 password = services['read_password'](config['email'])
@@ -6914,15 +7025,15 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 found['steps'] = [('비밀번호 읽기', False, f'{type(exc).__name__}: {exc}')]
                 report_block.refresh()
                 return
-            ui.notify('메일 연결을 점검합니다…')
+            toast('메일 연결을 점검하는 중이에요…', mark='wait')
             found['steps'] = await nicerun.io_bound(helpers.connection_steps, config, password)
             report_block.refresh()
 
         async def check_codex():
             if not services:
-                ui.notify('이 환경에서는 점검할 수 없습니다.')
+                toast('이 환경에서는 점검할 수 없어요', mark='fail')
                 return
-            ui.notify('Codex 상태를 확인합니다…')
+            toast('Codex 상태를 확인하는 중이에요…', mark='wait')
             found['codex'] = await nicerun.io_bound(services['login_state'])
             report_block.refresh()
 

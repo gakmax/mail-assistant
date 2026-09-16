@@ -21,13 +21,14 @@ from mail_assistant.usage import (CALM as USAGE_CALM, FULL as USAGE_FULL,
                                   WARN as USAGE_WARN, snapshot as usage_snapshot,
                                   view as usage_view)
 from mail_assistant.calendar_sheet import MARKERS
+import mail_assistant.webui
 from mail_assistant.hub import Hub
 from mail_assistant.overview import (BRIEF_DRAFTS, BRIEF_EVENTS, BRIEF_HOUR, BRIEF_OPEN,
                                      BRIEF_TEXT, DUE_DAYS, briefing_due, briefing_input,
                                      due_window, failures, oldest_open, overview)
 from mail_assistant.webui import (CARD_TONES, COST_TONES, DEFAULT_LIST, FONT_FILE, MUTED,
                                   STATE_TONES, STATUS, USAGE_TONES, usage_chip,
-                                  THEME, TREND_LABELS,
+                                  THEME, TOAST_MARKS, TREND_LABELS,
                                   NAV_BADGE_MAX, NAV_GROUPS, PAGES, RAIL_BOOT, RAIL_KEY,
                                   RAIL_TOGGLE, SIDE_BREAK, SIDE_EASE, SIDE_GROUP, SIDE_RAIL,
                                   CHAT_CHROME, translated_note, row_value,
@@ -2017,6 +2018,122 @@ class PaletteTests(unittest.TestCase):
     def test_colours_are_css_hex(self):
         for value in list(STATUS.values()) + list(CARD_TONES.values()):
             self.assertRegex(value, r'^#[0-9a-fA-F]{6}$')
+
+
+class RadiusLadderTests(unittest.TestCase):
+    """반경은 다섯 단계이고, 그 밖의 값은 원과 막대뿐이다.
+
+    이 테스트가 있는 이유는 사다리가 생기기 전의 상태다 — 2·4·5·6·7·8·9·10·12px
+    아홉 값이 토큰 없이 흩어져 있었고, 5px과 7px이 왜 다른지 말하는 규칙이 코드
+    어디에도 없었다. 없었기 때문이다.
+    """
+
+    LADDER = ('--r-xs', '--r-s', '--r-m', '--r-l', '--r-full')
+
+    def test_the_ladder_is_declared_once(self):
+        for token in self.LADDER:
+            self.assertIn(f'{token}:', THEME, token)
+
+    def test_nothing_rounds_itself_off_the_ladder(self):
+        """원(50%)만 예외다. 막대와 스크롤 썸은 제 높이가 반경이라 --r-full을 쓴다."""
+        found = re.findall(r'border-radius:\s*([^;}\n]+)', THEME)
+        self.assertTrue(found)
+        stray = sorted({value.strip() for value in found
+                        if 'var(--r-' not in value and value.strip() != '50%'})
+        self.assertEqual(stray, [], f'사다리 밖의 반경: {stray}')
+
+    def test_the_old_single_token_is_gone(self):
+        """--r 하나만 있던 시절의 이름이 남아 있으면 두 이름이 한 값을 가리킨다."""
+        self.assertNotIn('var(--r)', THEME)
+
+
+class MotionLadderTests(unittest.TestCase):
+    """시간은 셋, 커브는 하나. .12s와 .14s가 섞여 있었고 차이에 이유가 없었다."""
+
+    def test_the_three_lengths_and_the_one_curve_are_declared(self):
+        for token in ('--dur-fast:', '--dur-base:', '--dur-slow:', '--ease:'):
+            self.assertIn(token, THEME, token)
+
+    def test_no_transition_carries_its_own_number(self):
+        for rule in re.findall(r'transition:[^;}]+', THEME):
+            self.assertNotRegex(rule, r'\d*\.?\d+s',
+                                f'토큰을 쓰지 않는 transition: {rule[:70]}')
+
+    def test_the_fold_spends_the_slowest_step(self):
+        """SIDE_EASE는 제 숫자를 갖지 않는다 — 접기는 사다리의 한 칸이다."""
+        self.assertIn('var(--dur-slow)', SIDE_EASE)
+        self.assertIn('var(--ease)', SIDE_EASE)
+
+    def test_ambient_loops_stay_off_the_ladder(self):
+        """맥박과 빔은 상호작용이 아니라 배경이라 제 주기를 갖는다."""
+        for rule in re.findall(r'animation:[^;}]+', THEME):
+            if 'ma-beat' in rule or 'ma-beam' in rule:
+                self.assertRegex(rule, r'\ds')
+
+
+class FocusAndPressTests(unittest.TestCase):
+    """키보드가 어디에 서 있는지, 그리고 눌린 것이 어떻게 보이는지.
+
+    전에는 규칙이 한 줄도 없어 전적으로 Quasar 기본값이었다. shoot.ps1은 키를
+    누르지 못하므로 이 프로젝트에서 눈으로 확인할 수 없는 항목이기도 하다.
+    """
+
+    def test_the_keyboard_ring_is_focus_visible_and_not_focus(self):
+        """:focus면 마우스로 누른 것에도 링이 남는다."""
+        self.assertIn(':focus-visible', THEME)
+        self.assertIn('outline:2px solid var(--brand)', THEME)
+
+    def test_pressed_is_an_overlay_and_disabled_dims_the_whole_node(self):
+        self.assertIn('--press:', THEME)
+        self.assertIn('--disabled:', THEME)
+        self.assertIn('background-image:linear-gradient(var(--press), var(--press))', THEME)
+        self.assertIn('opacity:var(--disabled)', THEME)
+
+    def test_the_press_overlay_is_not_drawn_with_a_shadow(self):
+        """눌림은 제 바탕 위의 overlay이지 그림자가 아니다 — inner shadow는 쓰지 않는다."""
+        self.assertNotIn('box-shadow:inset', THEME)
+
+
+class NumeralTests(unittest.TestCase):
+    """표의 숫자만 자리를 맞춘다. 문장의 숫자까지 맞추면 '미처리 11건'에 틈이 생긴다."""
+
+    def test_prose_is_proportional_by_default(self):
+        body = THEME.split('body {', 1)[1].split('}', 1)[0]
+        self.assertIn('font-variant-numeric:proportional-nums', body)
+        self.assertNotIn('tabular-nums', body)
+
+    def test_the_places_that_line_up_ask_for_it(self):
+        rule = THEME.split('font-variant-numeric:tabular-nums', 1)[0].rsplit('}', 1)[-1]
+        for name in ('.ma-table', '.ma-sheet', '.ma-kpi__value', '.ma-log', '.ma-due__left'):
+            self.assertIn(name, rule, name)
+
+
+class ToastTests(unittest.TestCase):
+    """토스트가 답하는 질문은 '됐나'이고, 그것을 말하는 것은 아이콘이다.
+
+    79곳의 ui.notify가 전부 타입 없는 회색이어서 '저장했어요'와 '저장하지 못했어요'가
+    글자를 읽기 전까지 같은 모양이었다 — toast()는 그 하나를 고치려고 있다.
+    """
+
+    def test_every_mark_has_an_icon(self):
+        self.assertEqual(set(TOAST_MARKS), {'done', 'fail', 'wait'})
+        for mark, icon in TOAST_MARKS.items():
+            self.assertTrue(icon, mark)
+
+    def test_the_surface_is_the_same_slate_for_all_three(self):
+        """색이 아니라 아이콘이 결과를 말한다 — 표면은 hover 카드와 같은 먹색이다."""
+        surface = THEME.split('.ma-toast {', 1)[1].split('}', 1)[0]
+        self.assertIn('#27272a', surface)
+        for mark in TOAST_MARKS:
+            self.assertIn(f'.ma-toast--{mark} .q-notification__icon', THEME)
+
+    def test_nothing_calls_ui_notify_behind_the_helper(self):
+        """toast()를 지나지 않으면 표시가 없는 회색 한 줄로 돌아간다."""
+        source = Path(mail_assistant.webui.__file__).read_text(encoding='utf-8')
+        live = [line for line in source.splitlines()
+                if 'ui.notify(' in line and 'classes=' not in line
+                and not line.strip().startswith(('#', '*', 'await ui.notify'))]
+        self.assertEqual(live, [], live)
 
 
 class ServerTests(unittest.TestCase):
