@@ -697,6 +697,18 @@ class Store:
             self.db.execute('UPDATE mail SET attempts=attempts+1, error=?, retry_at=?, '
                             'failed_at=? WHERE id=?', (error, timestamp, now(), ident))
 
+    def analyzed_count(self, account, stamp):
+        """이 시각 뒤에 분석을 마친 메일 수. 사용량 창에서 통당 값을 재는 나눗셈의 분모다.
+
+        analyzed_at 은 analyzed()가 쓰는 컬럼이라 이 숫자는 이미 있는 자료다 — 세는
+        곳이 따로 없어도 되고, 새 컬럼도 마이그레이션도 필요 없다.
+        """
+        if not stamp:
+            return 0
+        row = self.db.execute('SELECT COUNT(*) FROM mail WHERE account=? AND analyzed_at>=?',
+                              (account, stamp)).fetchone()
+        return int(row[0]) if row else 0
+
     def analyzed_since(self, account, stamp):
         """이 시각 뒤에 분석에 성공한 메일이 있는가. 포기해도 되는 실패인지를 이것이 가른다.
 

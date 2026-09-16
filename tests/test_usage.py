@@ -8,7 +8,8 @@ from mail_assistant.core import KST
 from mail_assistant.usage import (CALM, FULL, READ_SECONDS, STALE_SECONDS, WARN, Meter,
                                   as_percent, clock_text, level_of, plan_text, read_error,
                                   snapshot, taken_text, view, window_line, window_name,
-                                  window_of, worst)
+                                  window_of, worst, capacity, capacity_line,
+                                  window_since)
 
 # What `account/rateLimits/read` answers, cut down to the keys this reads.
 PAYLOAD = {'ordinaryUsageAllowed': True,
@@ -213,3 +214,59 @@ class MeterTests(unittest.TestCase):
         meter.busy = True
         self.assertFalse(meter.due())
         self.assertIsNone(meter.look())
+
+
+class CapacityTests(unittest.TestCase):
+    """이 계정으로 몇 통이나 되는가 — 남이 발표해 주지 않는 숫자를 직접 재는 것.
+
+    OpenAI 는 Free·Go 의 Codex 한도를 숫자로 내놓지 않는다(Plus 이상만 표에 있다).
+    그래서 '하루 몇 통 되나'에 답하는 방법은 하나뿐이다: 계정이 스스로 말하는 사용률을,
+    이 앱이 그 창에서 실제로 분석한 통 수로 나누는 것. 요금제가 무엇이든 맞는 값이다.
+    """
+
+    def test_the_estimate_is_the_division_it_says_it_is(self):
+        self.assertEqual(capacity(40, 12), {'analysed': 12, 'total': 30, 'left': 18})
+        self.assertIn('12통 분석', capacity_line(capacity(40, 12)))
+        self.assertIn('30통', capacity_line(capacity(40, 12)))
+
+    def test_a_reading_too_coarse_to_mean_anything_says_nothing(self):
+        """정수 퍼센트로 하는 나눗셈이라, 4%에서 1통이면 답은 25통이 아니라 반올림이다.
+        30통이라고 들었다가 12통에서 멈추는 것보다 아직 모른다고 듣는 편이 낫다."""
+        self.assertIsNone(capacity(4, 1))
+        self.assertIsNone(capacity(0, 0))
+        self.assertIsNone(capacity(40, 0))
+        self.assertIsNone(capacity(None, 3))
+        self.assertEqual(capacity_line(None), '')
+
+    def test_a_full_window_leaves_nothing_rather_than_a_negative(self):
+        self.assertEqual(capacity(100, 30)['left'], 0)
+        self.assertEqual(capacity(100, 30)['total'], 30)
+
+    def test_the_window_start_is_the_reset_minus_its_own_length(self):
+        """이 구간이 통 수를 세는 범위이고, 둘 중 하나가 없으면 셀 수 없다."""
+        self.assertEqual(window_since({'resets': 1_000_000, 'minutes': 300}),
+                         1_000_000 - 300 * 60)
+        self.assertIsNone(window_since({'resets': 0, 'minutes': 300}))
+        self.assertIsNone(window_since({'resets': 1_000_000, 'minutes': 0}))
+        self.assertIsNone(window_since(None))
+
+    def test_the_card_says_it_only_when_it_was_asked_to_measure(self):
+        """analysed 를 넘기지 않은 화면(헤더 칩)은 추정 줄을 그리지 않는다."""
+        snap = snapshot({'rateLimits': {
+            'primary': {'usedPercent': 40, 'windowDurationMins': 300, 'resetsAt': 1_000_000},
+            'planType': 'go'}})
+        quiet = view(snap)
+        self.assertIsNone(quiet['capacity'])
+        self.assertFalse([line for line in quiet['lines'] if '이 속도면' in line])
+        told = view(snap, analysed=12)
+        self.assertEqual(told['capacity']['total'], 30)
+        self.assertTrue([line for line in told['lines'] if '이 속도면 30통' in line])
+
+    def test_it_is_measured_on_the_five_hour_window_and_not_the_week(self):
+        """주간 창은 며칠에 걸쳐 차므로 '지금 속도'가 아니다."""
+        snap = snapshot({'rateLimits': {
+            'primary': {'usedPercent': 20, 'windowDurationMins': 300, 'resetsAt': 1_000_000},
+            'secondary': {'usedPercent': 80, 'windowDurationMins': 10080,
+                          'resetsAt': 2_000_000}}})
+        # worst()는 주간(80%)을 고르지만, 추정은 5시간 창(20%)으로 한다.
+        self.assertEqual(view(snap, analysed=10)['capacity']['total'], 50)

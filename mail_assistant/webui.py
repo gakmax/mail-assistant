@@ -41,8 +41,8 @@ from .style import (CALM, LINK, NEUTRAL, SOON, TDS_BLUE_50, TDS_BLUE_300, TDS_BL
                     TDS_GREEN_500, TDS_GREY_50,
                     TDS_GREY_100, TDS_GREY_150, TDS_GREY_200, TDS_GREY_700, TDS_GREY_900,
                     URGENT, css_color)
-from .usage import (CALM as USAGE_CALM, FULL as USAGE_FULL, WARN as USAGE_WARN,
-                    Meter as UsageMeter)
+from .usage import (CALM as USAGE_CALM, CAPACITY_TIP, FULL as USAGE_FULL,
+                    WARN as USAGE_WARN, capacity_line, Meter as UsageMeter)
 # The one module here that is not a screen's: update.py is stdlib-only, so the
 # beat's interval can be shared with app.py without either importing a toolkit.
 from .update import WATCH_SECONDS
@@ -5283,9 +5283,22 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             toast(meter.message or '사용량을 다시 읽었어요', mark='done')
             block.refresh()          # last: it deletes the button this is running in
 
+        def analysed_now():
+            """이 사용량 창이 열린 뒤 분석을 마친 메일 수, 잴 수 없으면 None.
+
+            공개된 한도표가 없는 요금제에 '하루 몇 통 되나'를 답하는 분모다. 새 자료가
+            아니라 analyzed_at 을 세는 것이고, 그래서 창 길이가 오면 바로 답이 나온다.
+            """
+            opened = meter.since()
+            account = account_of(config)
+            if opened is None or not account:
+                return None
+            stamp = datetime.fromtimestamp(opened, timezone.utc).isoformat()
+            return store(directory).analyzed_count(account, stamp)
+
         @ui.refreshable
         def block():
-            view = meter.view()
+            view = meter.view(analysed=analysed_now())
             if meter.read is None:
                 empty('이 환경에서는 Codex 사용량을 확인할 수 없어요.')
                 return
@@ -5301,11 +5314,17 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 ui.linear_progress(view['percent'] / 100, show_value=False, color=None) \
                     .classes('ma-progress ma-progress--inline') \
                     .props('size=6px rounded').style(f'color:{tone}')
+                estimate = capacity_line(view.get('capacity'))
                 for line in view['lines']:
-                    ui.label(line).classes('ma-meta__item').style('margin:2px 0 0 2px')
+                    label = ui.label(line).classes('ma-meta__item') \
+                        .style('margin:2px 0 0 2px')
+                    # 이 한 줄만 추정이고 나머지는 계정이 말한 값이다. 어느 쪽인지
+                    # 말하지 않으면 읽는 사람은 둘을 같은 무게로 읽는다.
+                    if estimate and line == estimate:
+                        label.tooltip(CAPACITY_TIP)
             with ui.element('div').classes('ma-row').style('border:none;padding:10px 0 0'):
-                ui.label('분석·상담·브리핑이 모두 이 한도를 함께 씁니다.') \
-                    .classes('ma-meta__item')
+                ui.label('분석·상담·브리핑이 이 한도를 함께 쓰고, 메일을 확인만 하는 '
+                         '동안에는 쓰지 않아요.').classes('ma-meta__item')
                 ui.space()
                 ui.button('지금 확인', icon='refresh', on_click=again) \
                     .props('flat dense no-caps text-color=secondary')

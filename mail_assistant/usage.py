@@ -140,7 +140,7 @@ def taken_text(at, now=None):
     return f'{clock_text(at, now)} 기준이에요.'
 
 
-def view(snap, message='', now=None):
+def view(snap, message='', now=None, analysed=None):
     """What the header chip and the 실행 lamp both draw.
 
     `known` False means the chip is not drawn at all. A Codex this app has not managed
@@ -160,12 +160,66 @@ def view(snap, message='', now=None):
         after = clock_text(top.get('resets'), now)
         lines.append(f'{after}에 다시 쓸 수 있어요.' if after
                      else '한도가 풀리면 다시 분석해요.')
-    lines += [plan_text(snap.get('plan')), taken_text(snap.get('at'), now), message]
+    # 통당 값은 5시간 창으로 잰다 — 주간 창은 며칠에 걸쳐 차므로 '지금 속도'가 아니다.
+    reading = capacity((snap.get('primary') or {}).get('percent'), analysed) \
+        if analysed is not None else None
+    lines += [capacity_line(reading), plan_text(snap.get('plan')),
+              taken_text(snap.get('at'), now), message]
     return {'known': True,
             'text': 'Codex 한도 도달' if blocked else f"Codex 사용량 {top['percent']}%",
             'percent': top['percent'],
             'level': level_of(top['percent'], blocked),
+            'capacity': reading,
             'lines': [line for line in lines if line]}
+
+
+# ── 이 계정으로 몇 통이나 되는가 ─────────────────────────────────────────────
+# OpenAI 는 Free·Go 의 Codex 한도를 숫자로 내놓지 않는다(Plus 이상만 표에 있다). 그래서
+# '하루 몇 통 되나'에 답하는 방법은 하나뿐이다: 계정이 스스로 말하는 사용률과, 이 앱이
+# 그 창에서 실제로 분석한 통 수. 둘을 나누면 통당 값이 나오고, 그것은 요금제가 무엇이든
+# 맞는 숫자다 — 남이 발표해 주기를 기다릴 필요가 없다.
+#
+# 정수 퍼센트로 하는 나눗셈이라 쓴 양이 적을 때의 답은 대부분 반올림이다. 그 아래에서는
+# 아무 말도 하지 않는다: 30통이라고 들었다가 12통에서 멈추는 것보다 아직 모른다고 듣는
+# 편이 낫고, 그것이 badge_text()의 0과 recheck()의 '물어보지 못했다'가 이미 따르는 규칙이다.
+MIN_PERCENT = 5
+
+
+def window_since(window):
+    """이 창이 열린 시각(epoch), 또는 None. resets 와 길이가 둘 다 있어야 답이 된다."""
+    if not window or not window.get('resets') or not window.get('minutes'):
+        return None
+    return float(window['resets']) - float(window['minutes']) * 60
+
+
+def capacity(percent, analysed):
+    """이 창에서 앞으로 몇 통쯤 더 되는지. 재기에 이르면 None.
+
+    analysed 는 이 창에서 분석을 마친 메일 수다. 브리핑·초안·번역·상담도 같은 한도를
+    쓰면서 이 수에는 잡히지 않으므로, 통당 값은 실제보다 비싸게 나오고 따라서 남은 통
+    수는 적게 나온다 — 틀리는 방향이 안전한 쪽이라 그대로 둔다.
+    """
+    try:
+        percent, analysed = int(percent), int(analysed)
+    except (TypeError, ValueError):
+        return None
+    if analysed <= 0 or percent < MIN_PERCENT:
+        return None
+    total = int(analysed * 100 / percent)
+    return {'analysed': analysed, 'total': total, 'left': max(0, total - analysed)}
+
+
+def capacity_line(reading):
+    """'이 창에서 12통 분석 · 이 속도면 30통쯤에서 한도' — 못 재면 ''."""
+    if not reading:
+        return ''
+    return (f"이 창에서 {reading['analysed']}통 분석 · "
+            f"이 속도면 {reading['total']}통쯤에서 한도에 닿아요")
+
+
+CAPACITY_TIP = ('계정이 말한 사용률을 이 앱이 그 창에서 분석한 통 수로 나눈 값이에요. '
+                '브리핑·초안·번역도 같은 한도를 쓰지만 이 통 수에는 안 잡혀서, 실제로는 '
+                '조금 더 갈 수 있어요')
 
 
 def read_error(exc):
@@ -223,5 +277,9 @@ class Meter:
         """The beat's own look — None on every beat but the one that asks."""
         return self.look() if self.due() else None
 
-    def view(self, now=None):
-        return view(self.snapshot, self.message, now)
+    def since(self):
+        """5시간 창이 열린 시각(epoch), 또는 None — 통당 값을 재는 구간의 시작이다."""
+        return window_since((self.snapshot or {}).get('primary'))
+
+    def view(self, now=None, analysed=None):
+        return view(self.snapshot, self.message, now, analysed)

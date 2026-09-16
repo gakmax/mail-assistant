@@ -152,6 +152,34 @@ percentage is a measurement and the permission is an answer.
 하다. 목록이 그리는 값을 하나 늘리면 `LIST_COLUMNS` 를 같이 보고, 테스트는 `detail()` 이
 아니라 **`page()`/`search()` 가 돌려준 줄로** 상태를 확인해야 한다.
 
+**'이 계정으로 몇 통'은 재는 것이지 표에서 읽는 것이 아니다.** OpenAI 는 Free·Go 의
+Codex 한도를 숫자로 내놓지 않는다 — Plus 이상만 표에 있고, 무료는 '둘러보는 용도'라고만
+적혀 있다. 그래서 `usage.capacity()` 는 계정이 스스로 말하는 사용률을 이 앱이 그 창에서
+분석한 통 수로 나눈다. 요금제가 무엇이든 맞는 값이고, 남이 발표해 주기를 기다릴 필요가
+없다는 것이 이 계산의 전부다. 분모는 새 자료가 아니라 `analyzed_at` 을 세는
+`Store.analyzed_count()` 이고, 구간은 `window_since()`(= `resets` − 창 길이)다.
+
+넷이 붙어 있다. **5시간 창으로만 잰다** — 주간 창은 며칠에 걸쳐 차므로 '지금 속도'가
+아니다(`worst()` 가 칩에 주간을 그리더라도 추정은 primary 를 본다). **`MIN_PERCENT`(5%)
+아래에서는 아무 말도 하지 않는다**: `as_percent()` 가 정수로 반올림하므로 4%에서 1통이면
+답은 25통이 아니라 반올림이고, 30통이라고 들었다가 12통에서 멈추는 것보다 아직 모른다고
+듣는 편이 낫다 — `badge_text()` 의 0과 `recheck()` 의 '물어보지 못했다'가 이미 따르는
+규칙이다. **틀리는 방향이 안전한 쪽이다**: 브리핑·초안·번역·상담도 같은 한도를 쓰면서 이
+통 수에는 잡히지 않으므로 통당 값이 비싸게, 남은 통 수가 적게 나온다. 그리고 **추정 줄만
+tooltip 을 단다** — 나머지 줄은 계정이 말한 값이고, 어느 쪽인지 말하지 않으면 읽는 사람이
+둘을 같은 무게로 읽는다. `analysed` 를 넘기지 않은 화면(헤더 칩)은 그 줄을 아예 그리지
+않으므로, 이 값은 물어본 화면에만 나온다.
+
+**메일을 확인만 하는 동안에는 모델 비용이 들지 않는다.** 한도를 쓰는 것은
+`services.codex_json()` 을 지나는 다섯(분석·상담·브리핑·초안·번역)뿐이다. POP3 수집은
+Codex 를 만나지 않고, `check_login()` 은 `codex login status` 라 슬롯만 잡고 모델을 부르지
+않으며, `codex_usage()` 는 그 자체가 '한도를 쓰지 않는 유일한 호출'이라 슬롯도 잡지 않는다.
+그래서 **확인 간격이 비용을 정하는 방식은 간접적이다**: 간격이 짧으면 `group_mails()` 가
+덜 찬 묶음을 자주 보내고, `codex exec` 는 본문 한 글자 전에 약 15,500 토큰을 고정으로 먹으
+므로(그리고 `--ephemeral` 때문에 `cached_input_tokens` 는 늘 0이므로) 같은 메일 수가 더
+많은 호출로 쪼개진다. 한도가 좁은 요금제에서 간격을 늘리라는 조언의 근거는 폴링이 아니라
+이 묶음 효율이다.
+
 **'분석 중' is a column on the mail, not a log line.** `Store.mark_analyzing()` writes
 `analyzing` before the Codex call and the worker's `finally` clears it — every
 path, including the one that gives up, or a mail reads 분석 중 for ever and
