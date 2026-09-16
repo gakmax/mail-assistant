@@ -170,21 +170,46 @@ HOME_DEFAULT = 'even'
 # nothing, so the canvas needs yAxis.triggerEvent to leave an 11px axis label as the
 # whole of the click target, while a row is an <a> whether it counts 47 or 0. 막대 stays
 # on offer because 통계 draws the same two charts and the helpers are there anyway.
-COUNT_FORMS = (('rows', '목록'), ('bars', '막대'))
+COUNT_FORMS = (('rows', '목록'), ('bars', '막대'), ('stack', '합산'), ('donut', '도넛'))
 COUNT_DEFAULT = 'rows'
-# The movable units. 메일 종류 and 우선순위 travel as one — their grid(minimum=240)
-# collapses to a single column at three-column widths anyway, so splitting them would
-# buy nothing and cost a unit.
-HOME_BLOCKS = ('trend', 'counts', 'today', 'wait', 'deadline', 'todo', 'memo', 'run')
+# The two that paint into a canvas, and so are updated in place rather than refreshed.
+CANVAS_FORMS = ('bars', 'donut')
+# What each form's click target actually is, said in the card's head.
+COUNT_NOTES = {'rows': '누르면 메일 목록으로', 'bars': '누르면 메일 목록으로',
+               'stack': '아래 줄을 누르면 메일 목록으로',
+               'donut': '아래 줄을 누르면 메일 목록으로'}
+# 합산·도넛 need six adjacent fills told apart, and 메일 종류 has no palette of its
+# own — 우선순위 has STATUS, which is a *status* palette and must not be borrowed for
+# categories that mean nothing of the sort. One hue in steps was the first try and is
+# the wrong job: six steps of blue put 공지 beside 기타 at ΔE 7.6 for normal vision,
+# under the floor of 15, and four of the six fell below 3:1 against the card. So this
+# is the one categorical palette in the app, ordered so that no *neighbouring* pair is
+# the weak one — measured, not judged, and a test re-runs the same arithmetic. Handed
+# out by CATEGORIES' own fixed position and never by count: by rank it would encode
+# size twice and repaint the survivors every time the numbers moved. It is the second
+# palette here that is not style.py's, for the reason 메모 paper is the first — the
+# window draws no 합산 and no 도넛, so there is nothing to drift apart from.
+SEGMENT_TONES = ('#2563eb', '#c2410c', '#0d9488', '#7c3aed', '#65a30d', '#db2777')
+# The movable units. 메일 종류 and 우선순위 are one each: they take a whole column at
+# every width now, so gluing them into a single unit would only mean dragging one and
+# getting the other.
+HOME_BLOCKS = ('trend', 'kinds', 'ranks', 'today', 'wait', 'deadline', 'todo', 'memo',
+               'run')
 # Which stack each unit opens in, per column count. Kept per count and not as one list,
 # or switching 2↔3 and back would scramble both. Three columns read 지표 · 시간 · 작업;
 # a test holds every plan against HOME_BLOCKS the way STATE_SQL is held against STATES.
 HOME_LAYOUT = {
-    'even': (('trend', 'counts'),
+    'even': (('trend', 'kinds', 'ranks'),
              ('today', 'wait', 'deadline', 'todo', 'memo', 'run')),
-    'three': (('trend', 'counts'),
+    'three': (('trend', 'kinds', 'ranks'),
               ('today', 'wait', 'deadline'),
               ('todo', 'memo', 'run')),
+}
+# The two count cards: (title, icon, the overview() key, the filter column, the names,
+# the tones). 우선순위 has a status palette; 메일 종류 falls back to SEGMENT_TONES.
+COUNT_CARDS = {
+    'kinds': ('메일 종류', 'label', 'categories', 'category', CATEGORIES, None),
+    'ranks': ('우선순위', 'flag', 'priorities', 'priority', PRIORITY_NAMES, STATUS),
 }
 TREND_LABELS = (('collected', '수집'), ('analyzed', '분석'), ('exported', '반영'))
 TREND_TONES = {'collected': css_color(LINK), 'analyzed': css_color(NEUTRAL),
@@ -620,6 +645,24 @@ body {{
 .ma-bars__fill {{ display:block; height:100%; border-radius:var(--r-full); }}
 .ma-bars__num {{ font-size:11px; font-weight:600; color:var(--subtle); text-align:right; }}
 .ma-bars__num--zero {{ color:var(--muted); }}
+/* 합산: one bar for the whole. The 2px gaps are the only thing separating 보통 from
+   낮음 — two greys that touch have no edge — so they are structure, not decoration. */
+.ma-comp {{ display:flex; gap:2px; height:11px; margin:2px 0 12px; background:var(--card); }}
+.ma-comp > div {{ border-radius:var(--r-full); min-width:0; }}
+.ma-leg {{
+  display:grid; grid-template-columns:auto auto minmax(0,1fr) auto 3.2em; gap:9px;
+  align-items:center; padding:4px 7px; margin:0 -7px; border-radius:var(--r-s);
+  text-decoration:none; color:inherit;
+}}
+.ma-leg:hover {{ background:var(--sunken); }}
+.ma-leg__dot {{ width:8px; height:8px; border-radius:50%; flex:none; }}
+.ma-leg__name {{ font-size:12px; color:var(--ink); white-space:nowrap; }}
+.ma-leg__num {{ font-size:11.5px; font-weight:600; color:var(--subtle); }}
+.ma-leg__pct {{ font-size:11px; color:var(--muted); text-align:right; }}
+.ma-leg__gone {{
+  font-size:10.5px; color:var(--urgent); border:1px dashed currentColor;
+  border-radius:var(--r-xs); padding:0 5px; line-height:1.5; justify-self:start;
+}}
 .ma-fill {{ min-width:0; }}
 .ma-seg {{
   background:var(--sunken); border:1px solid var(--line);
@@ -2921,6 +2964,70 @@ def chart(option, height=200, cap=None):
 BAR_NOTE = '누르면 메일 목록으로'
 
 
+def stack_rows(pairs):
+    """(name, value, percent of the whole) — 합산 measures against the total, where
+    bar_rows measures against the largest."""
+    total = sum(value for _, value in pairs) or 1
+    return [(name, value, round(100 * value / total)) for name, value in pairs]
+
+
+def segment_tone(name, index, tones=None):
+    """The fill for one 합산/도넛 segment, by position and never by count."""
+    if tones and name in tones:
+        return tones[name]
+    return SEGMENT_TONES[index % len(SEGMENT_TONES)]
+
+
+def donut_option(pairs, tones=None):
+    """A ring, with no labels on it: the legend under it carries the names *and* a 0.
+
+    padAngle is the 2px surface gap between fills, and it is what keeps 보통 #4b5563
+    beside 낮음 #808080 readable — their adjacent separation is only just over the
+    floor, and two greys that touch have no edge at all.
+    """
+    return {
+        'textStyle': {'fontFamily': CHART_FONT}, 'animationDuration': 420,
+        'tooltip': {'trigger': 'item', 'backgroundColor': '#27272a', 'borderWidth': 0,
+                    'textStyle': {'color': '#fafafa', 'fontSize': 12}},
+        'series': [{'type': 'pie', 'radius': ['56%', '82%'], 'center': ['50%', '52%'],
+                    'padAngle': 1.5, 'itemStyle': {'borderRadius': 3},
+                    'label': {'show': False}, 'labelLine': {'show': False},
+                    'data': [{'name': name, 'value': value,
+                              'itemStyle': {'color': segment_tone(name, index, tones)}}
+                             for index, (name, value) in enumerate(pairs)]}],
+    }
+
+
+def count_legend(pairs, key, token, tones=None):
+    """The clickable half of 합산 and 도넛, and the whole reason either is allowed.
+
+    A 0 is no segment and no slice — it cannot be drawn and it cannot be hit — so the
+    names live in rows underneath, where 긴급 0 is an `<a>` like every other row and
+    says out loud that it is missing from the picture above.
+    """
+    from nicegui import ui
+    for index, (name, value, percent) in enumerate(stack_rows(pairs)):
+        with ui.link(target=href('/mail', token, **{key: name})).classes('ma-leg'):
+            ui.element('div').classes('ma-leg__dot') \
+                .style(f'background:{segment_tone(name, index, tones)}')
+            ui.label(name).classes('ma-leg__name')
+            if value:
+                ui.element('div')
+            else:
+                ui.label('그림에 없음').classes('ma-leg__gone')
+            ui.label(str(value)).classes('ma-leg__num')
+            ui.label(f'{percent}%').classes('ma-leg__pct')
+
+
+def stack_bar(pairs, tones=None):
+    """One bar for the whole, in the categories' own order."""
+    from nicegui import ui
+    with ui.element('div').classes('ma-comp'):
+        for index, (name, value) in enumerate(pairs):
+            ui.element('div').style(
+                f'flex:{value};background:{segment_tone(name, index, tones)}')
+
+
 def tally(pairs, key, token, tones=None):
     """메일 종류·우선순위 as rows, and the reason the 대시보드 no longer needs a canvas.
 
@@ -4617,47 +4724,51 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 with card('일별 처리량', 'show_chart'):
                     made['trend'] = chart(trend_option(latest['trend']), 196)
 
-            def count_pairs():
-                return ([(name, latest['data']['categories'][name])
-                         for name in CATEGORIES],
-                        [(name, latest['data']['priorities'][name])
-                         for name, _ in PRIORITIES])
+            def count_pairs(which):
+                _, _, source, _, names, _ = COUNT_CARDS[which]
+                return [(name, latest['data'][source][name]) for name in names]
+
+            def count_option(which):
+                """The option for whichever canvas form is showing."""
+                _, _, _, _, _, tones = COUNT_CARDS[which]
+                return (donut_option(count_pairs(which), tones)
+                        if prefs['form'] == 'donut'
+                        else bar_option(count_pairs(which), tones))
+
+            def count_body(which):
+                """One count card, in whichever of the four forms 화면 배치 chose.
+
+                목록 and 합산 are DOM and hold nothing, so the beat may refresh them.
+                막대 and 도넛 paint into a canvas and have to be written in place
+                instead, or the entry animation replays every five seconds — which is
+                what CANVAS_FORMS names and why `made` keeps their element.
+                """
+                title, icon, _, key, names, tones = COUNT_CARDS[which]
+                pairs = count_pairs(which)
+                form = prefs['form']
+                made.pop(which, None)
+                with card(title, icon, note=COUNT_NOTES[form]):
+                    if form == 'bars':
+                        made[which] = bar_link(
+                            chart(bar_option(pairs, tones), 24 * len(pairs) + 12,
+                                  cap=460), key, names, token)
+                    elif form == 'donut':
+                        made[which] = bar_link(
+                            chart(donut_option(pairs, tones), 178), key, names, token)
+                        count_legend(pairs, key, token, tones)
+                    elif form == 'stack':
+                        stack_bar(pairs, tones)
+                        count_legend(pairs, key, token, tones)
+                    else:
+                        tally(pairs, key, token, tones)
 
             @ui.refreshable
-            def counts_unit():
-                """Rebuilt only when the form changes or, in 목록, on the beat.
+            def kinds_unit():
+                count_body('kinds')
 
-                In 막대 this must NOT be refreshed on the timer — it would drop the two
-                canvases and replay their entry animation every five seconds, which is
-                what paint() writes options in place to avoid. Rows hold nothing and
-                cost nothing to redraw, so there they are the ordinary refreshable the
-                panels beside them already are.
-                """
-                kinds, ranks = count_pairs()
-                made.pop('kinds', None)
-                made.pop('ranks', None)
-                with grid(minimum=240):
-                    if prefs['form'] == 'bars':
-                        with card('메일 종류', 'label', note=BAR_NOTE):
-                            made['kinds'] = bar_link(
-                                chart(bar_option(kinds),
-                                      24 * len(CATEGORIES) + 12, cap=460),
-                                'category', CATEGORIES, token)
-                        with card('우선순위', 'flag', note=BAR_NOTE):
-                            made['ranks'] = bar_link(
-                                chart(bar_option(ranks, STATUS),
-                                      24 * len(PRIORITIES) + 12, cap=460),
-                                'priority', PRIORITY_NAMES, token)
-                    else:
-                        with ui.element('div').classes('ma-fill'), \
-                                card('메일 종류', 'label', note=BAR_NOTE):
-                            tally(kinds, 'category', token)
-                        with ui.element('div').classes('ma-fill'), \
-                                card('우선순위', 'flag', note=BAR_NOTE):
-                            tally(ranks, 'priority', token, STATUS)
-
-            def build_counts():
-                counts_unit()
+            @ui.refreshable
+            def ranks_unit():
+                count_body('ranks')
 
             def build_deadline():
                 with card(flush=True):
@@ -4673,7 +4784,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                             .classes('ma-seg')
                     deadline_block()
 
-            BUILD = {'trend': build_trend, 'counts': build_counts,
+            BUILD = {'trend': build_trend, 'kinds': kinds_unit, 'ranks': ranks_unit,
                      'today': today_block, 'wait': wait_block,
                      'deadline': build_deadline, 'todo': todo_block,
                      'memo': memo_block, 'run': run_block}
@@ -4787,16 +4898,17 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             def choose_form(form):
                 """The one rebuild this unit is allowed: a person asked for it.
 
-                counts_unit is refreshed on the beat only in 목록; in 막대 the timer
-                writes options in place. Here the form itself changed, so there is no
-                canvas worth keeping — the one that was there is the thing being
-                replaced.
+                The two cards are refreshed on the beat only in the DOM forms; in
+                막대 and 도넛 the timer writes options in place. Here the form itself
+                changed, so there is no canvas worth keeping — the one that was there
+                is the thing being replaced.
                 """
                 if form == prefs['form']:
                     return
                 prefs['form'] = form
                 remember()
-                counts_unit.refresh()
+                kinds_unit.refresh()
+                ranks_unit.refresh()
 
             def paint():
                 data = read()
@@ -4804,16 +4916,15 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                               deadline_block, todo_block, memo_block, run_block,
                               summary_row):
                     block.refresh()
-                if prefs['form'] == 'bars':
-                    kinds, ranks = count_pairs()
-                    charts = ((made['trend'], trend_option(latest['trend'])),
-                              (made['kinds'], bar_option(kinds)),
-                              (made['ranks'], bar_option(ranks, STATUS)))
+                charts = [(made['trend'], trend_option(latest['trend']))]
+                if prefs['form'] in CANVAS_FORMS:
+                    charts += [(made[which], count_option(which))
+                               for which in ('kinds', 'ranks') if which in made]
                 else:
-                    # Rows carry no canvas and no animation, so they take the ordinary
-                    # refresh every other panel on this page takes.
-                    counts_unit.refresh()
-                    charts = ((made['trend'], trend_option(latest['trend'])),)
+                    # 목록 and 합산 carry no canvas and no animation, so they take the
+                    # ordinary refresh every other panel on this page takes.
+                    kinds_unit.refresh()
+                    ranks_unit.refresh()
                 for element, option in charts:
                     # Update in place rather than rebuild: a refreshable would drop the
                     # canvas and replay the entry animation every five seconds.

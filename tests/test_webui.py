@@ -56,7 +56,9 @@ from mail_assistant.webui import (CARD_TONES, COST_TONES, DEFAULT_LIST, FONT_FIL
                                   board, board_counts, card_hint, card_rows,
                                   HOME_BLOCKS, HOME_COLS, HOME_DEFAULT, HOME_LAYOUT,
                                   home_columns, home_prefs, home_plan, home_reorder,
-                                  COUNT_DEFAULT, COUNT_FORMS,
+                                  COUNT_DEFAULT, COUNT_FORMS, COUNT_CARDS, COUNT_NOTES,
+                                  CANVAS_FORMS, SEGMENT_TONES,
+                                  donut_option, segment_tone, stack_rows,
                                   SLOT_DROP, SLOT_END, SLOT_LEAVE, SLOT_OVER,
                                   slot_drag_start,
                                   chat_context, draft_view, label_step, stats_view,
@@ -3417,12 +3419,96 @@ class CountFormTests(unittest.TestCase):
 
     def test_a_saved_form_this_build_does_not_know_falls_back(self):
         self.assertEqual(home_prefs({'form': 'bars'})['form'], 'bars')
-        self.assertEqual(home_prefs({'form': 'donut'})['form'], COUNT_DEFAULT)
+        self.assertEqual(home_prefs({'form': 'donut'})['form'], 'donut')
+        self.assertEqual(home_prefs({'form': 'treemap'})['form'], COUNT_DEFAULT)
         self.assertEqual(home_prefs({})['form'], COUNT_DEFAULT)
 
     def test_a_row_is_styled_as_a_link_and_a_zero_keeps_its_own_tone(self):
         for rule in ('.ma-bars__row', '.ma-bars__track', '.ma-bars__fill',
                      '.ma-bars__num--zero'):
+            self.assertIn(rule, THEME)
+
+    def test_every_form_says_what_is_clickable(self):
+        """합산 and 도넛 put the click on the legend, not on the picture; the head has
+        to say which, or the reader hunts for a target that is not there."""
+        self.assertEqual(sorted(COUNT_NOTES), sorted(dict(COUNT_FORMS)))
+        for form in CANVAS_FORMS:
+            self.assertIn(form, dict(COUNT_FORMS))
+
+    def test_the_two_cards_count_what_the_filters_filter(self):
+        for which, (_, _, source, key, names, tones) in COUNT_CARDS.items():
+            self.assertIn(which, HOME_BLOCKS)
+            self.assertIn(key, DEFAULT_LIST)
+            self.assertIn(source, ('categories', 'priorities'))
+            self.assertTrue(names)
+            if tones:
+                self.assertEqual(sorted(tones), sorted(names))
+
+    def test_a_stack_measures_against_the_whole(self):
+        """bar_rows scales to the largest; a 합산 segment is a share of the total."""
+        self.assertEqual(stack_rows([('가', 1), ('나', 3)]),
+                         [('가', 1, 25), ('나', 3, 75)])
+        self.assertEqual(stack_rows([('가', 0), ('나', 0)]),
+                         [('가', 0, 0), ('나', 0, 0)])
+
+    def test_a_segment_is_coloured_by_its_place_and_never_by_its_count(self):
+        """A ramp handed out by rank would encode size twice and repaint the survivors
+        every time the numbers moved."""
+        self.assertEqual(segment_tone('긴급', 0, STATUS), STATUS['긴급'])
+        self.assertEqual(segment_tone('공지', 4), SEGMENT_TONES[4])
+        self.assertEqual(segment_tone('공지', 4), segment_tone('공지', 4, {'기타': '#fff'}))
+        self.assertEqual(len(SEGMENT_TONES), len(CATEGORIES))
+
+    def test_the_segment_palette_passes_the_checks_it_was_picked_by(self):
+        """Six steps of one hue was the first try and failed twice over — 공지 beside
+        기타 at ΔE 7.6 for normal vision, and four of six under 3:1 on the card. These
+        are the numbers that replaced it, held here rather than admired.
+        """
+        for tone in SEGMENT_TONES:
+            light, chroma, _, _ = self.oklab(tone)
+            self.assertTrue(0.43 <= light <= 0.77, f'{tone} lightness {light:.3f}')
+            self.assertGreaterEqual(chroma, 0.1, f'{tone} chroma {chroma:.3f}')
+        for first, second in zip(SEGMENT_TONES, SEGMENT_TONES[1:]):
+            self.assertGreaterEqual(self.separation(first, second), 15,
+                                    f'{first} beside {second}')
+
+    @staticmethod
+    def oklab(tone):
+        """(lightness, chroma, a, b) — the space the palette checks are stated in."""
+        red, green, blue = (int(tone[i:i + 2], 16) / 255 for i in (1, 3, 5))
+
+        def linear(channel):
+            return (channel / 12.92 if channel <= 0.04045
+                    else ((channel + 0.055) / 1.055) ** 2.4)
+
+        red, green, blue = linear(red), linear(green), linear(blue)
+        long = (0.4122214708 * red + 0.5363325363 * green + 0.0514459929 * blue) ** (1 / 3)
+        mid = (0.2119034982 * red + 0.6806995451 * green + 0.1073969566 * blue) ** (1 / 3)
+        short = (0.0883024619 * red + 0.2817188376 * green + 0.6299787005 * blue) ** (1 / 3)
+        light = 0.2104542553 * long + 0.7936177850 * mid - 0.0040720468 * short
+        axis_a = 1.9779984951 * long - 2.4285922050 * mid + 0.4505937099 * short
+        axis_b = 0.0259040371 * long + 0.7827717662 * mid - 0.8086757660 * short
+        return light, (axis_a ** 2 + axis_b ** 2) ** 0.5, axis_a, axis_b
+
+    @classmethod
+    def separation(cls, first, second):
+        """OKLab distance x100, the unit the checks are written in."""
+        one, two = cls.oklab(first), cls.oklab(second)
+        return 100 * sum((one[i] - two[i]) ** 2 for i in (0, 2, 3)) ** 0.5
+
+    def test_a_donut_keeps_the_zero_in_its_data_and_off_its_labels(self):
+        """The slice cannot be drawn, so the legend under it is the click target — but
+        the row still has to exist in the option or the tooltip lies about the total."""
+        option = donut_option([('긴급', 0), ('높음', 3)], STATUS)
+        series = option['series'][0]
+        self.assertEqual([item['name'] for item in series['data']], ['긴급', '높음'])
+        self.assertEqual(series['data'][0]['value'], 0)
+        self.assertFalse(series['label']['show'])
+        self.assertIn('padAngle', series)
+        self.assertEqual(series['data'][0]['itemStyle']['color'], STATUS['긴급'])
+
+    def test_the_legend_is_what_makes_a_zero_reachable(self):
+        for rule in ('.ma-leg', '.ma-leg__gone', '.ma-comp'):
             self.assertIn(rule, THEME)
 
 
@@ -3436,12 +3522,12 @@ class HomeArrangeTests(unittest.TestCase):
                          [list(k) for k in HOME_LAYOUT['even']])
 
     def test_a_saved_order_is_drawn_as_saved(self):
-        saved = {'even': [['counts', 'trend'], ['run', 'memo', 'todo',
-                                                'deadline', 'wait', 'today']]}
+        saved = {'even': [['ranks', 'kinds', 'trend'], ['run', 'memo', 'todo',
+                                                        'deadline', 'wait', 'today']]}
         self.assertEqual(home_plan('even', saved), saved['even'])
 
     def test_a_key_this_build_does_not_know_is_dropped(self):
-        saved = {'even': [['trend', 'weather', 'counts'], list(HOME_LAYOUT['even'][1])]}
+        saved = {'even': [['trend', 'weather', 'kinds'], list(HOME_LAYOUT['even'][1])]}
         plan = home_plan('even', saved)
         self.assertNotIn('weather', [key for column in plan for key in column])
 
@@ -3455,14 +3541,14 @@ class HomeArrangeTests(unittest.TestCase):
         self.assertEqual(plan[0][0], 'trend')
 
     def test_a_duplicate_is_kept_once(self):
-        saved = {'even': [['trend', 'trend', 'counts'], ['counts', 'today']]}
+        saved = {'even': [['trend', 'trend', 'kinds'], ['kinds', 'today']]}
         plan = home_plan('even', saved)
         keys = [key for column in plan for key in column]
         self.assertEqual(len(keys), len(set(keys)))
 
     def test_the_two_column_counts_do_not_share_an_order(self):
-        saved = {'even': [['counts', 'trend'], list(HOME_LAYOUT['even'][1])]}
-        self.assertEqual(home_plan('even', saved)[0], ['counts', 'trend'])
+        saved = {'even': [['kinds', 'trend'], list(HOME_LAYOUT['even'][1])]}
+        self.assertEqual(home_plan('even', saved)[0][:2], ['kinds', 'trend'])
         self.assertEqual(home_plan('three', saved), [list(k) for k in HOME_LAYOUT['three']])
 
     def test_a_plan_always_has_the_column_count_it_was_asked_for(self):
@@ -3471,34 +3557,34 @@ class HomeArrangeTests(unittest.TestCase):
         self.assertEqual(len(home_plan('even', {'even': [['a'], ['b'], ['c']]})), 2)
 
     def test_a_card_moves_inside_its_column(self):
-        plan = [['trend', 'counts'], ['today', 'wait']]
-        self.assertEqual(home_reorder(plan, 'counts', 0, 'trend'),
-                         [['counts', 'trend'], ['today', 'wait']])
+        plan = [['trend', 'kinds'], ['today', 'wait']]
+        self.assertEqual(home_reorder(plan, 'kinds', 0, 'trend'),
+                         [['kinds', 'trend'], ['today', 'wait']])
 
     def test_a_card_moves_between_columns(self):
-        plan = [['trend', 'counts'], ['today', 'wait']]
-        self.assertEqual(home_reorder(plan, 'counts', 1, 'wait'),
-                         [['trend'], ['today', 'counts', 'wait']])
+        plan = [['trend', 'kinds'], ['today', 'wait']]
+        self.assertEqual(home_reorder(plan, 'kinds', 1, 'wait'),
+                         [['trend'], ['today', 'kinds', 'wait']])
 
     def test_a_drop_on_the_column_appends(self):
-        plan = [['trend', 'counts'], ['today']]
+        plan = [['trend', 'kinds'], ['today']]
         self.assertEqual(home_reorder(plan, 'trend', 1),
-                         [['counts'], ['today', 'trend']])
+                         [['kinds'], ['today', 'trend']])
 
     def test_a_drop_that_moves_nothing_is_none(self):
         """None for the reason drag_drop() gives None for a card dropped into its own
         lane: rewriting the stored order and repainting reads as a flicker."""
-        plan = [['trend', 'counts'], ['today']]
-        self.assertIsNone(home_reorder(plan, 'counts', 0, 'counts'))
-        self.assertIsNone(home_reorder(plan, 'trend', 0, 'counts'))
+        plan = [['trend', 'kinds'], ['today']]
+        self.assertIsNone(home_reorder(plan, 'kinds', 0, 'kinds'))
+        self.assertIsNone(home_reorder(plan, 'trend', 0, 'kinds'))
         self.assertIsNone(home_reorder(plan, 'today', 1))
 
     def test_a_drop_that_cannot_be_read_is_none(self):
-        plan = [['trend', 'counts'], ['today']]
+        plan = [['trend', 'kinds'], ['today']]
         self.assertIsNone(home_reorder(plan, '', 0, 'trend'))
         self.assertIsNone(home_reorder(plan, 'weather', 0, 'trend'))
         self.assertIsNone(home_reorder(plan, 'trend', 7))
-        self.assertIsNone(home_reorder(plan, 'trend', 1, 'counts'))
+        self.assertIsNone(home_reorder(plan, 'trend', 1, 'kinds'))
 
     def test_only_the_drop_talks_to_the_server(self):
         """dragover fires once per frame; a Python handler on it turns one card's
