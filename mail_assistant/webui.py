@@ -888,10 +888,7 @@ a.ma-sender:hover {{
 .ma-scroll::-webkit-scrollbar {{ width:9px; height:9px; }}
 .ma-scroll::-webkit-scrollbar-thumb {{ background:#d9dade; border-radius:var(--r-full); }}
 .ma-scroll::-webkit-scrollbar-track {{ background:transparent; }}
-.ma-log {{
-  font-size:var(--fs-cap); line-height:1.85; color:var(--subtle);
-  font-variant-numeric:tabular-nums;
-}}
+.ma-log {{ font-size:var(--fs-cap); line-height:1.85; color:var(--subtle); }}
 
 /* 원문 속의 표. Not .ma-table: that one is the 메일 목록's, with a pointer cursor and
    a row hover, and nothing here is clickable. The mail decides how many columns it
@@ -1094,10 +1091,7 @@ a.ma-sender:hover {{
   display:flex; align-items:center; gap:3px; min-height:26px;
   margin-top:5px; padding-top:5px; border-top:1px solid rgba(24,24,27,.07);
 }}
-.ma-memo__when {{
-  font-size:var(--fs-caps); color:rgba(24,24,27,.46); flex:none;
-  font-variant-numeric:tabular-nums;
-}}
+.ma-memo__when {{ font-size:var(--fs-caps); color:rgba(24,24,27,.46); flex:none; }}
 /* Revealed on hover, like the kanban card's grip: six swatches and two buttons on
    every card at rest would be more chrome than memo. focus-within keeps them up for
    a keyboard, which never hovers anything. */
@@ -1377,51 +1371,53 @@ a.ma-sender:hover {{
 
 /* ── 무언가를 적어 넣는 창 ───────────────────────────────────────────────────
    버튼 하나가 여는 창이고, 안에 있는 것은 줄줄이 늘어선 입력칸이 아니라 위계가 있는
-   폼이다. TDS 의 dialog 규격: radius-2xl, 안쪽 24px, shadow-3, 그리고 48px CTA 둘.
+   폼이다. 이름이 .ma-sheet 가 아닌 것은 그것을 원문의 표가 이미 갖고 있기 때문 —
+   TDS 가 이 컴포넌트를 sheet 라 부른다는 것은 이 파일에서 그 이름이 비어 있다는 뜻이
+   아니다. TDS 의 dialog 규격: radius-2xl, 안쪽 24px, shadow-3, 그리고 48px CTA 둘.
    토스는 CTA 를 세로로 쌓지만 그것은 한 손 엄지의 계산이고, 이 앱의 창은 1440px 이라
    가로로 둔다 — 좁아지면 아래에서 다시 쌓인다. */
-.ma-sheet {{
+.ma-ask {{
   width:min(520px, 94vw); max-height:88vh; display:flex; flex-direction:column;
   background:var(--card); border-radius:var(--r-2xl); box-shadow:var(--shadow-3);
   overflow:hidden;
 }}
-.ma-sheet__body {{ padding:24px; overflow-y:auto; }}
-.ma-sheet__title {{
+.ma-ask__body {{ padding:24px; overflow-y:auto; }}
+.ma-ask__title {{
   display:block; font-size:var(--fs-t1); font-weight:700; letter-spacing:-.01em;
   line-height:1.45; margin-bottom:6px;
 }}
-.ma-sheet__sub {{
+.ma-ask__sub {{
   display:block; font-size:var(--fs-b2); line-height:1.5; color:var(--subtle);
   margin-bottom:20px;
 }}
 /* CTA 위의 보호 그라디언트. 토스가 chrome 에 허용하는 세 예외 중 하나이고, 여기서
    막는 것은 스크롤되는 마지막 칸이 버튼 밑에서 잘려 보이는 일이다. */
-.ma-sheet__cta {{
+.ma-ask__cta {{
   position:relative; display:flex; gap:8px; padding:0 24px 24px; flex:none;
 }}
-.ma-sheet__cta:before {{
+.ma-ask__cta:before {{
   content:''; position:absolute; left:0; right:0; bottom:100%; height:28px;
   background:linear-gradient(to top, var(--card), rgba(255,255,255,0));
   pointer-events:none;
 }}
-.ma-sheet__cta .q-btn {{
+.ma-ask__cta .q-btn {{
   flex:1; min-height:48px; border-radius:var(--r-l);
   font-size:var(--fs-t2); font-weight:700;
 }}
 /* 취소는 ghost 가 아니라 secondary 다 — 48px 를 차지하면서 바탕이 없으면 눌리는
    것인지 여백인지가 모양으로 말해지지 않는다. TDS: fill-secondary + text-primary. */
-.ma-sheet__cta .q-btn:first-child {{
+.ma-ask__cta .q-btn:first-child {{
   background:var(--sunken) !important; color:var(--ink) !important;
 }}
-.ma-sheet__cta .q-btn:first-child:hover {{ background:var(--line) !important; }}
-.ma-sheet__cta .q-btn:last-child {{ flex:1.7; }}
+.ma-ask__cta .q-btn:first-child:hover {{ background:var(--line) !important; }}
+.ma-ask__cta .q-btn:last-child {{ flex:1.7; }}
 /* 폼 안의 segmented 는 칸을 꽉 채운다. 라벨 밑에 붙는 값이라, 폭이 제각각이면
    어느 것이 한 칸인지가 읽히지 않는다. */
-.ma-sheet__body .ma-seg {{ display:flex; width:100%; }}
-.ma-sheet__body .ma-seg .q-btn {{ flex:1; min-height:40px; }}
+.ma-ask__body .ma-seg {{ display:flex; width:100%; }}
+.ma-ask__body .ma-seg .q-btn {{ flex:1; min-height:40px; }}
 @media (max-width:460px) {{
-  .ma-sheet__cta {{ flex-direction:column-reverse; }}
-  .ma-sheet__cta .q-btn, .ma-sheet__cta .q-btn:last-child {{ flex:none; width:100%; }}
+  .ma-ask__cta {{ flex-direction:column-reverse; }}
+  .ma-ask__cta .q-btn, .ma-ask__cta .q-btn:last-child {{ flex:none; width:100%; }}
 }}
 /* 폼의 라벨. TDS label-s(13/600)에 8px 을 띄운다 — 라벨과 그 칸은 밀접 결합이고,
    다음 라벨까지는 20px 이라 한 칸이 어디서 끝나는지가 간격으로 읽힌다. */
@@ -1479,14 +1475,16 @@ a.ma-sender:hover {{
 .ma-pair {{ display:grid; grid-template-columns:minmax(0,1fr) 132px; gap:8px; }}
 @media (max-width:540px) {{ .ma-pair {{ grid-template-columns:minmax(0,1fr); }} }}
 
-/* 고른 값은 chip 이다. brand 변형(blue-50 바탕 + blue-500 글자)은 TDS 가 '이건
-   지금 켜져 있다'에 주는 모양이고, 붙인 메일이 바로 그것이다. */
-.ma-chip {{
+/* 고른 값. TDS 의 chip brand 변형(blue-50 바탕 + blue-500 글자)이고, 붙인 메일이
+   바로 그것이다. 이름이 .ma-chip 이 아닌 것은 그 이름을 헤더 띠의 상태 칩이 이미
+   갖고 있기 때문 — 한 번 겹쳐 썼고, 44px 짜리 이 규칙이 12px 짜리 저쪽을 이겨서
+   '수집 멈춤'이 파랗고 뚱뚱해졌다. THEME 은 스타일시트 한 장이다. */
+.ma-held {{
   display:flex; align-items:center; gap:8px; min-height:44px;
   padding:8px 8px 8px 14px; border-radius:var(--r-full);
   background:var(--brand-soft); color:var(--brand);
 }}
-.ma-chip__subject {{
+.ma-held__subject {{
   font-size:var(--fs-b3); font-weight:600; color:var(--ink);
   min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }}
@@ -3096,7 +3094,7 @@ def body_panel(text):
             # ma-scroll for its thumb: a table wider than the panel has to say so,
             # and the mail decides how many columns it has.
             with ui.element('div').classes('ma-sheet__wrap ma-scroll'):
-                with ui.element('table').classes('ma-sheet'):
+                with ui.element('table').classes('ma-ask'):
                     with ui.element('thead'), ui.element('tr'):
                         for cell in head:
                             with ui.element('th'):
@@ -3151,13 +3149,13 @@ def sheet(title, subtitle='', *, add=SHEET_ADD, on_add=None):
     """
     from nicegui import ui
     box = ui.dialog()
-    with box, ui.element('div').classes('ma-sheet'):
-        body = ui.element('div').classes('ma-sheet__body')
+    with box, ui.element('div').classes('ma-ask'):
+        body = ui.element('div').classes('ma-ask__body')
         with body:
-            ui.label(title).classes('ma-sheet__title')
+            ui.label(title).classes('ma-ask__title')
             if subtitle:
-                ui.label(subtitle).classes('ma-sheet__sub')
-        with ui.element('div').classes('ma-sheet__cta'):
+                ui.label(subtitle).classes('ma-ask__sub')
+        with ui.element('div').classes('ma-ask__cta'):
             ui.button(SHEET_CANCEL, on_click=box.close).props('flat no-caps')
             ui.button(add, on_click=on_add).props('unelevated no-caps')
     return box, body
@@ -3224,9 +3222,9 @@ def mail_picker(state, rows, *, on_change=None):
     def panel():
         held = state.get('mail')
         if held:
-            with ui.element('div').classes('ma-chip'):
+            with ui.element('div').classes('ma-held'):
                 ui.icon('mail').style(f'color:{BRAND};font-size:var(--ic-s)')
-                ui.label(held['subject']).classes('ma-chip__subject')
+                ui.label(held['subject']).classes('ma-held__subject')
                 if held['sender']:
                     ui.label(held['sender']).classes('ma-meta__item')
                 ui.space()

@@ -279,7 +279,11 @@ beside each value; `css_color()` is how a screen reads it. `DASH_*` deliberately
 follow — those are the dark 대시보드 sheet's, and TDS green-500 is a deep green that would
 vanish on a black card. `toss_design.md` says out loud that its own colour tokens are
 reconstructions rather than a published table, so if a value turns out to be wrong there
-is exactly one place to fix it.
+is exactly one place to fix it — and one of them was. The brand blues are the **rendered**
+values (`#3182F6` / `#1B64DA` / `#E8F3FF`), not the doc's OKLCH: carried across to sRGB
+that gives `#2887EE`, which is lighter and further toward cyan than the blue the product
+actually draws. Those three are the exception and they say so in `style.py`; everything
+else still comes from the doc.
 
 **A toast's surface never changes; its icon is what says whether it worked.** It is
 TDS's toast: a `fill-primary` (grey-900) surface at `--r-l` with `--shadow-toast`, and a
@@ -1071,10 +1075,21 @@ wanted it — and `home_reorder()` returns None for a drop that moved nothing, e
 **A class name reused in `THEME` loses silently.** `.ma-bars` was `.ma-tally` until the
 count rows came out side by side: the 할 일 판 tally had owned that name since before,
 its `display:flex` sat later in the one stylesheet, and it beat the `display:grid` above
-it with nothing on screen or in a test saying so. `ThemeCollisionTests` now fails the
-build when two top-level rules give the same selector a `display`; a grouped base rule
-refined by a narrower one (`.ma-sheet td, .ma-sheet th` then `.ma-sheet th`) is fine and
-is why the check is on that one property rather than on duplicate selectors.
+it with nothing on screen or in a test saying so. It happened twice more while TDS was
+being applied — a new `.ma-chip` for the picked mail beat the header band's status chip
+and made 수집 멈춤 44px tall and brand-blue, and a new `.ma-sheet` for the dialog beat
+원문's own table. Both are `.ma-held` and `.ma-ask` now; that TDS calls a component
+'chip' or 'sheet' does not mean the name is free in this file.
+
+`ThemeCollisionTests` is what should have caught them and did not, for two reasons now
+fixed. It walked `THEME` without stripping comments, so the text swept up before a `{`
+carried whatever comment sat above the rule and two `.ma-chip`s never compared equal.
+And it only looked at `display`, which is the cheapest tell rather than the only one —
+that collision also moved background, colour, padding and min-height. It now also fails
+on any property given twice to one selector by two **standalone** rules. Standalone is
+the whole distinction: a grouped base rule handing one property to a list, then a
+narrower rule overriding it for one of them (`.ma-sheet td, .ma-sheet th` then
+`.ma-sheet th`), is the deliberate pattern and stays legal.
 
 **The 대시보드 charts are updated, not rebuilt.** `home()` creates its four `ui.echart`
 elements once and `paint()` writes new options into them every `REFRESH_SECONDS`; only

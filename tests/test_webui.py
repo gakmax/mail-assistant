@@ -3850,9 +3850,18 @@ class ThemeCollisionTests(unittest.TestCase):
 
     @staticmethod
     def top_level_rules():
-        """(selector, body) for every rule outside a @media / @keyframes block."""
+        """(selector, body) for every rule outside a @media / @keyframes block.
+
+        Comments are stripped first, and that is not tidiness. Without it the text
+        swept up before a `{` includes whatever comment sits above the rule, so the
+        'selector' for a commented rule is a unique string every time and two rules
+        with the same class name never compare equal — which is exactly how a second
+        `.ma-chip` got past this test and made the header's 수집 멈춤 chip 44px tall
+        and brand-blue.
+        """
+        source = re.sub(r'/\*.*?\*/', '', THEME, flags=re.S)
         rules, selector, body, depth = [], '', '', 0
-        for char in THEME:
+        for char in source:
             if char == '{':
                 depth += 1
                 if depth == 1:
@@ -3862,9 +3871,14 @@ class ThemeCollisionTests(unittest.TestCase):
                 depth -= 1
                 if depth == 0:
                     if selector and not selector.startswith('@'):
-                        for part in selector.split(','):
-                            if part.strip():
-                                rules.append((part.strip(), body))
+                        parts = [part.strip() for part in selector.split(',') if part.strip()]
+                        for part in parts:
+                            # Whether this rule named several selectors at once. A
+                            # grouped rule handing one property to a list, then a
+                            # narrower rule overriding it for one of them, is the
+                            # deliberate pattern; two standalone rules for the same
+                            # selector is the accident.
+                            rules.append((part, body, len(parts) > 1))
                     body = ''
                     continue
             body += char
@@ -3877,13 +3891,41 @@ class ThemeCollisionTests(unittest.TestCase):
         row because the later flex beat the earlier grid.
         """
         seen = {}
-        for selector, body in self.top_level_rules():
+        for selector, body, _ in self.top_level_rules():
             if 'display:' not in body:
                 continue
             self.assertNotIn(selector, seen,
                              f'{selector} is given display twice: '
                              f'{seen.get(selector)!r} then {body.strip()!r}')
             seen[selector] = body.strip()
+
+    def test_no_selector_is_given_the_same_property_twice(self):
+        """display is the cheapest thing to notice a collision by, not the only one.
+
+        The .ma-chip collision changed background, colour, padding and min-height too,
+        and any one of those alone would have been just as invisible. What it is *not*
+        is 'no selector twice': a grouped base rule that hands one property to several
+        selectors (.ma-kpi__value, .ma-tally__n { font-variant-numeric }) is the
+        pattern this file uses on purpose, and it never fights the narrower rule
+        beside it because the two are setting different things — and nor is it
+        'no property twice': .ma-sheet td, .ma-sheet th sets a colour and .ma-sheet th
+        then overrides it, which is the refinement CLAUDE.md names on purpose. What is
+        left, and what this asserts, is two *standalone* rules for one selector.
+        """
+        seen = {}
+        for selector, body, grouped in self.top_level_rules():
+            if grouped:
+                continue
+            for declaration in body.split(';'):
+                name, _, value = declaration.partition(':')
+                name, value = name.strip(), value.strip()
+                if not name or not value or name.startswith('--'):
+                    continue
+                key = (selector, name)
+                self.assertNotIn(key, seen,
+                                 f'{selector} is given {name} twice: '
+                                 f'{seen.get(key)!r} then {value!r}')
+                seen[key] = value
 
 
 
