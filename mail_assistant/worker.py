@@ -6,6 +6,7 @@ from .core import NO_RETRY, Store, account_key, now
 from .excel import Excel, error_detail
 from .overview import briefing_due, briefing_input, trend
 from .report import remember_secret, report
+from .rules import domain_of, skip_bulk, skip_reason, skipped_text
 from .notify import tell
 from .services import (BODY_LIMIT, THREAD_TURNS, Unanalyzable, analyze_many, analyze_one,
                        briefing, check_login, context_size, fetch_mail, group_mails,
@@ -72,7 +73,10 @@ def run(config, directory, stop, notify, wake=None):
                     check_login()
                     # 파싱부터 먼저. 분석할 수 없는 메일은 Codex를 한 번도 부르지 않고
                     # 여기서 내려놓고, 남은 것만 크기와 실패 횟수를 들고 묶음으로 간다.
-                    ready, entries = {}, []
+                    ready, entries, skipped = {}, [], 0
+                    # 내 회사 도메인에서 온 것은 무엇이 달려 있어도 거르지 않는다 —
+                    # 사내 공지 시스템이 수신거부 헤더를 다는 일이 실제로 있다.
+                    own = domain_of(config.get('email', '')) if skip_bulk(config) else ''
                     for row in pending:
                         try:
                             parsed, sent = prepare(row)
@@ -85,6 +89,14 @@ def run(config, directory, stop, notify, wake=None):
                             store.failed(row['id'], str(exc), NO_RETRY)
                             messages.append(f'분석 제외: {subject_of(row)} — {exc}')
                             continue
+                        # 광고·뉴스레터는 Codex를 한 번도 부르지 않고 여기서 내려놓는다.
+                        # 지우는 것이 아니라 표시하는 것이라, 목록에 건너뜀으로 남고
+                        # 다시 분석이 그대로 되돌린다.
+                        reason = skip_reason(parsed, own) if skip_bulk(config) else ''
+                        if reason:
+                            store.skip(row['id'], reason)
+                            skipped += 1
+                            continue
                         # 이 메일이 속한 대화의 앞선 요약. 본문이 아니라 analyze()가
                         # 이미 값을 치른 답이고, 그래서 한 통에 700자 남짓이다.
                         turns = thread_context(store.thread_before(
@@ -96,6 +108,8 @@ def run(config, directory, stop, notify, wake=None):
                                         # 대화 맥락도 한 번에 보내는 글자다. 예산에서
                                         # 빼지 않으면 묶음이 조용히 BATCH_CHARS를 넘는다.
                                         'size': len(sent['body']) + context_size(turns)})
+                    if skipped:
+                        messages.append(skipped_text(skipped))
                     seen = 0
                     for group in group_mails(entries):
                         if stop.is_set():

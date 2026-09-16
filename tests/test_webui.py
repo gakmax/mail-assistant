@@ -878,7 +878,8 @@ class ListingTests(unittest.TestCase):
             # 'tip' is the web list's own column: the window has no hover to draw.
             # 'waiting' is the window's, and rides here because both are row_view().
             self.assertEqual(set(row), {'id', 'received', 'sender', 'subject', 'category',
-                                        'priority', 'state', 'error', 'waiting', 'tip'})
+                                        'priority', 'state', 'error', 'waiting', 'skipped',
+                                        'tip'})
 
 
 class BarFilterTests(unittest.TestCase):

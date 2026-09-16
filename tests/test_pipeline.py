@@ -17,6 +17,7 @@ from unittest.mock import call, patch, MagicMock
 from mail_assistant.core import (ANALYZING, FAILED, HANDLED, HEADERS, NO_RETRY,
                                  PRIORITY_ORDER, ROOM_MARK, Store,
                                  account_key, STATES, STATE_SQL, state_where, wait_cutoff, KST,
+                                 SKIPPED, parse_mail, row_view, state_of,
                                  WAITING, PROGRESS, day_bounds, filter_rows,
                                  local_text, parse_mail, row_view, sql_text, state_of,
                                  thread_key, message_ids, address_of, display_name,
@@ -31,7 +32,10 @@ from mail_assistant.calendar_sheet import (SHEET, Entry, cell_text, collect, mon
 from mail_assistant.dashboard import (PRIORITIES, SHEET as DASHBOARD, UPCOMING_ROWS,
                                       UPCOMING_TOP, blocks, describe, update_dashboard, upcoming)
 from mail_assistant.excel import address_of, link_to_draft, link_to_mail, mail_rows, mailto
-from mail_assistant.overview import briefing_input, overview, past_due, waiting_replies
+from mail_assistant.overview import (briefing_input, failures, overview, past_due,
+                                     waiting_replies)
+from mail_assistant.rules import (AD_REASON, AUTO_REASON, BULK_HEADERS, BULK_REASON,
+                                  LETTER_REASON, skip_bulk, skip_reason, skipped_text)
 from mail_assistant.settings import (GRADES, field_errors, model_choices, model_label,
                                      model_rows, model_traits, normalize, read_models)
 from mail_assistant.services import check_connection, connection_steps, login_state
@@ -3855,6 +3859,149 @@ class ConsoleTests(unittest.TestCase):
         from mail_assistant.console import use_utf8
         with patch.object(sys, 'stdout', object()), patch.object(sys, 'stderr', None):
             use_utf8()
+
+
+class SkipRuleTests(unittest.TestCase):
+    """분석 전에 내려놓을 메일을 가리는 규칙 — 순수 함수라 여기서 전부 재진다.
+
+    이 규칙이 category를 보지 않는 이유가 이 모듈이 있는 이유다: category는 분석이
+    *만드는* 값이라, '공지면 건너뛴다'는 이미 Codex를 한 번 부른 뒤에야 할 수 있는 말이다.
+    """
+
+    def parsed(self, subject='견적서 회신 부탁드립니다',
+               sender='김도현 <dhkim@daesung.co.kr>', **bulk):
+        return {'subject': subject, 'sender': sender, 'body': '본문',
+                'bulk': {name: bulk.get(name.replace('-', '_').lower(), '')
+                         for name in BULK_HEADERS}}
+
+    def test_an_ordinary_business_mail_is_analysed(self):
+        self.assertEqual(skip_reason(self.parsed()), '')
+
+    def test_a_newsletter_says_so_in_its_own_headers(self):
+        """낱말 짐작이 아니라 보낸 쪽이 스스로 밝힌 사실이라는 점이 이 신호의 값이다."""
+        self.assertEqual(skip_reason(self.parsed(list_unsubscribe='<https://x/u>')),
+                         LETTER_REASON)
+        self.assertEqual(skip_reason(self.parsed(list_id='<news.x.com>')), LETTER_REASON)
+
+    def test_bulk_and_auto_senders_are_put_down_too(self):
+        self.assertEqual(skip_reason(self.parsed(precedence='bulk')), BULK_REASON)
+        self.assertEqual(skip_reason(self.parsed(auto_submitted='auto-generated')),
+                         AUTO_REASON)
+        # 'Precedence: first-class'는 무더기라는 뜻이 아니다.
+        self.assertEqual(skip_reason(self.parsed(precedence='first-class')), '')
+
+    def test_the_advertising_mark_is_the_one_word_worth_matching(self):
+        """정보통신망법이 제목에 요구하는 표기라, 붙이는 쪽이 법 때문에 붙인다."""
+        for subject in ('[광고] 9월 특가', '(광고) 세미나 안내', '[AD] Sale'):
+            self.assertEqual(skip_reason(self.parsed(subject=subject)), AD_REASON)
+
+    def test_a_notice_a_person_wrote_is_never_skipped(self):
+        """거르는 것은 광고와 뉴스레터이지 공지가 아니다. 이 둘은 시드에 있는 실제
+        제목이고, 둘 다 마감과 우선순위를 달고 나온다 — 이 앱이 있는 이유에 가깝다."""
+        for subject in ('10월 정기 점검 일정 안내', '단가 인상 안내의 건',
+                        '9월 정산 내역 확인 요청'):
+            self.assertEqual(skip_reason(self.parsed(subject=subject)), '')
+
+    def test_my_own_company_is_never_filtered_whatever_it_attaches(self):
+        """사내 그룹웨어·인사 공지가 수신거부 헤더를 다는 일이 실제로 있고, 그때 걸러
+        버리면 놓치면 안 되는 바로 그 메일을 놓친다. 오탐 하나가 정탐 백 개보다 비싸다."""
+        inside = self.parsed(sender='인사팀 <hr@monitorapp.com>',
+                             list_unsubscribe='<https://x/u>')
+        self.assertEqual(skip_reason(inside, own_domain='monitorapp.com'), '')
+        # 같은 메일이라도 바깥에서 왔으면 걸린다.
+        self.assertEqual(skip_reason(inside, own_domain='other.co.kr'), LETTER_REASON)
+
+    def test_the_switch_is_on_until_somebody_turns_it_off(self):
+        """값이 없으면 켜짐 — 이 기능이 있는 이유가 곧 기본값이다."""
+        self.assertTrue(skip_bulk({}))
+        self.assertTrue(skip_bulk({'skip_bulk': '1'}))
+        self.assertFalse(skip_bulk({'skip_bulk': ''}))
+        self.assertFalse(skip_bulk({'skip_bulk': '0'}))
+
+    def test_a_quiet_cycle_says_nothing(self):
+        self.assertEqual(skipped_text(0), '')
+        self.assertIn('3건', skipped_text(3))
+
+
+class SkippedMailTests(unittest.TestCase):
+    """건너뜀은 삭제가 아니다 — 목록에 남고, 왜인지 말하고, 다시 분석이 되돌린다.
+
+    조용히 사라지는 필터가 이 프로젝트가 가장 싫어하는 실패라서, 아래 넷은 전부
+    '내려놓은 뒤에도 보이는가'를 묻는다.
+    """
+
+    ACCOUNT = 'pop3s.hiworks.com:995/me@corp.example'
+
+    def letter(self):
+        message = EmailMessage()
+        message['From'] = '소식지 <news@letters.example>'
+        message['Subject'] = '9월 뉴스레터'
+        message['Date'] = 'Fri, 11 Sep 2026 10:00:00 +0900'
+        message['List-Unsubscribe'] = '<https://letters.example/u>'
+        message.set_content('이번 달 소식입니다.')
+        return message.as_bytes()
+
+    def test_the_headers_survive_the_round_trip_through_raw(self):
+        """raw를 보관하므로 마이그레이션이 필요 없다 — 이미 수집된 메일도 그대로 읽힌다."""
+        parsed = parse_mail(self.letter())
+        self.assertEqual(skip_reason(parsed), LETTER_REASON)
+
+    def test_a_skipped_mail_leaves_the_queue_but_not_the_list(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            try:
+                ident = store.add(self.ACCOUNT, 'u1', self.letter())
+                self.assertEqual(len(store.pending(self.ACCOUNT, time.time())), 1)
+                store.skip(ident, LETTER_REASON)
+                # 분석 차례에서는 빠지고,
+                self.assertEqual(store.pending(self.ACCOUNT, time.time()), [])
+                # 목록에는 사유를 달고 남는다.
+                row = store.detail(ident)
+                self.assertEqual(state_of(row), SKIPPED)
+                self.assertEqual(row_view(row)['skipped'], LETTER_REASON)
+            finally:
+                store.db.close()
+
+    def test_it_is_neither_waiting_nor_failed(self):
+        """대기로 두면 영원히 차례를 기다리는 것처럼 보이고, 실패로 세면 분석 실패
+        카드가 시도하지도 않은 메일을 센다. 둘 다 화면이 거짓말을 하는 쪽이다."""
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            try:
+                ident = store.add(self.ACCOUNT, 'u1', self.letter())
+                store.skip(ident, LETTER_REASON)
+                rows = list(store.page(self.ACCOUNT))
+                self.assertEqual(failures(rows), 0)
+                self.assertEqual(store.detail(ident)['attempts'], 0)
+                waiting, _ = store.search(self.ACCOUNT, state='분석 대기')
+                self.assertEqual(list(waiting), [])
+                gone, _ = store.search(self.ACCOUNT, state=SKIPPED)
+                self.assertEqual([row['id'] for row in gone], [ident])
+                # 목록이 읽는 컬럼으로도 건너뜀이라고 말해야 한다. SQL 필터만 맞고
+                # state_of()가 '분석 대기'라고 답하는 상태가 실제로 있었다 —
+                # LIST_COLUMNS 에 skipped 가 없어서, DB에는 사유가 있는데 화면만
+                # 틀렸고 그 사이에도 이 테스트는 통과하고 있었다.
+                self.assertEqual(state_of(gone[0]), SKIPPED)
+                self.assertEqual(row_view(gone[0])['skipped'], LETTER_REASON)
+                listed = list(store.page(self.ACCOUNT))
+                self.assertEqual([state_of(row) for row in listed if row['id'] == ident],
+                                 [SKIPPED])
+            finally:
+                store.db.close()
+
+    def test_reanalyse_is_the_way_back_in(self):
+        """잘못 걸렀다 싶을 때 되돌리는 길이 하나여야 하고, 그것은 이미 있는 길이다."""
+        with tempfile.TemporaryDirectory() as folder:
+            store = Store(Path(folder) / 'mail.db')
+            try:
+                ident = store.add(self.ACCOUNT, 'u1', self.letter())
+                store.skip(ident, LETTER_REASON)
+                self.assertEqual(store.reset([ident], reanalyze=True), 1)
+                self.assertEqual(store.detail(ident)['skipped'], '')
+                self.assertEqual(state_of(store.detail(ident)), '분석 대기')
+                self.assertEqual(len(store.pending(self.ACCOUNT, time.time())), 1)
+            finally:
+                store.db.close()
 
 
 if __name__ == '__main__':

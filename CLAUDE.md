@@ -119,6 +119,39 @@ that never reached GitHub. `usage.snapshot()` reads 'out of messages' from the
 backend's own `rateLimitReachedType`/`ordinaryUsageAllowed` and never off 100%: a
 percentage is a measurement and the permission is an answer.
 
+**광고·뉴스레터는 Codex를 한 번도 부르지 않고 내려놓고, 그 판단은 헤더가 한다.**
+`rules.py` 가 따로 있는 이유가 곧 이 규칙이 category 를 보지 않는 이유다: `category`
+(공지)는 분석이 *만드는* 값이라, '공지면 건너뛴다'는 이미 값을 치른 뒤에야 할 수 있는
+말이다. 분석 전에 아는 것은 헤더와 본문뿐이고, 그래서 보는 것도 그것뿐이다 —
+`List-Unsubscribe`·`List-Id`·`Precedence: bulk|junk|list`·`Auto-Submitted`, 그리고
+정보통신망법이 제목에 요구하는 `[광고]` 표기. 낱말 짐작이 아니라 **보낸 쪽이 스스로
+밝힌 사실**이라는 점이 이 신호들의 값이고, 그래서 `parse_mail()` 이 그 네 헤더를 같이
+들고 나온다(`raw` 를 보관하므로 마이그레이션은 없다).
+
+**거르는 것은 광고와 뉴스레터이지 공지가 아니다.** `10월 정기 점검 일정 안내` 와
+`단가 인상 안내의 건` 은 둘 다 공지이고 둘 다 마감과 우선순위를 달고 나온다 — 이 앱이
+있는 이유에 가까운 메일들이다. 같은 계산에서 `own_domain` 가드가 나온다: 사내 그룹웨어·
+인사 공지가 수신거부 헤더를 다는 일이 실제로 있고, 그때 걸러 버리면 놓치면 안 되는 바로
+그 메일을 놓친다. 오탐 하나가 정탐 백 개보다 비싸다. 그 가드는 `endswith` 하나로는 안
+된다 — `evil-monitorapp.com` 이 `monitorapp.com` 으로 통과하므로 정확히 같거나
+`'.' + own` 으로 끝나야 한다.
+
+**그리고 건너뜀은 삭제가 아니다 — 제 상태를 갖는다.** 조용히 사라지는 필터가 이 프로젝트
+가 가장 싫어하는 실패라, 건너뛴 메일은 목록에 남고 사유를 말하고 다시 분석이 되돌린다
+(`reset()` 이 `skipped` 도 비운다). 상태가 새로 필요한 이유는 갈 곳이 없어서다: `분석
+대기`(`attempts = 0`)로 두면 영원히 차례를 기다리는 것처럼 보이고, `실패`로 세면
+`overview.failures()` 가 `attempts` 로 세므로 **시도하지도 않은 메일이 분석 실패 카드를
+부풀린다**. 그래서 `SKIPPED` 는 `STATES`·`STATE_SQL` 의 한 값이고, `분석 대기` 의 SQL 에
+`AND skipped = ''` 가 붙는다. `Store.skip()` 은 `retry_at` 을 `NO_RETRY` 로 미는데 그것은
+`Unanalyzable` 이 이미 쓰는 길이고, `attempts` 는 건드리지 않는다.
+
+**`LIST_COLUMNS` 에 빠진 컬럼은 `state_of()` 에서 조용히 없는 것이 된다.** `skipped` 가
+그 자리를 한 번 겪었다: DB 에는 사유가 있고 `STATE_SQL` 의 필터도 맞는데 목록만 '분석
+대기' 라고 말했고, 그 사이에도 테스트는 통과하고 있었다 — `detail()` 은 `SELECT *` 라
+상태가 맞았기 때문이다. `state_of()` 가 `'skipped' in row.keys()` 로 참아 주는 만큼 조용
+하다. 목록이 그리는 값을 하나 늘리면 `LIST_COLUMNS` 를 같이 보고, 테스트는 `detail()` 이
+아니라 **`page()`/`search()` 가 돌려준 줄로** 상태를 확인해야 한다.
+
 **'분석 중' is a column on the mail, not a log line.** `Store.mark_analyzing()` writes
 `analyzing` before the Codex call and the worker's `finally` clears it — every
 path, including the one that gives up, or a mail reads 분석 중 for ever and

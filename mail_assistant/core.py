@@ -11,6 +11,9 @@ from email.parser import BytesParser
 from html.parser import HTMLParser
 from pathlib import Path
 
+# rules.py imports nothing, so this direction is the only one there can be.
+from .rules import BULK_HEADERS
+
 
 KST = timezone(timedelta(hours=9))
 HANDLED = '처리'
@@ -23,6 +26,10 @@ ROOM_MARK = '#'
 EVENT_MARK = '@'
 PROGRESS = '진행'      # the kanban's middle column; '' -> 진행 -> 처리
 FAILED = '실패'
+# 분석하지 않기로 한 메일. 실패가 아니고 대기도 아니라 제 값이 필요하다 — 실패로 세면
+# 분석 실패 카드가 부풀고(overview.failures()가 attempts로 센다), 대기로 두면 영원히
+# 차례를 기다리는 것처럼 보인다. 둘 다 화면이 거짓말을 하는 쪽이다.
+SKIPPED = '건너뜀'
 # Set by the worker while Codex is actually looking at a mail, cleared the moment it
 # is not. One process at a time (services.codex_slot), but that one call may be reading
 # a batch, so every row in it carries the marker until the answer comes back.
@@ -107,14 +114,17 @@ STATE_SQL = {
     PROGRESS: ('handled = ?', (PROGRESS,)),
     '미처리': ("handled = '' AND result IS NOT NULL", ()),
     ANALYZING: ("result IS NULL AND analyzing <> ''", ()),
-    '분석 대기': ("result IS NULL AND attempts = 0 AND analyzing = ''", ()),
+    # 건너뛴 것은 기다리는 것이 아니므로 분석 대기에서 빠진다. 빼지 않으면 영원히
+    # 차례를 기다리는 것처럼 보이고, 그것은 거짓말이다.
+    '분석 대기': ("result IS NULL AND attempts = 0 AND analyzing = '' AND skipped = ''", ()),
     FAILED: ("result IS NULL AND attempts > 0 AND analyzing = ''", ()),
+    SKIPPED: ("result IS NULL AND skipped <> ''", ()),
 }
 SORTS = {'received': 'received', 'subject': 'subject', 'sender': 'sender',
          'category': 'category', 'priority': priority_case(), 'state': state_case()}
 # The filter values a screen offers, in the order it offers them. '' is 전체.
 # 답장 대기 sits next to 미처리 because that is what it narrows.
-STATES = ('', '분석 대기', ANALYZING, FAILED, '미처리', WAITING, PROGRESS, HANDLED)
+STATES = ('', '분석 대기', ANALYZING, FAILED, SKIPPED, '미처리', WAITING, PROGRESS, HANDLED)
 
 
 def wait_cutoff(today, days=WAIT_DAYS):
@@ -308,6 +318,9 @@ def parse_mail(raw: bytes):
         'references': str(message.get('References', '')),
         'body': text,
         'attachments': [part.get_filename() or '(이름 없음)' for part in message.iter_attachments()],
+        # 보낸 쪽이 스스로 '무더기로 뿌린 것'이라고 밝힌 표시. rules.skip_reason()이
+        # 읽는 유일한 자료이고, 낱말 짐작이 아니라 헤더인 것이 그 규칙의 값이다.
+        'bulk': {name: str(message.get(name, '')) for name in BULK_HEADERS},
     }
 
 
@@ -410,6 +423,10 @@ class Store:
                      # once, read many times, and costs a Codex run to make again.
                      ('translated', "TEXT NOT NULL DEFAULT ''"),
                      ('translated_from', "TEXT NOT NULL DEFAULT ''"),
+                     # 분석하지 않기로 한 이유. 빈 문자열이 '거르지 않았다'이고, 값이
+                     # 있으면 그 값이 곧 화면에 나가는 사유다 — 왜 내려놓았는지 말하지
+                     # 않는 필터는 조용히 메일을 먹는 필터다.
+                     ('skipped', "TEXT NOT NULL DEFAULT ''"),
                      # 마지막으로 실패한 시각. 포기해도 되는 실패인지를 이것으로 가른다 —
                      # 그 뒤에 다른 메일이 분석에 성공했다면 Codex는 멀쩡하고 이 메일이
                      # 문제라는 뜻이고, 아무것도 성공하지 못했다면 한도나 로그인 쪽이다.
@@ -707,9 +724,13 @@ class Store:
     # category/priority/reply_needed are the denormalised verdict: the list already
     # filters and sorts on them, and a screen that reads them here rather than out of
     # the result JSON cannot disagree with the query that found the row.
+    # 목록이 그리는 것만 읽는다 — row_view()가 쓰는 칸이 곧 이 목록이고, 여기 빠진
+    # 컬럼은 state_of()에서 조용히 없는 것이 된다(`in row.keys()`가 참을 수 있게 만든
+    # 만큼 조용하다). skipped 가 그 자리를 한 번 겪었다: DB에는 사유가 있는데 목록만
+    # 분석 대기라고 말했다.
     LIST_COLUMNS = ('id, received, subject, sender, parsed, result, handled, draft_edit, '
                     'attempts, retry_at, error, exported, notified, analyzing, todo_hidden, '
-                    'category, priority, reply_needed, thread')
+                    'category, priority, reply_needed, thread, skipped')
 
     def page(self, account, limit=2000):
         """Newest first, without the raw blob. Filtering happens in filter_rows().
@@ -1216,10 +1237,22 @@ class Store:
         with self.db:
             for ident in ids:
                 cursor = self.db.execute(
-                    f"UPDATE mail SET attempts=0, retry_at=0, error='', failed_at=''{clause} "
+                    f"UPDATE mail SET attempts=0, retry_at=0, error='', failed_at='', skipped=''{clause} "
                     "WHERE id=? AND analyzing=''", (ident,))
                 changed += cursor.rowcount
         return changed
+
+    def skip(self, ident, reason):
+        """이 메일은 분석하지 않는다고 적어 둔다 — 지우는 것이 아니라 표시하는 것이다.
+
+        retry_at 을 NO_RETRY 로 미는 것은 Unanalyzable 이 이미 쓰는 길이고, 그래서
+        되돌리는 길도 이미 있다: reset()이 retry_at 과 skipped 를 함께 비운다. attempts
+        는 건드리지 않는다 — 시도한 적이 없으므로 0이어야 하고, 올리면 분석 실패 카드가
+        시도하지도 않은 메일을 세기 시작한다.
+        """
+        with self.db:
+            self.db.execute('UPDATE mail SET skipped=?, retry_at=? WHERE id=?',
+                            (reason, NO_RETRY, ident))
 
     def analyzing(self, account):
         """The first id Codex is on right now, or '' — a batch marks all of its own."""
@@ -1330,6 +1363,8 @@ def state_of(row):
         return ANALYZING
     if row['attempts']:
         return f"{row['attempts']}회 실패"
+    if 'skipped' in row.keys() and row['skipped']:
+        return SKIPPED
     return '분석 대기'
 
 
@@ -1344,6 +1379,7 @@ def row_view(row):
             'sender': row['sender'], 'subject': row['subject'] or '(제목 없음)',
             'category': result.get('category', ''), 'priority': result.get('priority', ''),
             'state': state_of(row), 'error': row['error'],
+            'skipped': row['skipped'] if 'skipped' in row.keys() else '',
             'waiting': days is not None and days >= WAIT_DAYS}
 
 

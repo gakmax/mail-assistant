@@ -17,7 +17,7 @@ from pathlib import Path
 
 from . import __version__
 from .calendar_sheet import COLORS, parse_day, plain_title
-from .core import (ANALYZING, FAILED, HANDLED, LIST_LIMIT, PROGRESS, ROOM_MARK, SORTS,
+from .core import (ANALYZING, FAILED, HANDLED, LIST_LIMIT, PROGRESS, ROOM_MARK, SKIPPED, SORTS,
                    address_of, display_name,
                    STATES, Store, WAIT_DAYS, WAITING, account_key, event_row_id,
                    is_event_key, local_text,
@@ -34,6 +34,7 @@ from .money import (CURRENCIES as MONEY_CURRENCIES, KINDS as MONEY_KINDS,
                     main_currency, money_text, money_value, month_title, months,
                     skipped_text, totals, trend as money_trend)
 from .notify import enabled as notify_enabled
+from .rules import skip_bulk
 from .settings import (DEFAULTS, FIELDS, GRADE_NOTE, NO_MODELS, RECOMMEND_WHY,
                        field_errors, model_label, model_rows, normalize, read_models)
 from .style import (CALM, LINK, NEUTRAL, SOON, TDS_BLUE_50, TDS_BLUE_300, TDS_BLUE_600,
@@ -279,6 +280,9 @@ COLUMNS = (('', '대기'), (PROGRESS, '진행'), (HANDLED, '완료'))
 # the one state in this column that is happening right now.
 STATE_TONES = {HANDLED: OK, PROGRESS: css_color(LINK),
                '미처리': '#52525b', '분석 대기': css_color(CALM),
+               # 건너뜀은 곁줄의 회색이다. 실패의 빨강도, 대기의 색도 아니어야 한다 —
+               # 아무 일도 일어나지 않았고 그것이 의도한 바라는 뜻이라서.
+               SKIPPED: css_color(CALM),
                ANALYZING: css_color(SOON)}
 # The kanban lane dots. Same three states, same three colours as the 상태 tags above.
 LANE_TONES = {'': css_color(CALM), PROGRESS: css_color(LINK), HANDLED: OK}
@@ -2830,6 +2834,9 @@ def detail_view(row):
         'received': local_text(row['received'], '%Y-%m-%d %H:%M'),
         'category': result.get('category', ''), 'priority': result.get('priority', ''),
         'state': state_of(row), 'handled': row['handled'] == HANDLED, 'error': row['error'],
+        # 분석하지 않기로 한 이유. 거른 판단을 화면이 대신 말해 주지 않으면, 읽는 사람은
+        # 분석이 실패한 것과 애초에 하지 않은 것을 구별할 방법이 없다.
+        'skipped': row_value(row, 'skipped'),
         'summary': result.get('summary', ''), 'requests': result.get('requests', ''),
         'reason': result.get('priority_reason', ''), 'action': result.get('next_action', ''),
         'events': list(result.get('events', [])),
@@ -2941,6 +2948,16 @@ def thread_strip(rows, token):
 # 알림이 무엇을 하고 무엇을 하지 않는지. '창을 닫아도'가 아니라 '수집이 도는 동안'인
 # 것이 중요하다 — 알림을 띄우는 것은 수집기이지 창이 아니다.
 NOTIFY_NOTE = '수집이 도는 동안만 알려요. 이미 알린 메일은 다시 알리지 않아요'
+
+
+def skipped_note(reason):
+    """건너뛴 메일의 상세에 붙는 한 줄. 사유와 되돌리는 길을 한 문장에 둔다."""
+    return f'{reason}로 보여 분석하지 않았어요. 위의 다시 분석을 누르면 분석해요' if reason else ''
+
+SKIP_NOTE = ('수신거부 헤더나 [광고] 표시가 붙은 메일만 걸러요. 사람이 쓴 공지는 그대로 '
+             '분석하고, 내 회사 도메인에서 온 것은 무엇이 붙어 있어도 거르지 않아요')
+SKIP_TIP = ('건너뛴 메일도 목록에 그대로 남아요. 잘못 걸렀다 싶으면 그 메일을 열어 '
+            '다시 분석을 누르면 돼요')
 ATTACH_DIR = 'attachments'
 # 첨부는 이 앱이 만든 것이 아니라 남이 보낸 파일이고, 여는 것은 Windows다. 화면이
 # 그 사실을 한 번 말해 두는 자리 — 도우미는 첨부를 분석에 보내지도, 열어 보지도 않는다.
@@ -6212,6 +6229,13 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     with ui.element('div').classes('ma-alert').style('margin-top:12px'):
                         ui.icon('error_outline').style('font-size:16px')
                         ui.label(view['error']).style('font-size:12px')
+                # 빨강도 호박색도 아닌 회색 띠: 잘못된 것이 없고, 하지 않기로 한 것이다.
+                # 되돌리는 단추가 바로 위 줄에 이미 있으므로 여기서는 그것을 가리킨다.
+                if view['skipped']:
+                    with ui.element('div').classes('ma-sunken') \
+                            .style('margin-top:12px;display:flex;gap:7px;align-items:center'):
+                        ui.icon('filter_alt_off').style(f'color:{MUTED};font-size:var(--ic-s)')
+                        ui.label(skipped_note(view['skipped'])).classes('ma-meta__item')
                 if view['clipped']:
                     # Amber, not red: the analysis below is real, it just did not see
                     # all of the mail — which the reader has to be told before reading it.
@@ -8091,6 +8115,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
         # FIELDS에 없는 것은 글자 칸이 아니라 스위치이기 때문이고, normalize()가
         # values의 키를 그대로 통과시키므로 저장은 같은 '저장' 단추가 한다.
         values['notify'] = '1' if notify_enabled(config) else ''
+        values['skip_bulk'] = '1' if skip_bulk(config) else ''
         inputs, notes = {}, {}
         # 진단 used to be a page of its own. It is two buttons and a result list that
         # nobody opens until something is already wrong, and everything it asks about —
@@ -8232,6 +8257,16 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     switch.on_value_change(
                         lambda event: values.update({'notify': '1' if event.value else ''}))
                     ui.label(NOTIFY_NOTE).classes('ma-meta__item') \
+                        .style('margin:0 0 6px 2px')
+                    # 한도가 좁은 요금제에서 가장 큰 절약이고, 그래서 기본이 켜짐이다.
+                    # 끄는 자리를 둔 것은 거르는 판단이 늘 옳지는 않기 때문.
+                    saver = ui.switch('광고·뉴스레터는 분석하지 않기',
+                                      value=bool(values['skip_bulk']))
+                    saver.props('dense').style('margin:2px 0 0 -6px')
+                    saver.on_value_change(
+                        lambda event: values.update({'skip_bulk': '1' if event.value else ''}))
+                    saver.tooltip(SKIP_TIP)
+                    ui.label(SKIP_NOTE).classes('ma-meta__item') \
                         .style('margin:0 0 6px 2px')
                     ui.button('저장', icon='save', on_click=save) \
                         .props('unelevated dense no-caps').style('margin-top:4px')

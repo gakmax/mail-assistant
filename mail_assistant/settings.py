@@ -8,7 +8,10 @@ from pathlib import Path, PureWindowsPath
 DEFAULTS = {'host': 'pop3s.hiworks.com', 'port': 995, 'interval': 180, 'email': '', 'model': '',
             # 창 밖 알림. FIELDS에 없는 것은 글자를 입력하는 칸이 아니기 때문이고,
             # normalize()가 values에 있는 키를 그대로 통과시키므로 저장은 같이 된다.
-            'notify': '1'}
+            'notify': '1',
+            # 광고·뉴스레터를 분석하지 않고 내려놓기. 기본 켜짐 — 이 값이 꺼짐이면
+            # 기능이 있으나 마나다. 건너뛴 메일은 목록에 남고 다시 분석이 되돌린다.
+            'skip_bulk': '1'}
 FIELDS = (('email', '메일 계정'), ('password', '메일 전용 비밀번호'), ('host', '수신 서버'),
           ('port', 'SSL 포트'), ('interval', '확인 간격(초, 최소 60)'), ('workbook', '엑셀 파일'),
           ('model', 'Codex 모델'))
