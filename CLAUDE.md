@@ -1160,6 +1160,25 @@ the whole distinction: a grouped base rule handing one property to a list, then 
 narrower rule overriding it for one of them (`.ma-sheet td, .ma-sheet th` then
 `.ma-sheet th`), is the deliberate pattern and stays legal.
 
+**일별 처리량은 한 색조의 세 단계이고, 세 가지 색이 아니다.** 수집 → 분석 → 반영 은
+순서가 곧 뜻인 파이프라인이라 색이 할 일은 '어느 것이 무엇인가'가 아니라 '어디까지
+갔는가'이고, 이 카드가 묻는 질문 — 수집기가 따라가고 있는가 — 의 답은 옅은 선과 짙은 선
+사이의 *간격* 그 자체다. 세 색이던 시절(브랜드 파랑 · grey-700 · green-500)의 값은 팔레트
+잣대를 두 군데서 통과하지 못했다: grey-700 은 C 0.028 로 채도 바닥(0.10) 밑이라 색으로
+정체성을 나르지 못하고 — 화면에서 그것은 '분석'이 거의 검정 실선이라는 뜻이다 — 분석과
+반영 사이가 일반 시야 ΔE 14.9 로 15 바닥 밑이었다. `toss_design.md` 도 같은 쪽을 말한다:
+막대는 grey-200 바탕에 강조하는 것만 브랜드 블루이고, 색으로 계열을 가르지 않는다. 지금
+값은 ordinal ramp 의 넷 — 단조 L · 인접 ΔL ≥ 0.06 · 옅은 끝 대비 ≥ 2:1 · 한 색조 — 를
+전부 통과하고 `TrendRampTests` 가 그것을 들고 있다. 세 가지가 따라온다. **`TDS_BLUE_300`
+은 문서에 없어서 뽑은 단계다** — TDS 는 브랜드 블루의 step 을 50/500/600/700 만 내놓고
+"blue-100~400 의 OKLCH 는 surface 되지 않았다"고 적어 두었으므로, 실제로 그려지는 blue-500
+의 색조(258°)를 잡고 L 만 0.76 으로 올렸고 그 OKLCH 를 `style.py` 에 적어 두었다. **면은
+짙어질수록 물러난다**(`TREND_WASH`): 한 색조라 겹친 면은 정보가 아니라 그냥 짙어지고,
+셋 다 0.08 이던 값으로는 아래쪽 절반이 고르게 파란 덩어리가 되어 파스텔로 고른 색이 파스텔
+로 보이지 않았다. 그리고 **초록은 돌아오지 않는다** — 이 앱에서 초록은 '됐다'이고 옆 카드의
+완료 태그가 이미 그 색이다(테스트가 그것도 붙든다). 파랑·보라 조합을 먼저 재 봤고 그쪽은
+deutan 에서 ΔE 2~3 으로 무너진다.
+
 **The 대시보드 charts are updated, not rebuilt.** `home()` creates its four `ui.echart`
 elements once and `paint()` writes new options into them every `REFRESH_SECONDS`; only
 the text blocks are `@ui.refreshable`. Wrapping a chart in a refreshable drops the

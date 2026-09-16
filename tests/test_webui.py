@@ -1,6 +1,7 @@
 """The web 현황 screen's shaping, which needs no nicegui and so runs on every platform."""
 import datetime
 import inspect
+import math
 import re
 import socket
 import tempfile
@@ -17,7 +18,7 @@ from mail_assistant.core import (ANALYZING, EVENT_MARK, FAILED, HANDLED, PROGRES
 from mail_assistant.dashboard import CATEGORIES, PRIORITIES
 from mail_assistant.settings import (GRADES, model_choices, model_rows,
                                      recommended_slug)
-from mail_assistant.style import URGENT, css_color
+from mail_assistant.style import TDS_GREEN_500, URGENT, css_color
 from mail_assistant.usage import (CALM as USAGE_CALM, FULL as USAGE_FULL,
                                   WARN as USAGE_WARN, snapshot as usage_snapshot,
                                   view as usage_view)
@@ -32,7 +33,8 @@ from mail_assistant.webui import (CAL_LOCALE, CAL_WIDTH, DATE_HINT, PICK_WAIT,
                                   TIME_HINT, WEEKDAYS,
                                   CARD_TONES, COST_TONES, DEFAULT_LIST, FONT_FILE, MUTED,
                                   STATE_TONES, STATUS, USAGE_TONES, usage_chip,
-                                  THEME, TOAST_MARKS, TREND_LABELS,
+                                  THEME, TOAST_MARKS, TREND_LABELS, TREND_TONES,
+                                  TREND_WASH,
                                   NAV_BADGE_MAX, NAV_GROUPS, PAGES, RAIL_BOOT, RAIL_KEY,
                                   RAIL_TOGGLE, SIDE_BREAK, SIDE_EASE, SIDE_GROUP, SIDE_RAIL,
                                   CHAT_CHROME, translated_note, row_value,
@@ -4083,6 +4085,80 @@ class PickerFocusTests(unittest.TestCase):
             .split('def look(', 1)[1].split('\n\n', 1)[0]
         self.assertIn('hits.refresh()', look)
         self.assertNotIn('panel.refresh()', look)
+
+
+class TrendRampTests(unittest.TestCase):
+    """일별 처리량의 세 계열은 세 정체성이 아니라 한 색조의 세 단계다.
+
+    수집 → 분석 → 반영 은 순서가 곧 뜻인 파이프라인이라, 색이 할 일은 '어느 것이
+    무엇인가'가 아니라 '어디까지 갔는가'다. 그리고 이 카드가 묻는 질문 — 수집기가
+    따라가고 있는가 — 의 답은 옅은 선과 짙은 선 사이의 간격 그 자체다.
+
+    세 색이던 시절의 값은 팔레트를 재는 두 잣대를 통과하지 못했다. grey-700 은
+    C 0.028 로 채도 바닥(0.10) 밑이라 색으로 정체성을 나르지 못하고(화면에서 '분석'이
+    거의 검정 실선이라는 뜻이다), 분석과 반영 사이가 일반 시야 ΔE 14.9 로 15 바닥
+    밑이었다. 아래 넷은 그 자리를 대신하는 ordinal ramp 의 검사이며, 값을 기리는
+    것이 아니라 붙들어 두는 것이 목적이다.
+    """
+
+    def ramp(self):
+        """수집 → 반영 순서의 세 단계. 그 순서가 곧 검사 대상이다."""
+        return [TREND_TONES[key] for key, _ in TREND_LABELS]
+
+    def test_the_ramp_reads_light_to_dark(self):
+        """짙어지는 쪽이 파이프라인의 끝이다. 순서가 뒤집히면 색이 거짓말을 한다."""
+        lights = [CountFormTests.oklab(tone)[0] for tone in self.ramp()]
+        self.assertEqual(lights, sorted(lights, reverse=True), lights)
+
+    def test_each_step_is_a_step(self):
+        """ΔL 0.06 이 한 단계의 최소치다. 그보다 가까우면 두 단계가 한 색이 된다."""
+        lights = [CountFormTests.oklab(tone)[0] for tone in self.ramp()]
+        for one, two in zip(lights, lights[1:]):
+            self.assertGreaterEqual(one - two, 0.06, f'{one:.3f} → {two:.3f}')
+
+    def test_it_is_one_hue(self):
+        """두 색조가 섞이면 ramp 가 아니라 계열이 둘인 팔레트이고, 그때는 ΔE 쪽
+        잣대를 받아야 한다 — 그것이 지금 통과하지 못하는 쪽이다."""
+        hues = []
+        for tone in self.ramp():
+            _, _, axis_a, axis_b = CountFormTests.oklab(tone)
+            hues.append(math.degrees(math.atan2(axis_b, axis_a)) % 360)
+        self.assertLess(max(hues) - min(hues), 40, hues)
+
+    def test_the_lightest_step_still_clears_the_card(self):
+        """옅은 끝은 흰 카드 위에 서므로 2:1 이 바닥이다. 파스텔의 한계가 이 숫자다."""
+        self.assertGreaterEqual(self.contrast(self.ramp()[0], '#ffffff'), 2.0)
+
+    def test_no_step_is_the_status_green_it_replaced(self):
+        """초록은 이 앱에서 '됐다'이고, 옆 카드의 완료 태그가 이미 그 색이다."""
+        for tone in self.ramp():
+            self.assertNotEqual(tone.lower(), css_color(TDS_GREEN_500).lower())
+
+    def test_the_wash_gives_way_as_the_step_darkens(self):
+        """한 색조라 면이 겹치면 정보가 아니라 그냥 짙어진다 — 셋 다 같은 값이면
+        아래쪽 절반이 고르게 파란 덩어리가 되고, 파스텔로 고른 색이 그렇게 보이지
+        않는다."""
+        self.assertEqual(len(TREND_WASH), len(TREND_LABELS))
+        self.assertEqual(list(TREND_WASH), sorted(TREND_WASH, reverse=True))
+        option = trend_option([('2026-09-16', {'collected': 3, 'analyzed': 2,
+                                               'exported': 1})])
+        self.assertEqual([series['areaStyle']['opacity'] for series in option['series']],
+                         list(TREND_WASH))
+
+    @staticmethod
+    def contrast(one, two):
+        """WCAG 상대 휘도비. 팔레트 잣대가 대비를 말하는 단위다."""
+        def luminance(tone):
+            channels = []
+            for index in (1, 3, 5):
+                channel = int(tone[index:index + 2], 16) / 255
+                channels.append(channel / 12.92 if channel <= 0.04045
+                                else ((channel + 0.055) / 1.055) ** 2.4)
+            red, green, blue = channels
+            return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+        first, second = luminance(one), luminance(two)
+        high, low = max(first, second), min(first, second)
+        return (high + 0.05) / (low + 0.05)
 
 
 if __name__ == '__main__':

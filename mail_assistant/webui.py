@@ -36,7 +36,8 @@ from .money import (CURRENCIES as MONEY_CURRENCIES, KINDS as MONEY_KINDS,
 from .notify import enabled as notify_enabled
 from .settings import (DEFAULTS, FIELDS, GRADE_NOTE, NO_MODELS, RECOMMEND_WHY,
                        field_errors, model_label, model_rows, normalize, read_models)
-from .style import (CALM, LINK, NEUTRAL, SOON, TDS_BLUE_50, TDS_GREEN_500, TDS_GREY_50,
+from .style import (CALM, LINK, NEUTRAL, SOON, TDS_BLUE_50, TDS_BLUE_300, TDS_BLUE_600,
+                    TDS_GREEN_500, TDS_GREY_50,
                     TDS_GREY_100, TDS_GREY_150, TDS_GREY_200, TDS_GREY_700, TDS_GREY_900,
                     URGENT, css_color)
 from .usage import (CALM as USAGE_CALM, FULL as USAGE_FULL, WARN as USAGE_WARN,
@@ -253,8 +254,24 @@ COUNT_CARDS = {
     'ranks': ('우선순위', 'flag', 'priorities', 'priority', PRIORITY_NAMES, STATUS),
 }
 TREND_LABELS = (('collected', '수집'), ('analyzed', '분석'), ('exported', '반영'))
-TREND_TONES = {'collected': css_color(LINK), 'analyzed': css_color(NEUTRAL),
-               'exported': OK}
+# 수집 → 분석 → 반영 은 순서가 곧 뜻인 세 단계다. 그래서 색은 세 정체성이 아니라 한
+# 색조의 세 단계이고 — 옅은 쪽이 들어온 것, 짙은 쪽이 끝난 것 — 그 사이의 간격이 이
+# 카드가 묻는 질문, 수집기가 따라가고 있는가의 답이 된다. 세 가지 다른 색이었을 때 그
+# 답은 색 세 개를 먼저 외운 다음에야 읽혔다. toss_design.md 의 차트 규칙도 같은 쪽이다:
+# 막대는 grey-200 바탕에 강조하는 것만 브랜드 블루이고, 색으로 계열을 가르지 않는다.
+#
+# 세 색이던 시절의 값(브랜드 파랑 · grey-700 · green-500)은 팔레트를 재는 두 잣대를
+# 통과하지 못했다. grey-700 은 C 0.028 로 채도 바닥(0.10) 밑이라 색으로 정체성을 나르지
+# 못하고 — 화면에서 그것은 '분석'이 거의 검정 실선이라는 뜻이다 — 분석과 반영 사이가
+# 일반 시야 ΔE 14.9 로 15 바닥 밑이었다. 지금 값은 ordinal 검사(단조 L · 인접 ΔL ≥ 0.06
+# · 옅은 끝 대비 ≥ 2:1 · 한 색조)를 전부 통과하고, TrendRampTests 가 그 넷을 들고 있다.
+TREND_TONES = {'collected': css_color(TDS_BLUE_300), 'analyzed': css_color(LINK),
+               'exported': css_color(TDS_BLUE_600)}
+# 한 색조이므로 면이 겹치면 정보가 아니라 그냥 짙어진다 — 셋 다 0.08 이던 값으로는 아래쪽
+# 절반이 고르게 파란 덩어리가 되어, 파스텔로 고른 색이 파스텔로 보이지 않았다. 옅은 단계가
+# 면을 들고 짙은 단계는 물러나므로, 쌓인 자리에서도 물기가 남고 선이 그 위로 읽힌다.
+# TREND_LABELS 와 같은 순서이고, 한 테스트가 그 길이를 붙들고 있다.
+TREND_WASH = (0.16, 0.06, 0.03)
 # The kanban's three columns. '' and 처리 already existed; 진행 is the new middle one.
 COLUMNS = (('', '대기'), (PROGRESS, '진행'), (HANDLED, '완료'))
 # Tag colours for the 상태 column. 'N회 실패' carries its count and is matched separately,
@@ -1766,8 +1783,8 @@ def trend_option(rows):
                     'showSymbol': len(rows) <= 31, 'symbolSize': 5,
                     'lineStyle': {'width': 2, 'color': TREND_TONES[key]},
                     'itemStyle': {'color': TREND_TONES[key]},
-                    'areaStyle': {'color': TREND_TONES[key], 'opacity': 0.08}}
-                   for key, label in TREND_LABELS],
+                    'areaStyle': {'color': TREND_TONES[key], 'opacity': wash}}
+                   for (key, label), wash in zip(TREND_LABELS, TREND_WASH)],
     })
     return option
 
