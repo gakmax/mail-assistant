@@ -952,9 +952,25 @@ row is a `ui.link`, so 긴급 0 keeps a full-height click target. A 0 *bar* draw
 which is the whole reason `yAxis.triggerEvent` exists: it leaves an 11px axis label
 doing the job. The canvas form stays on offer because 통계 draws the same two charts
 through the same `bar_link`, so none of `BAR_EVENT`/`clicked_bar()` was going to be
-deleted anyway. `counts_unit` is the one refreshable that branches: in 목록 the beat
-refreshes it, in 막대 `paint()` writes options in place — refreshing there would drop
-two canvases and replay their entry animation every five seconds.
+deleted anyway — and `clicked_bar()` reads a pie's click unchanged, which is what lets
+도넛 reuse `bar_link` too. `kinds_unit`/`ranks_unit` are the refreshables that branch:
+in the DOM forms the beat refreshes them, in the two `CANVAS_FORMS` `paint()` writes
+options in place — refreshing there would drop the canvases and replay their entry
+animation every five seconds.
+
+**합산 and 도넛 are allowed only because the legend is under them.** Neither can draw a
+0 — there is no segment and no slice to hit — so `count_legend()` puts the names in rows
+below, each one an `<a>`, and a 0 row wears 그림에 없음. Take the legend away and both
+forms are exactly the failure 목록 exists to prevent. Two more things hold them up. The
+2px `gap` on `.ma-comp` and the donut's `padAngle` are structure, not decoration: 보통
+`#4b5563` beside 낮음 `#808080` is ΔE 15.6, and two greys that touch have no edge at
+all. And 메일 종류 has no palette of its own — `STATUS` is a *status* palette and must
+not be borrowed for categories that mean no such thing — so `SEGMENT_TONES` is the one
+categorical palette in the app. Six steps of one blue was tried and measured out: 공지
+beside 기타 at ΔE 7.6 for normal vision against a floor of 15, and four of the six under
+3:1 on the card. The six that replaced it are **ordered so no neighbouring pair is the
+weak one** (worst adjacent 27.1), handed out by `CATEGORIES`' fixed position and never by
+count, and a test re-runs the same OKLab arithmetic rather than trusting the comment.
 
 **A card is dragged by its grip, and only the drop reaches the server.** `.ma-slot__grip`
 is a 14px band over the card's own top padding, which is what lets every panel be
