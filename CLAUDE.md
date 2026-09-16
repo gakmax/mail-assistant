@@ -1311,6 +1311,20 @@ each call — the list reshuffling between two refreshes, and a Windows-only CI 
 that does not reproduce on the dev box. `page()`, `search()` and `unedited_drafts()`
 all end `, rowid DESC`, which is the order the mails actually arrived in.
 
+**그리고 그 동점이 순서가 아니라 *소속*을 정하는 자리라면 `WHERE` 쪽에 있어야 한다.**
+같은 15ms 짜리 시계인데 고장이 조용한 쪽은 이쪽이다. `thread_before()` 는 '이 메일보다
+먼저 온 같은 대화의 메일'을 `received<?` 로 골랐고, 한 번의 수집이 원 메일과 답장을 같이
+가져오면 — 흔한 일이다 — 둘의 `received` 가 같은 문자열이라 원 메일이 **제 대화에서
+빠졌다**. 답장은 맥락 없이 분석되고, 그것이 화면에 아무 표시도 남기지 않는다: 맥락이 빈
+것은 첫 메일도 마찬가지이기 때문이다. `References[0]` 규칙으로 얻은 것을 마지막 한 줄에서
+잃던 자리다. 지금은 `(received, rowid) < (SELECT received, rowid FROM mail WHERE id=?)`
+이고, 그래서 `thread_before()` 는 시각이 아니라 **메일의 id** 를 받는다 — 제 행과 비교하는
+것이 저를 제 맥락에서 빼내는 방법이기도 하다. 재현은 Windows 가 필요하지 않다:
+`core.now` 를 한 값으로 묶으면 리눅스에서도 그대로 0줄이 나오고,
+`test_a_thread_collected_in_one_cycle_keeps_its_context` 가 그 형태다. CI 의 Windows
+다리에서 이것이 릴리즈 빌드를 한 번 떨어뜨렸는데, 우분투 다리는 시계가 고와서 통과했다 —
+'dev box 에서 재현되지 않는 Windows 전용 실패' 의 교과서적인 모양이다.
+
 **Schema changes are `ALTER TABLE ADD COLUMN` only.** `Store.migrate()` adds what is
 missing to `mail`, and `SIDE_COLUMNS` does the same for the tables that are not `mail`
 (`event.mail_id`, `todo.mail_id`/`note`, `note.position`); installed databases hold the

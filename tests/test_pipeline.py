@@ -432,31 +432,64 @@ class ThreadStoreTests(unittest.TestCase):
             finally:
                 store.db.close()
 
+    ANALYSIS = {'category': '견적·계약', 'summary': '9월 견적 검토 요청',
+                'requests': '단가 회신', 'events': [], 'priority': '높음',
+                'priority_reason': '', 'next_action': '', 'reply_needed': True,
+                'reply_subject': '', 'reply_draft': '', 'money': [], 'order_no': ''}
+
+    def threaded_pair(self, store):
+        """분석까지 끝난 원 메일과, 그 답장. 답장의 id를 돌려준다."""
+        root = store.add(self.ACCOUNT, 'u1', self.mail('견적 요청', '<a@x>'))
+        store.analyzed(root, {'sender': '', 'subject': '', 'body': '비밀 본문',
+                              'attachments': []}, dict(self.ANALYSIS))
+        reply = store.add(self.ACCOUNT, 'u2',
+                          self.mail('Re: 견적 요청', '<b@x>', refs='<a@x>'))
+        return root, reply
+
     def test_the_analysis_context_is_summaries_and_never_a_body(self):
         """분석에 실려 가는 것은 analyze()가 이미 값을 치른 답이지 본문이 아니다."""
         with tempfile.TemporaryDirectory() as folder:
             store = Store(Path(folder) / 'mail.db')
             try:
-                root = store.add(self.ACCOUNT, 'u1', self.mail('견적 요청', '<a@x>'))
-                store.analyzed(root, {'sender': '', 'subject': '', 'body': '비밀 본문',
-                                      'attachments': []},
-                               {'category': '견적·계약', 'summary': '9월 견적 검토 요청',
-                                'requests': '단가 회신', 'events': [], 'priority': '높음',
-                                'priority_reason': '', 'next_action': '', 'reply_needed': True,
-                                'reply_subject': '', 'reply_draft': '', 'money': [], 'order_no': ''})
-                reply = store.add(self.ACCOUNT, 'u2',
-                                  self.mail('Re: 견적 요청', '<b@x>', refs='<a@x>'))
+                root, reply = self.threaded_pair(store)
                 row = store.detail(reply)
                 turns = thread_context(store.thread_before(
-                    self.ACCOUNT, row['thread'], row['received']))
+                    self.ACCOUNT, row['thread'], reply))
                 self.assertEqual(len(turns), 1)
                 self.assertEqual(turns[0]['summary'], '9월 견적 검토 요청')
                 self.assertNotIn('비밀 본문', json.dumps(turns, ensure_ascii=False))
-                # 자기 자신은 맥락이 아니다: received<? 가 그것을 자른다.
-                self.assertEqual(store.thread_before(self.ACCOUNT, row['thread'],
-                                                     store.detail(root)['received']), [])
+                # 자기 자신은 맥락이 아니다 — 이제 시각이 아니라 제 행이 그것을 자른다.
+                self.assertEqual(
+                    store.thread_before(self.ACCOUNT, row['thread'], root), [])
             finally:
                 store.db.close()
+
+    def test_a_thread_collected_in_one_cycle_keeps_its_context(self):
+        """한 번의 수집이 원 메일과 답장을 같이 가져오는 것은 흔한 일이고, 그때 둘의
+        `received`는 같은 문자열이다 — Windows 시계는 15ms쯤마다 한 번 움직인다.
+
+        `received<?` 하나로 자르면 원 메일이 제 대화에서 빠지고, 답장은 맥락 없이
+        분석된다. 조용히: 맥락이 빈 것은 첫 메일도 마찬가지이기 때문이다. 시계를
+        묶어 두면 Windows 밖에서도 그대로 재현되고, CI의 Windows 다리에서 실제로
+        이렇게 무너졌다.
+        """
+        with tempfile.TemporaryDirectory() as folder:
+            with patch('mail_assistant.core.now',
+                       return_value='2026-09-11T01:00:00+00:00'):
+                store = Store(Path(folder) / 'mail.db')
+                try:
+                    root, reply = self.threaded_pair(store)
+                    rows = [store.detail(root), store.detail(reply)]
+                    self.assertEqual(rows[0]['received'], rows[1]['received'])
+                    turns = thread_context(store.thread_before(
+                        self.ACCOUNT, rows[1]['thread'], reply))
+                    self.assertEqual([turn['summary'] for turn in turns],
+                                     ['9월 견적 검토 요청'])
+                    # 그리고 그 한 틱 안에서도 순서는 한 방향이다.
+                    self.assertEqual(
+                        store.thread_before(self.ACCOUNT, rows[0]['thread'], root), [])
+                finally:
+                    store.db.close()
 
 
 class MoneyTests(unittest.TestCase):

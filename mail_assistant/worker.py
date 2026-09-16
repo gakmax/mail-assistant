@@ -88,7 +88,7 @@ def run(config, directory, stop, notify, wake=None):
                         # 이 메일이 속한 대화의 앞선 요약. 본문이 아니라 analyze()가
                         # 이미 값을 치른 답이고, 그래서 한 통에 700자 남짓이다.
                         turns = thread_context(store.thread_before(
-                            account, row['thread'], row['received'], THREAD_TURNS))
+                            account, row['thread'], row['id'], THREAD_TURNS))
                         if turns:
                             sent['thread'] = turns
                         ready[row['id']] = (row, parsed, sent)

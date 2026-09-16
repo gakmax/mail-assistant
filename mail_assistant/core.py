@@ -613,21 +613,33 @@ class Store:
                               (account, message_id)).fetchone()
         return row['thread'] if row else ''
 
-    def thread_before(self, account, thread, received, limit=3):
+    def thread_before(self, account, thread, ident, limit=3):
         """같은 대화에서 이 메일보다 먼저 온, 이미 분석된 메일. 오래된 것부터.
 
         Newest `limit` turns, handed back in reading order: an old thread's opening
         mail matters less to the turn being analysed than the two before it. Only
         analysed ones, because what is sent is the summary — analyze() already paid
         for that, and re-sending the bodies is the 240-second timeout.
+
+        'Before' is (received, rowid) against this mail's own, never `received` alone.
+        A Windows clock ticks about every 15ms, so one poll gives every mail it
+        collected the same `received` string — and a root and its reply arriving in
+        one cycle is the ordinary case, not a corner. With a plain `received<?` the
+        root compared equal, fell out of its own thread, and the reply was analysed
+        with no context at all: silently, because an empty context is also what a
+        first mail has. This is the same tie `page()` and `pending()` break in their
+        ORDER BY, except that here it decides membership rather than order, so it
+        has to be in the WHERE. The subquery is the mail's own row, which is also
+        what keeps it out of its own context.
         """
         if not thread:
             return []
         rows = self.db.execute(
             'SELECT subject, sender, received, result FROM mail '
-            'WHERE account=? AND thread=? AND received<? AND result IS NOT NULL '
+            'WHERE account=? AND thread=? AND result IS NOT NULL '
+            'AND (received, rowid) < (SELECT received, rowid FROM mail WHERE id=?) '
             'ORDER BY received DESC, rowid DESC LIMIT ?',
-            (account, thread, received, limit)).fetchall()
+            (account, thread, ident, limit)).fetchall()
         return list(reversed(rows))
 
     def thread_rows(self, account, thread, limit=50):
