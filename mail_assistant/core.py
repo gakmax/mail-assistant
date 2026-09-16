@@ -340,6 +340,28 @@ class Store:
                 title TEXT NOT NULL, start TEXT NOT NULL DEFAULT '',
                 deadline TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '',
                 handled TEXT NOT NULL DEFAULT '', created TEXT NOT NULL);
+            /* 거래처. 지금까지 거래처는 mail 을 sender_addr 로 묶은 결과일 뿐이라
+               표가 없었고, 그래서 아직 메일이 오지 않은 곳은 적어 둘 자리가 없었다.
+               이 표가 버는 것은 그것 하나가 아니다: 표시 이름은 보내는 쪽 클라이언트가
+               이번 주에 쓰기로 한 것이라 같은 사람이 세 이름으로 서는데, `name` 은
+               그 주소를 *뭐라고 부를지* 사람이 정해 두는 자리다. 키는 언제나 주소다. */
+            CREATE TABLE IF NOT EXISTS contact (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, account TEXT NOT NULL,
+                addr TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
+                memo TEXT NOT NULL DEFAULT '', created TEXT NOT NULL,
+                UNIQUE(account,addr));
+            /* 손으로 적은 금액. 분석이 읽은 금액은 result JSON 안에 살고 앞으로도
+               거기 산다 — 반복되는 값이라 컬럼이 될 수 없고, 새 표는 analyzed()·
+               reset()·delete() 와 어긋날 자리를 만든다. 여기 있는 것은 *메일에 적혀
+               있지 않은* 금액이다: 전화로 받은 견적, 계약서의 숫자. 메일이 없으므로
+               저 JSON 에는 들어갈 자리가 없고, money.entries() 가 두 곳을 함께 읽는다.
+               판정은 나뉘지 않는다 — 여기 든 값도 money_value() 를 그대로 지난다. */
+            CREATE TABLE IF NOT EXISTS money (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, account TEXT NOT NULL,
+                mail_id TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT '',
+                currency TEXT NOT NULL DEFAULT '', amount TEXT NOT NULL DEFAULT '',
+                label TEXT NOT NULL DEFAULT '', evidence TEXT NOT NULL DEFAULT '',
+                day TEXT NOT NULL DEFAULT '', created TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS briefing (
                 account TEXT NOT NULL, day TEXT NOT NULL, at TEXT NOT NULL,
                 result TEXT NOT NULL, PRIMARY KEY(account,day));
@@ -352,6 +374,22 @@ class Store:
                 error TEXT NOT NULL DEFAULT '', UNIQUE(account,uid));
         ''')
         self.migrate()
+
+    # 메일이 아닌 표에 붙는 칸들. `mail`의 목록과 따로 두는 것은 저쪽이 길고 저마다
+    # 이유가 길어서이고, 규칙은 같다 — ALTER TABLE ADD COLUMN 뿐이고, 설치된 데이터베이스가
+    # 수집한 메일의 유일한 사본이다.
+    SIDE_COLUMNS = {
+        # 직접 만든 일정에 메일을 붙인다. 달력의 키는 여전히 '@' + rowid 이고 이 칸은
+        # *여는 링크*다 — 키가 되면 is_event_key()가 가려내는 규칙이 무너지고,
+        # 메일 화면이 메일이 가질 수 없는 id 를 찾으러 간다.
+        'event': (('mail_id', "TEXT NOT NULL DEFAULT ''"),),
+        # 직접 적은 할 일에도 같은 링크, 그리고 카드 한 장에 다 적히지 않는 것을 위한 메모.
+        'todo': (('mail_id', "TEXT NOT NULL DEFAULT ''"),
+                 ('note', "TEXT NOT NULL DEFAULT ''")),
+        # 메모 벽의 순서. 0 은 '아직 정해지지 않았다'이고, 그때는 지금까지처럼
+        # 고정 → 최근 쓴 순으로 선다. 사람이 한 번 끌어다 놓으면 그 벽은 사람의 것이 된다.
+        'note': (('position', 'INTEGER NOT NULL DEFAULT 0'),),
+    }
 
     def migrate(self):
         """Add columns the app needs, leaving the installed database and its rows alone."""
@@ -395,6 +433,11 @@ class Store:
             for column, declaration in additions:
                 if column not in present:
                     self.db.execute(f'ALTER TABLE mail ADD COLUMN {column} {declaration}')
+            for table, columns in self.SIDE_COLUMNS.items():
+                held = {row['name'] for row in self.db.execute(f'PRAGMA table_info({table})')}
+                for column, declaration in columns:
+                    if column not in held:
+                        self.db.execute(f'ALTER TABLE {table} ADD COLUMN {column} {declaration}')
         self.backfill_headers()
         self.backfill_verdicts()
         self.backfill_replies()
@@ -706,14 +749,19 @@ class Store:
             params + [limit, offset]).fetchall()
         return rows, total
 
-    def add_todo(self, account, text, due=''):
+    def add_todo(self, account, text, due='', state='', note='', mail_id=''):
+        """`state` so a card can be added straight into 진행 or 완료, rather than
+        always landing in 대기 and being dragged. `mail_id` is a link the card can
+        open, not an owner: moving a hand-written todo never moves a mail's own
+        처리 상태, which is what tells it apart from the cards analysis makes."""
         with self.db:
-            cursor = self.db.execute('INSERT INTO todo(account,text,due,created) VALUES (?,?,?,?)',
-                                     (account, text, due, now()))
+            cursor = self.db.execute(
+                'INSERT INTO todo(account,text,state,due,note,mail_id,created) '
+                'VALUES (?,?,?,?,?,?,?)', (account, text, state, due, note, mail_id, now()))
         return cursor.lastrowid
 
     def todos(self, account):
-        return self.db.execute('SELECT id, text, state, due, created FROM todo '
+        return self.db.execute('SELECT id, text, state, due, note, mail_id, created FROM todo '
                                'WHERE account=? ORDER BY id', (account,)).fetchall()
 
     def set_todo_state(self, ident, state):
@@ -749,10 +797,28 @@ class Store:
         if mail_id is not None:
             where.append('mail_id=?')
             params.append(mail_id)
+        # `position = 0` first in the sort, not `position` itself: 0 means nobody has
+        # dragged this wall yet, and an unplaced memo has to fall to the back rather
+        # than to the front. Placed memos then run 1..n and the rest keep the order
+        # they always had, so the column needs no backfill and a wall that has never
+        # been touched is ordered exactly as before.
         return self.db.execute(
-            'SELECT id, mail_id, text, color, pinned, created, updated FROM note '
-            f"WHERE {' AND '.join(where)} ORDER BY pinned DESC, updated DESC, id DESC",
+            'SELECT id, mail_id, text, color, pinned, position, created, updated FROM note '
+            f"WHERE {' AND '.join(where)} "
+            'ORDER BY pinned DESC, (position = 0), position ASC, updated DESC, id DESC',
             params).fetchall()
+
+    def order_notes(self, ids):
+        """Write 1..n over the memos in the order the wall is now showing them.
+
+        Every visible memo is written, not just the one that moved: a sparse column
+        would mean the first drag on an untouched wall placed one card and left the
+        rest to the old sort, which reads as the card jumping somewhere it was not
+        dropped.
+        """
+        with self.db:
+            self.db.executemany('UPDATE note SET position=? WHERE id=?',
+                                ((place, ident) for place, ident in enumerate(ids, 1)))
 
     def set_note_text(self, ident, text):
         """Only the text moves `updated`: the wall is ordered by when it was written."""
@@ -805,16 +871,17 @@ class Store:
     # a date cannot be made to: this is the one way a person puts one on the calendar.
     # It is a table rather than a column because it belongs to no mail.
 
-    def add_event(self, account, title, start='', deadline='', note=''):
+    def add_event(self, account, title, start='', deadline='', note='', handled='', mail_id=''):
         with self.db:
             cursor = self.db.execute(
-                'INSERT INTO event(account,title,start,deadline,note,created) '
-                'VALUES (?,?,?,?,?,?)', (account, title, start, deadline, note, now()))
+                'INSERT INTO event(account,title,start,deadline,note,handled,mail_id,created) '
+                'VALUES (?,?,?,?,?,?,?,?)',
+                (account, title, start, deadline, note, handled, mail_id, now()))
         return cursor.lastrowid
 
     def events(self, account):
         return self.db.execute(
-            'SELECT id, title, start, deadline, note, handled, created FROM event '
+            'SELECT id, title, start, deadline, note, handled, mail_id, created FROM event '
             'WHERE account=? ORDER BY id', (account,)).fetchall()
 
     def set_event_handled(self, ident, state):
@@ -825,6 +892,60 @@ class Store:
     def delete_event(self, ident):
         with self.db:
             self.db.execute('DELETE FROM event WHERE id=?', (ident,))
+
+    # 거래처. senders() 가 세는 것은 메일이고, 이쪽은 사람이 적어 둔 것이다 — 화면은
+    # 주소로 둘을 겹쳐 그린다. 숫자는 언제나 집계에서 오고, 이름은 여기 있으면 여기서 온다.
+
+    def add_contact(self, account, addr, name='', memo=''):
+        """주소는 소문자로 눕혀 둔다. address_of() 가 그렇게 하고, 겹쳐 그리려면
+        양쪽이 같은 모양이어야 한다."""
+        with self.db:
+            cursor = self.db.execute(
+                'INSERT OR IGNORE INTO contact(account,addr,name,memo,created) '
+                'VALUES (?,?,?,?,?)', (account, addr.strip().lower(), name, memo, now()))
+        return cursor.lastrowid
+
+    def contacts(self, account):
+        return self.db.execute(
+            'SELECT id, addr, name, memo, created FROM contact WHERE account=? '
+            'ORDER BY addr', (account,)).fetchall()
+
+    def set_contact(self, ident, name, memo=''):
+        with self.db:
+            self.db.execute('UPDATE contact SET name=?, memo=? WHERE id=?',
+                            (name, memo, ident))
+
+    def delete_contact(self, ident):
+        """메일은 건드리지 않는다 — 거래처 카드를 지워도 그 주소로 온 메일과 그 숫자는
+        그대로 서 있고, 사라지는 것은 사람이 붙여 둔 이름과 메모뿐이다."""
+        with self.db:
+            self.db.execute('DELETE FROM contact WHERE id=?', (ident,))
+
+    # 손으로 적은 금액. 값은 문자열 그대로 둔다 — money_value() 가 숫자로 읽는 일을
+    # 맡고 있고, 여기서 먼저 int() 로 바꾸면 '못 읽었다'와 '0원'이 같은 값이 된다.
+
+    def add_money(self, account, amount, currency='', kind='', label='',
+                  evidence='', day='', mail_id=''):
+        with self.db:
+            cursor = self.db.execute(
+                'INSERT INTO money(account,mail_id,kind,currency,amount,label,evidence,day,created) '
+                'VALUES (?,?,?,?,?,?,?,?,?)',
+                (account, mail_id, kind, currency, amount, label, evidence, day, now()))
+        return cursor.lastrowid
+
+    def money(self, account):
+        return self.db.execute(
+            'SELECT id, mail_id, kind, currency, amount, label, evidence, day, created '
+            'FROM money WHERE account=? ORDER BY day DESC, id DESC', (account,)).fetchall()
+
+    def set_money_row(self, ident, amount, currency, kind='', label=''):
+        with self.db:
+            self.db.execute('UPDATE money SET amount=?, currency=?, kind=?, label=? WHERE id=?',
+                            (amount, currency, kind, label, ident))
+
+    def delete_money(self, ident):
+        with self.db:
+            self.db.execute('DELETE FROM money WHERE id=?', (ident,))
 
     def unedited_drafts(self, account):
         """Analysed, unhandled, not edited by a person. overview.review_queue() then

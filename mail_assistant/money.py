@@ -92,17 +92,65 @@ def entry_of(item, row):
         # 모델이 확신하지 못했거나, 우리가 숫자로 읽지 못했거나, 통화를 모르거나.
         'review': review,
         'index': item.get('index', 0),
+        # 분석이 읽은 줄은 제 행이 없다 — (메일, index)가 그 손잡이다. 손으로 적은 줄만
+        # `row`를 들고 오고, 화면은 이 한 칸으로 둘을 가른다.
+        'row': None,
     }
 
 
-def entries(rows):
-    """분석된 메일에서 금액 줄을 전부. 없는 메일은 그냥 없다.
+# 사람이 적은 줄의 index. 한 메일 안에서 적힌 순서를 뒤집어 세는 자리라 음수가 들어갈
+# 일이 없고, 이 값은 손으로 적은 줄끼리의 정렬에만 쓰인다.
+MANUAL_INDEX = 0
+
+
+def manual_entry(row, subjects=None):
+    """money 표의 한 줄을, 분석이 읽은 줄과 똑같은 모양으로.
+
+    같은 모양이어야 하는 이유는 화면이 아니라 합계다 — totals()가 두 종류의 줄을
+    구별할 수 있으면, 그 구별이 언젠가 '손으로 적은 것은 좀 더 믿어도 되지 않나'가
+    된다. 판정은 entry_of()의 것 그대로이고, 다만 모델이 붙이는 needs_review 가
+    없다: 모델이 스스로 헷갈린 것과 사람이 적어 넣은 것은 다른 일이다. 대신 못 읽은
+    숫자와 모르는 통화는 여기서도 그대로 빠진다.
+    """
+    currency = str(row['currency'] or '').strip().upper()
+    if currency not in CURRENCY_CODES:
+        currency = UNKNOWN_CURRENCY
+    kind = str(row['kind'] or '').strip()
+    value = money_value(row['amount'])
+    mail_id = str(row['mail_id'] or '')
+    day = str(row['day'] or '') or local_text(row['created'], '%Y-%m-%d')
+    return {
+        'mail': mail_id,
+        'subject': (subjects or {}).get(mail_id, ''),
+        'sender': '', 'received': day, 'day': day,
+        'handled': False,
+        'kind': kind if kind in KINDS else '기타',
+        'currency': currency, 'value': value,
+        'text': money_text(value, currency) or str(row['amount'] or ''),
+        'label': ' '.join(str(row['label'] or '').split()),
+        'evidence': ' '.join(str(row['evidence'] or '').split()),
+        'order_no': '',
+        'edited': False,
+        'review': value is None or currency == UNKNOWN_CURRENCY,
+        'index': MANUAL_INDEX,
+        # 지우기와 고치기가 어느 줄인지 알아야 한다. 분석이 읽은 줄은 (메일, index)로
+        # 짚지만 이쪽은 제 행이 있고, 그 행의 id 가 유일한 손잡이다.
+        'row': row['id'],
+    }
+
+
+def entries(rows, manual=(), subjects=None):
+    """분석된 메일에서 금액 줄을 전부, 그리고 사람이 적어 둔 줄을 그 옆에.
 
     events가 그렇듯 money도 result JSON 안에 산다 — 반복되는 값이라 컬럼이 될 수 없고,
     새 테이블은 analyzed()·reset()·delete() 세 군데와 어긋날 자리를 만든다. 달력이 이미
     같은 방식으로 돌고 있다(overview.schedule_entries).
+
+    `manual`은 그 규칙의 반대쪽이다 — 메일에 적혀 있지 않은 금액(전화로 받은 견적,
+    계약서의 숫자)은 저 JSON 에 들어갈 자리가 아예 없다. 두 곳에서 읽어 한 모양으로
+    내놓는 것이 여기이고, totals()부터 아래로는 어느 쪽에서 왔는지 알지 못한다.
     """
-    found = []
+    found = [manual_entry(row, subjects) for row in manual]
     for row in rows:
         if not row['result']:
             continue

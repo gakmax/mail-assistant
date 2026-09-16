@@ -71,6 +71,9 @@ CARD_TONES = {'긴급·높음': css_color(URGENT), f'{DUE_DAYS}일 내 마감': 
               '검토 전 초안': SERIES, WAITING: css_color(SOON),
               FAILED_CARD: css_color(URGENT)}
 REFRESH_SECONDS = 5.0
+# 나가는 줄이 제 높이를 접는 데 주는 시간. THEME 의 --dur-base 와 같은 길이이고,
+# 둘이 갈라지면 목록이 애니메이션 도중에 다시 그려져 줄이 반쯤 접힌 채 사라진다.
+LEAVE_SECONDS = 0.2
 # 실행 and 메일 read their own numbers every second: both are screens somebody opens
 # *because* something is moving, and five seconds of a still picture reads as a hang.
 # 대시보드 keeps the slower beat — its charts and tallies are a day's shape, not a
@@ -413,6 +416,9 @@ THEME = f'''
   --dur-fast:.12s; --dur-base:.2s; --dur-slow:.32s;
   --ease:cubic-bezier(.22,.61,.36,1);
   --ease-out:cubic-bezier(.16,1,.3,1);
+  /* One beat between two rows arriving together. It is not a duration — nothing
+     lasts this long — so it is its own name rather than a fourth rung. */
+  --stagger:.03s;
   /* Pressed is an overlay on the resting fill, never a shadow, and disabled dims
      the whole node rather than repainting it — a button that greys its ground and
      keeps its label has stopped looking like the button it still is. */
@@ -1350,6 +1356,129 @@ a.ma-sender:hover {{
 /* The 메일 detail, opened over the list rather than under it: wide enough for the two
    columns and the draft, short enough that the page behind it still frames it. */
 .ma-modal {{ width:min(1060px, 95vw); max-width:95vw; max-height:86vh; overflow-y:auto; }}
+
+/* ── 무언가를 적어 넣는 창 ───────────────────────────────────────────────────
+   버튼 하나가 여는 창이고, 안에 있는 것은 줄줄이 늘어선 입력칸이 아니라 위계가 있는
+   폼이다. TDS 의 dialog 규격: radius-2xl, 안쪽 24px, shadow-3, 그리고 48px CTA 둘.
+   토스는 CTA 를 세로로 쌓지만 그것은 한 손 엄지의 계산이고, 이 앱의 창은 1440px 이라
+   가로로 둔다 — 좁아지면 아래에서 다시 쌓인다. */
+.ma-sheet {{
+  width:min(520px, 94vw); max-height:88vh; display:flex; flex-direction:column;
+  background:var(--card); border-radius:var(--r-2xl); box-shadow:var(--shadow-3);
+  overflow:hidden;
+}}
+.ma-sheet__body {{ padding:24px; overflow-y:auto; }}
+.ma-sheet__title {{
+  display:block; font-size:var(--fs-t1); font-weight:700; letter-spacing:-.01em;
+  line-height:1.45; margin-bottom:6px;
+}}
+.ma-sheet__sub {{
+  display:block; font-size:var(--fs-b2); line-height:1.5; color:var(--subtle);
+  margin-bottom:20px;
+}}
+/* CTA 위의 보호 그라디언트. 토스가 chrome 에 허용하는 세 예외 중 하나이고, 여기서
+   막는 것은 스크롤되는 마지막 칸이 버튼 밑에서 잘려 보이는 일이다. */
+.ma-sheet__cta {{
+  position:relative; display:flex; gap:8px; padding:0 24px 24px; flex:none;
+}}
+.ma-sheet__cta:before {{
+  content:''; position:absolute; left:0; right:0; bottom:100%; height:28px;
+  background:linear-gradient(to top, var(--card), rgba(255,255,255,0));
+  pointer-events:none;
+}}
+.ma-sheet__cta .q-btn {{
+  flex:1; min-height:48px; border-radius:var(--r-l);
+  font-size:var(--fs-t2); font-weight:700;
+}}
+/* 취소는 ghost 가 아니라 secondary 다 — 48px 를 차지하면서 바탕이 없으면 눌리는
+   것인지 여백인지가 모양으로 말해지지 않는다. TDS: fill-secondary + text-primary. */
+.ma-sheet__cta .q-btn:first-child {{
+  background:var(--sunken) !important; color:var(--ink) !important;
+}}
+.ma-sheet__cta .q-btn:first-child:hover {{ background:var(--line) !important; }}
+.ma-sheet__cta .q-btn:last-child {{ flex:1.7; }}
+/* 폼 안의 segmented 는 칸을 꽉 채운다. 라벨 밑에 붙는 값이라, 폭이 제각각이면
+   어느 것이 한 칸인지가 읽히지 않는다. */
+.ma-sheet__body .ma-seg {{ display:flex; width:100%; }}
+.ma-sheet__body .ma-seg .q-btn {{ flex:1; min-height:40px; }}
+@media (max-width:460px) {{
+  .ma-sheet__cta {{ flex-direction:column-reverse; }}
+  .ma-sheet__cta .q-btn, .ma-sheet__cta .q-btn:last-child {{ flex:none; width:100%; }}
+}}
+/* 폼의 라벨. TDS label-s(13/600)에 8px 을 띄운다 — 라벨과 그 칸은 밀접 결합이고,
+   다음 라벨까지는 20px 이라 한 칸이 어디서 끝나는지가 간격으로 읽힌다. */
+.ma-lab {{
+  display:block; font-size:var(--fs-b3); font-weight:600; line-height:1.25;
+  color:var(--subtle); margin:20px 0 8px;
+}}
+.ma-lab:first-child {{ margin-top:0; }}
+.ma-lab__opt {{ font-weight:400; color:var(--muted); }}
+.ma-lab__req {{ color:var(--urgent); margin-left:2px; }}
+.ma-say {{
+  display:block; margin:8px 0 0; font-size:var(--fs-b3); line-height:1.5; color:var(--muted);
+}}
+.ma-say b {{ font-weight:600; color:var(--subtle); }}
+
+/* 날짜와 시각처럼 한 값을 둘로 나눠 받는 칸. 좁아지면 쌓인다 — 시각 칸이 120px
+   밑으로 눌리면 네이티브 date/time 위젯의 아이콘이 글자를 덮는다. */
+.ma-pair {{ display:grid; grid-template-columns:minmax(0,1fr) 132px; gap:8px; }}
+@media (max-width:540px) {{ .ma-pair {{ grid-template-columns:minmax(0,1fr); }} }}
+
+/* 고른 값은 chip 이다. brand 변형(blue-50 바탕 + blue-500 글자)은 TDS 가 '이건
+   지금 켜져 있다'에 주는 모양이고, 붙인 메일이 바로 그것이다. */
+.ma-chip {{
+  display:flex; align-items:center; gap:8px; min-height:44px;
+  padding:8px 8px 8px 14px; border-radius:var(--r-full);
+  background:var(--brand-soft); color:var(--brand);
+}}
+.ma-chip__subject {{
+  font-size:var(--fs-b3); font-weight:600; color:var(--ink);
+  min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}}
+/* 고를 것이 짧으면 trigger 옆에 편다 — 하단 시트로 떨어뜨리지 않는다는 TDS 의
+   menu 규칙이고, 여기서는 폼 한가운데라 창을 하나 더 띄울 자리도 없다. */
+.ma-pick {{
+  margin-top:6px; border:1px solid var(--line); border-radius:var(--r-l);
+  background:var(--card); box-shadow:var(--shadow-1); padding:4px;
+  max-height:232px; overflow-y:auto;
+}}
+.ma-pick__row {{
+  display:block; padding:9px 11px; border-radius:var(--r-s); cursor:pointer;
+  transition:background var(--dur-fast) var(--ease);
+}}
+.ma-pick__row:hover {{ background:var(--sunken); }}
+.ma-pick__subject {{
+  display:block; font-size:var(--fs-b3); font-weight:600; color:var(--ink);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}}
+
+/* ── 들어오고 나가는 것 ──────────────────────────────────────────────────────
+   줄 하나가 늘거나 줄 때, 목록 전체가 다시 그려진 것처럼 보이면 안 된다. 들어오는
+   줄만 제자리로 내려앉고, 나가는 줄만 제 높이를 접는다 — grid-template-rows 로 접는
+   것은 height:auto 에서 애니메이션이 되지 않기 때문이고, 같은 이유로 대시보드의
+   수집 기록 접기도 0fr↔1fr 을 쓴다. 전부 --dur-* 안이다. */
+@keyframes ma-in {{ from {{ opacity:0; transform:translateY(-6px); }} }}
+@keyframes ma-out {{
+  from {{ opacity:1; grid-template-rows:1fr; }}
+  to {{ opacity:0; grid-template-rows:0fr; }}
+}}
+.ma-in {{ animation:ma-in var(--dur-base) var(--ease) backwards; }}
+.ma-out {{
+  display:grid; grid-template-rows:1fr; overflow:hidden;
+  animation:ma-out var(--dur-base) var(--ease) forwards;
+}}
+.ma-out > * {{ min-height:0; }}
+/* 한 번에 여러 줄이 들어올 때는 차례로. 여섯 줄을 넘기면 지연을 더 쌓지 않는다 —
+   일곱째 줄이 0.5초 뒤에 나타나면 그것은 리듬이 아니라 지연이다. */
+.ma-in:nth-child(2) {{ animation-delay:calc(var(--stagger) * 1); }}
+.ma-in:nth-child(3) {{ animation-delay:calc(var(--stagger) * 2); }}
+.ma-in:nth-child(4) {{ animation-delay:calc(var(--stagger) * 3); }}
+.ma-in:nth-child(5) {{ animation-delay:calc(var(--stagger) * 4); }}
+.ma-in:nth-child(n+6) {{ animation-delay:calc(var(--stagger) * 5); }}
+@media (prefers-reduced-motion: reduce) {{
+  .ma-in, .ma-out {{ animation:none; }}
+  .ma-out {{ display:none; }}
+}}
 </style>
 '''
 
@@ -1920,11 +2049,21 @@ def board(rows, todos):
             'due': next((event.get('deadline', '')[:10] for event in result.get('events', [])
                          if event.get('deadline')), ''),
             'priority': result.get('priority', ''),
+            # A mail card *is* its mail, so the link is the key. A hand-written card
+            # carries one only when somebody attached it.
+            'mail': row['id'],
         })
     for todo in todos:
         state = todo['state'] if todo['state'] in lanes else ''
+        held = todo['mail_id'] if 'mail_id' in todo.keys() else ''
+        written = (todo['note'] if 'note' in todo.keys() else '') or ''
+        # The card's second line is the memo when there is one, and '직접 추가' when
+        # there is not: a mail card spends that line on its subject, so a hand-written
+        # card that has something to say there should say it rather than repeat what
+        # the lane already shows.
         lanes[state].append({'kind': 'todo', 'key': todo['id'], 'text': todo['text'],
-                             'note': '직접 추가', 'due': todo['due'], 'priority': ''})
+                             'note': written or '직접 추가', 'due': todo['due'],
+                             'priority': '', 'mail': held})
     return lanes
 
 
@@ -2872,6 +3011,129 @@ def card(title=None, icon=None, flush=False, note=''):
     return box
 
 
+# 무언가를 적어 넣는 창이 쓰는 조각들. 네 화면(일정·할 일·거래처·금액)이 같은 것을
+# 쓰는 이유는 모양이 아니라 규칙이다 — 넷 다 '적을 것이 몇 개 더 있는 폼'이고, 하나가
+# 라벨을 다르게 붙이기 시작하면 그것이 곧 두 번째 폼 언어가 된다.
+SHEET_ADD, SHEET_CANCEL = '추가하기', '취소'
+# 메일 붙이기 피커가 한 번에 내놓는 줄. 더 있으면 더 적어 좁히게 한다 — 스무 줄짜리
+# 메뉴는 고르는 것이 아니라 다시 읽는 것이다.
+PICK_SHOWN = 6
+PICK_TIP = '제목이나 보낸 사람으로 찾기'
+
+
+def sheet(title, subtitle='', *, add=SHEET_ADD, on_add=None):
+    """A dialog that takes something down: a title, a form, and two buttons.
+
+    Returns (dialog, body) so the caller fills the body and the frame is decided in
+    one place. The 확인 button is the card's one brand fill — everything else in a
+    sheet is secondary, which is the rule the 설정 page already follows per card.
+    """
+    from nicegui import ui
+    box = ui.dialog()
+    with box, ui.element('div').classes('ma-sheet'):
+        body = ui.element('div').classes('ma-sheet__body')
+        with body:
+            ui.label(title).classes('ma-sheet__title')
+            if subtitle:
+                ui.label(subtitle).classes('ma-sheet__sub')
+        with ui.element('div').classes('ma-sheet__cta'):
+            ui.button(SHEET_CANCEL, on_click=box.close).props('flat no-caps')
+            ui.button(add, on_click=on_add).props('unelevated no-caps')
+    return box, body
+
+
+def lab(text, *, need=False, opt=''):
+    """폼 한 칸의 이름. 별표는 빨강 하나뿐이고, '선택'은 굵지 않은 회색이다."""
+    from nicegui import ui
+    with ui.element('span').classes('ma-lab'):
+        ui.html(f'{escape(text)}'
+                + ('<span class="ma-lab__req">*</span>' if need else '')
+                + (f' <span class="ma-lab__opt">{escape(opt)}</span>' if opt else ''))
+
+
+def say(text):
+    """칸 밑의 한 줄. 무엇을 적어야 하는지가 아니라, 적은 것이 어떻게 되는지를 말한다."""
+    from nicegui import ui
+    return ui.label(text).classes('ma-say')
+
+
+def pick_rows(rows, query, shown=PICK_SHOWN):
+    """메일 붙이기 피커가 그릴 줄. 제목과 보낸 사람 둘 다에서 찾는다.
+
+    적은 것이 없으면 빈 목록을 돌려준다 — 최근 메일 여섯 통을 미리 펼치면 그 여섯이
+    답처럼 보이고, 붙일 메일은 대개 그 여섯 안에 없다.
+    """
+    wanted = ' '.join(str(query or '').split()).lower()
+    if not wanted:
+        return []
+    found = [row for row in rows
+             if wanted in f"{row['subject'] or ''} {row['sender'] or ''}".lower()]
+    return found[:shown]
+
+
+def mail_picker(state, rows, *, on_change=None):
+    """메일 하나를 골라 붙이거나, 붙인 것을 뗀다. `state['mail']`이 답이다.
+
+    붙은 메일은 chip 이다 — 고르고 나면 그것은 목록의 한 줄이 아니라 이 폼이 들고 있는
+    값이고, chip 은 TDS 가 '고른 값'에 주는 모양이다. 뗄 수 없는 값은 폼이 아니라 사실
+    이므로 × 는 늘 붙어 있다.
+    """
+    from nicegui import ui
+
+    def hold(row):
+        state['mail'] = {'id': row['id'], 'subject': row['subject'] or '(제목 없음)',
+                         'sender': display_name(row['sender']) or row['sender'] or ''}
+        state['query'] = ''
+        panel.refresh()
+        if on_change:
+            on_change()
+
+    def drop():
+        state['mail'] = None
+        state['query'] = ''
+        panel.refresh()
+        if on_change:
+            on_change()
+
+    def look(text):
+        state['query'] = text
+        panel.refresh()
+
+    @ui.refreshable
+    def panel():
+        held = state.get('mail')
+        if held:
+            with ui.element('div').classes('ma-chip'):
+                ui.icon('mail').style(f'color:{BRAND};font-size:var(--ic-s)')
+                ui.label(held['subject']).classes('ma-chip__subject')
+                if held['sender']:
+                    ui.label(held['sender']).classes('ma-meta__item')
+                ui.space()
+                ui.button(icon='close', on_click=drop) \
+                    .props('flat dense round size=sm').tooltip('메일 떼기')
+            return
+        ui.input(placeholder=PICK_TIP, value=state.get('query', ''),
+                 on_change=lambda event: look(event.value)) \
+            .props('dense outlined clearable').classes('w-full')
+        found = pick_rows(rows, state.get('query', ''))
+        if not state.get('query'):
+            return
+        with ui.element('div').classes('ma-pick'):
+            if not found:
+                empty('그 말이 든 메일이 없어요.')
+                return
+            for row in found:
+                with ui.element('div').classes('ma-pick__row ma-in') \
+                        .on('click', lambda r=row: hold(r)):
+                    ui.label(row['subject'] or '(제목 없음)').classes('ma-pick__subject')
+                    ui.label(f"{display_name(row['sender']) or row['sender'] or ''} · "
+                             f"{local_text(row['received'], '%Y-%m-%d')}") \
+                        .classes('ma-meta__item')
+
+    panel()
+    return panel
+
+
 def grid(minimum=300, gap=14):
     """auto-fit columns that collapse to one on a narrow window, which a laptop is."""
     from nicegui import ui
@@ -3487,8 +3749,22 @@ def manual_rows(events):
     """직접 추가한 일정 as the panel under the calendar lists them, newest first."""
     return [{'id': row['id'], 'title': row['title'],
              'start': event_text(row['start']), 'deadline': event_text(row['deadline']),
-             'note': row['note'], 'done': row['handled'] == HANDLED}
+             'note': row['note'], 'done': row['handled'] == HANDLED,
+             'mail': row['mail_id'] if 'mail_id' in row.keys() else '',
+             'kind': event_kind({'start': row['start'], 'deadline': row['deadline']})}
             for row in reversed(list(events))]
+
+
+def stamp(day, clock):
+    """'2026-09-25' + '15:00' → '2026-09-25 15:00'. 날짜가 없으면 시각도 없다.
+
+    시각만 적힌 일정은 달력에 올라갈 자리가 없다 — parse_day()가 날짜를 먼저 찾고,
+    찾지 못하면 그 항목은 확인 필요가 된다. 여기서 버리는 편이 화면에 남겨 두고
+    달력에서 사라지게 하는 것보다 낫다.
+    """
+    day = str(day or '').strip()
+    clock = str(clock or '').strip()
+    return f'{day} {clock}'.strip() if day else ''
 
 
 def manual_panel(directory, account, token, on_change):
@@ -3498,61 +3774,123 @@ def manual_panel(directory, account, token, on_change):
     mentions a date cannot be made to mention one. The calendar above is drawn from a
     payload baked into the page, so a change here reloads rather than repaints: there
     is no server-side handle on a FullCalendar that was built in the browser.
+
+    The four boxes that used to sit open on this card are a sheet now. What that buys
+    is not tidiness: a row of placeholders can only ask for four things, and the two
+    worth asking for — 이 일정이 끝났는가, 어느 메일의 일정인가 — had nowhere to go.
     """
     from nicegui import ui
     rows = manual_rows(store(directory).events(account)) if account else []
+    mails = list(store(directory).page(account, limit=200)) if account else []
 
-    def add():
-        problem = event_error(title.value, start.value, deadline.value)
-        if problem:
-            toast(problem, mark='fail')
-            return
-        if not account:
-            toast('아직 설정이 비어 있어요. 설정 화면에서 메일 주소부터 저장해 주세요', mark='fail')
-            return
-        store(directory).add_event(account, (title.value or '').strip(),
-                                   (start.value or '').strip(),
-                                   (deadline.value or '').strip(),
-                                   (note.value or '').strip())
-        on_change()
+    def opened():
+        """Every open starts blank. A sheet that remembers the last thing typed is a
+        form somebody has to clear before they can use it."""
+        state = {'mail': None, 'query': ''}
+        box, body = sheet('일정 추가', '분석이 잡지 못한 일정을 손으로 올려요.',
+                          on_add=lambda: keep())
 
-    def drop(ident):
+        def keep():
+            start = stamp(began.value, began_at.value)
+            deadline = stamp(due.value, due_at.value)
+            problem = event_error(title.value, start, deadline)
+            if problem:
+                toast(problem, mark='fail')
+                return
+            if not account:
+                toast('아직 설정이 비어 있어요. 설정 화면에서 메일 주소부터 저장해 주세요',
+                      mark='fail')
+                return
+            store(directory).add_event(
+                account, (title.value or '').strip(), start, deadline,
+                (memo.value or '').strip(),
+                handled=HANDLED if done.value else '',
+                mail_id=(state['mail'] or {}).get('id', ''))
+            box.close()
+            toast('일정을 올렸어요', mark='done')
+            on_change()
+
+        with body:
+            lab('일정 제목', need=True)
+            title = ui.input(placeholder='세금계산서 발행 마감') \
+                .props('dense outlined autofocus').classes('w-full')
+
+            lab('마감', opt='언제까지인가')
+            with ui.element('div').classes('ma-pair'):
+                due = ui.input().props('dense outlined type=date')
+                due_at = ui.input().props('dense outlined type=time')
+
+            lab('시작', opt='언제 있는 일인가')
+            with ui.element('div').classes('ma-pair'):
+                began = ui.input().props('dense outlined type=date')
+                began_at = ui.input().props('dense outlined type=time')
+            say('둘 중 하나만 있어도 돼요. 마감이 있으면 마감으로, 시작만 있으면 '
+                '시작으로 달력에 올라가요.')
+
+            lab('상태')
+            done = ui.toggle({False: '대기', True: '완료'}, value=False) \
+                .props('dense unelevated no-caps toggle-color=primary').classes('ma-seg')
+
+            lab('메일 붙이기', opt='선택')
+            mail_picker(state, mails)
+            say('달력의 이 일정에서 그 메일을 바로 열 수 있어요. 일정 자체는 여전히 '
+                '직접 만든 것이라 Excel 일정 시트에는 나가지 않아요.')
+
+            lab('메모', opt='선택')
+            memo = ui.textarea(placeholder='현장 직접 방문, 주차 등록 필요') \
+                .props('dense outlined autogrow').classes('w-full')
+        box.open()
+
+    def drop(ident, row):
+        """The row folds before the panel is rebuilt. on_change() here is a page
+        reload — see the docstring — so the fold is the only thing that says which
+        row went, and it has to finish before the reload takes the list with it."""
         store(directory).delete_event(ident)
-        on_change()
+        row.classes(add='ma-out')
+        ui.timer(LEAVE_SECONDS, on_change, once=True)
+        toast('일정을 지웠어요', mark='done')
 
-    with card('직접 추가한 일정', 'edit_calendar'):
-        ui.label(f'분석이 잡지 못한 일정을 손으로 올립니다. 날짜는 {EVENT_HINT} 형식이고, '
-                 '시작과 마감 중 하나만 있어도 돼요. 메일에 딸리지 않으므로 누를 메일이 '
-                 '없고, Excel 일정 시트에는 나가지 않아요.').classes('ma-lede')
-        with ui.element('div').style('display:flex;gap:8px;flex-wrap:wrap;'
-                                     'align-items:center;margin-bottom:12px'):
-            title = ui.input(placeholder='일정 제목').props('dense outlined') \
-                .style('flex:2 1 220px')
-            start = ui.input(placeholder='시작 2026-09-22 15:00').props('dense outlined') \
-                .style('flex:1 1 180px')
-            deadline = ui.input(placeholder='마감 2026-09-22').props('dense outlined') \
-                .style('flex:1 1 180px')
-            note = ui.input(placeholder='메모 (선택)').props('dense outlined') \
-                .style('flex:1 1 160px')
-            ui.button('추가', icon='add', on_click=add).props('unelevated dense no-caps')
-        if not rows:
-            empty('직접 추가한 일정이 없어요.')
-            return
-        for row in rows:
-            with ui.element('div').classes('ma-row'):
-                ui.label(row['title']) \
-                    .style(f"color:{MUTED if row['done'] else INK};font-size:13px;"
-                           'font-weight:500'
-                           + (';text-decoration:line-through' if row['done'] else ''))
-                ui.label(f"시작 {row['start']} · 마감 {row['deadline']}") \
-                    .classes('ma-meta__item')
-                if row['note']:
-                    ui.label(row['note']).classes('ma-meta__item')
-                if row['done']:
-                    tag('완료', MUTED, SUNKEN)
-                ui.space()
-                ui.button(icon='delete_outline', on_click=lambda i=row['id']: drop(i)) \
-                    .props('flat dense round text-color=negative').tooltip('삭제')
+    with card() as box:
+        with box, ui.element('div').classes('ma-head'):
+            ui.icon('edit_calendar').style(f'color:{MUTED};font-size:var(--ic-m)')
+            ui.label('직접 추가한 일정').classes('ma-head__title')
+            if rows:
+                tag(f'{len(rows)}개')
+            ui.space()
+            ui.button('일정 추가', icon='add', on_click=opened) \
+                .props('unelevated dense no-caps')
+        with box:
+            ui.label('분석이 잡지 못한 일정을 손으로 올려요. 메일에 붙여 두면 달력에서 '
+                     '그 메일을 바로 열 수 있어요. Excel 일정 시트에는 나가지 않아요.') \
+                .classes('ma-lede')
+            if not rows:
+                empty('직접 추가한 일정이 없어요.')
+                return
+            for row in rows:
+                line = ui.element('div').classes('ma-row ma-in')
+                with line:
+                    kind_tone = css_color(COLORS[row['kind']])
+                    tag(row['kind'], kind_tone, soft_of(kind_tone))
+                    ui.label(row['title']) \
+                        .style(f"color:{MUTED if row['done'] else INK};"
+                               'font-size:var(--fs-b3);font-weight:600'
+                               + (';text-decoration:line-through' if row['done'] else ''))
+                    ui.label(f"시작 {row['start']} · 마감 {row['deadline']}") \
+                        .classes('ma-meta__item')
+                    if row['note']:
+                        ui.label(row['note']).classes('ma-meta__item')
+                    if row['done']:
+                        tag('완료', MUTED, SUNKEN)
+                    ui.space()
+                    if row['mail']:
+                        ui.button(icon='mail',
+                                  on_click=lambda m=row['mail']: ui.navigate.to(
+                                      href('/mail', token, id=m))) \
+                            .props('flat dense round size=sm color=grey-7') \
+                            .tooltip('붙여 둔 메일 열기')
+                    ui.button(icon='delete_outline',
+                              on_click=lambda i=row['id'], e=line: drop(i, e)) \
+                        .props('flat dense round text-color=negative').tooltip('삭제')
 
 
 def todo_tally(counts, token):
@@ -5943,18 +6281,59 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             toast(said, mark='done')
 
         def add():
-            text = (entry.value or '').strip()
-            if not text:
-                toast('할 일을 입력해 주세요', mark='fail')
-                return
+            """A sheet, not two boxes on the board.
+
+            The two boxes could ask for a name and a date and nothing else, so a card
+            always landed in 대기 and always belonged to no mail — both of which were
+            then a drag and a hunt away. 어느 칸에 is the same `state` column the
+            kanban already moves, so the sheet is not adding a concept, it is asking
+            for one the board has always had.
+            """
             if not account:
-                toast('설정을 먼저 저장해 주세요', mark='fail')
+                toast('아직 설정이 비어 있어요. 설정 화면에서 메일 주소부터 저장해 주세요',
+                      mark='fail')
                 return
-            store(directory).add_todo(account, text, (due.value or '').strip())
-            bump()
-            entry.set_value('')
-            due.set_value('')
-            lanes.refresh()
+            state = {'mail': None, 'query': ''}
+            mails = list(store(directory).page(account, limit=200))
+            box, body = sheet('할 일 추가', '메일에서 나온 다음 행동과 한 판에 서요.',
+                              on_add=lambda: keep())
+
+            def keep():
+                text = (entry.value or '').strip()
+                if not text:
+                    toast('할 일을 적어 주세요', mark='fail')
+                    return
+                store(directory).add_todo(
+                    account, text, (due.value or '').strip(), state=lane.value or '',
+                    note=(memo.value or '').strip(),
+                    mail_id=(state['mail'] or {}).get('id', ''))
+                bump()
+                box.close()
+                toast(f"{dict(COLUMNS)[lane.value or '']} 칸에 올렸어요", mark='done')
+                lanes.refresh()
+
+            with body:
+                lab('할 일', need=True)
+                entry = ui.input(placeholder='A26090135 발주서 회신') \
+                    .props('dense outlined autofocus').classes('w-full')
+
+                lab('어느 칸에')
+                lane = ui.toggle({key: name for key, name in COLUMNS}, value='') \
+                    .props('dense unelevated no-caps toggle-color=primary').classes('ma-seg')
+
+                lab('마감', opt='선택')
+                due = ui.input().props('dense outlined type=date').classes('w-full')
+
+                lab('메일 붙이기', opt='선택')
+                mail_picker(state, mails)
+                say('카드에 메일 열기 버튼이 생겨요. 분석이 만든 카드와 달리 이 카드를 '
+                    '옮겨도 그 메일의 처리 상태는 따라 움직이지 않아요. 내가 적은 할 일이지 '
+                    '메일의 다음 행동이 아니니까요.')
+
+                lab('메모', opt='선택')
+                memo = ui.textarea(placeholder='단가표 확인하고 회신') \
+                    .props('dense outlined autogrow').classes('w-full')
+            box.open()
 
         @ui.refreshable
         def lanes():
@@ -6015,12 +6394,13 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                                                 .props('flat dense round size=sm color=grey-7') \
                                                 .tooltip(f'{COLUMNS[index + 1][1]}(으)로')
                                         ui.space()
-                                        if item['kind'] == 'mail':
+                                        if item.get('mail'):
                                             ui.button(icon='mail',
                                                       on_click=lambda c=item: ui.navigate.to(
-                                                          href('/mail', token, id=c['key']))) \
+                                                          href('/mail', token, id=c['mail']))) \
                                                 .props('flat dense round size=sm color=grey-7') \
-                                                .tooltip('메일 열기')
+                                                .tooltip('메일 열기' if item['kind'] == 'mail'
+                                                         else '붙여 둔 메일 열기')
                                         # Both kinds can leave the board; only a manual
                                         # todo is actually deleted by it.
                                         ui.button(icon='delete_outline',
@@ -6036,12 +6416,11 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                      '휴지통은 카드를 판에서 치워요 — 메일 카드는 메일을 지우지 않아요.') \
                 .classes('ma-lede')
             with card().style('padding:12px 14px;margin-bottom:14px'):
-                with ui.element('div').style('display:flex;gap:8px;flex-wrap:wrap'):
-                    entry = ui.input(placeholder='할 일 추가').props('dense outlined') \
-                        .style('flex:1 1 260px')
-                    due = ui.input(placeholder='마감 (2026-09-30, 선택)') \
-                        .props('dense outlined').style('min-width:200px')
-                    ui.button('추가', icon='add', on_click=add) \
+                with ui.element('div').classes('ma-head').style('margin:0'):
+                    ui.icon('checklist').style(f'color:{MUTED};font-size:var(--ic-m)')
+                    ui.label('직접 적은 할 일').classes('ma-head__title')
+                    ui.space()
+                    ui.button('할 일 추가', icon='add', on_click=add) \
                         .props('unelevated dense no-caps')
             lanes()
 
