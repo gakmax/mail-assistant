@@ -105,5 +105,37 @@ class OutputTests(unittest.TestCase):
         stream.close()
 
 
+class SelftestSampleTests(unittest.TestCase):
+    """selftest가 검증에 쓰는 예시 답이 스키마와 같이 자라는지.
+
+    이 테스트가 있는 이유는 0.11.0 태그다. money와 order_no가 required가 된 뒤에도
+    packaging/entry_tools.py의 fixture는 그대로였고, 진짜 jsonschema 4.x가 도는 곳이
+    Windows 릴리즈 빌드뿐이라 태그를 밀고 나서야 'money is a required property'로
+    터졌다. 스키마 dict를 읽는 것은 순수한 일이고, 여기서 하면 데스크톱에서 잡힌다.
+    """
+
+    def sample(self):
+        """packaging/은 패키지가 아니라서 경로로 집어 온다."""
+        import importlib.util
+        path = Path(__file__).resolve().parent.parent / 'packaging' / 'entry_tools.py'
+        spec = importlib.util.spec_from_file_location('entry_tools_for_test', path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.SCHEMA_SAMPLE
+
+    def test_the_sample_carries_every_field_the_schema_requires(self):
+        from mail_assistant.services import schema
+        required = set(schema()['required'])
+        missing = sorted(required - set(self.sample()))
+        self.assertEqual(missing, [], f'selftest 예시에 빠진 필드: {missing}')
+
+    def test_the_sample_invents_nothing_the_schema_refuses(self):
+        """additionalProperties가 False이므로 남는 키도 실패한다."""
+        from mail_assistant.services import schema
+        allowed = set(schema()['properties'])
+        extra = sorted(set(self.sample()) - allowed)
+        self.assertEqual(extra, [], f'스키마에 없는 필드: {extra}')
+
+
 if __name__ == '__main__':
     unittest.main()

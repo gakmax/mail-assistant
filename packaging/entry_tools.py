@@ -88,13 +88,21 @@ def check_com():
         pythoncom.CoUninitialize()
 
 
+# 스키마가 요구하는 것을 전부 담은 가장 작은 답. 스키마에 required가 하나 늘면 이 dict도
+# 같이 늘어야 하는데, 그것을 알려 주는 자리가 Windows 릴리즈 빌드뿐이면 너무 늦다 —
+# money와 order_no가 required가 된 뒤 이 fixture가 낡은 채로 태그까지 갔던 것이 그 경우다.
+# tests/test_entry.py가 schema()의 required와 이 키들을 맞춰 보므로 이제 데스크톱에서 잡힌다.
+SCHEMA_SAMPLE = {'category': '문의', 'summary': '', 'requests': '', 'events': [],
+                 'priority': '보통', 'priority_reason': '', 'next_action': '',
+                 'money': [], 'order_no': '',
+                 'reply_needed': False, 'reply_subject': '', 'reply_draft': ''}
+
+
 def check_schema():
     """Forces the jsonschema metaschema data files, which freezing loses quietly."""
     from jsonschema import validate
     from mail_assistant.services import schema
-    validate({'category': '문의', 'summary': '', 'requests': '', 'events': [],
-              'priority': '보통', 'priority_reason': '', 'next_action': '',
-              'reply_needed': False, 'reply_subject': '', 'reply_draft': ''}, schema())
+    validate(SCHEMA_SAMPLE, schema())
     return 'ok'
 
 
