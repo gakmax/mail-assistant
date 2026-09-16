@@ -98,7 +98,7 @@ def summarize(body, lines=12, chars=600):
     """Release notes trimmed for a dialog."""
     text = str(body or '').replace('\r\n', '\n').strip()
     if not text:
-        return '변경 내용이 제공되지 않았습니다.'
+        return '변경 내용이 제공되지 않았어요.'
     trimmed = '\n'.join(text.split('\n')[:lines])
     if len(trimmed) > chars:
         trimmed = trimmed[:chars].rstrip()
@@ -143,7 +143,7 @@ def offer_from(data, local, skip=''):
         return None
     installer = data.get('installer')
     if not isinstance(installer, dict):
-        raise ValueError('installer 항목이 없습니다.')
+        raise ValueError('installer 항목이 없어요.')
     url, sha = str(installer.get('url') or ''), str(installer.get('sha256') or '').lower()
     name = str(installer.get('name') or '')
     if not url.startswith('https://'):

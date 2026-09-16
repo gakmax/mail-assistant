@@ -118,7 +118,7 @@ class HubWorkerTests(unittest.TestCase):
                     break
             self.assertFalse(hub.running())
             self.assertEqual(seen[0][0], '작업 스레드 중단')
-            self.assertIn('실행 오류: 데이터 폴더 접근 권한과 설치 상태를 확인하세요.', drained)
+            self.assertIn('실행 오류: 데이터 폴더 접근 권한과 설치 상태를 확인해 주세요.', drained)
             self.assertIsNone(drained[-1])       # the sentinel comes last
             # The worker logged from its own thread; that connection must be gone, or
             # Windows keeps mail.db locked for as long as the process lives.

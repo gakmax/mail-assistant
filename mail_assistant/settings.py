@@ -17,28 +17,28 @@ DEFAULT_MODEL = {'value': '', 'name': '기본값', 'power': '', 'cost': '',
                  # 고르지 않아도 도는 자리이므로 남는다 — Codex가 한 번도 돈 적 없는 PC에는
                  # 고를 목록 자체가 없다. 다만 무엇이 도는지 화면이 말할 수 없다는 점은
                  # 숨기지 않는다. 그것이 아래 '추천'이 있는 이유이기도 하다.
-                 'hint': 'Codex CLI가 정한 모델을 그대로 씁니다. '
-                         '어떤 모델이 쓰였는지는 이 화면에 나오지 않습니다.'}
+                 'hint': 'Codex CLI가 정한 모델을 그대로 써요. '
+                         '어떤 모델이 쓰였는지는 이 화면에 나오지 않아요.'}
 # 성능·사용량 as words rather than slugs: the person choosing a model here reads mail
 # for a living and has no reason to know what a 'gpt-5.6-luna' costs. The cache carries
 # no price and no speed — what it carries is `priority`, the order Codex itself lists
 # them in, most capable first — so these are a position in that order and the caption
 # under the dropdown says exactly that. Nothing here is claimed as Codex's own answer.
 GRADES = (('성능 높음', '사용량 많음'), ('성능 보통', '사용량 보통'), ('가볍고 빠름', '사용량 적음'))
-GRADE_NOTE = ('성능·사용량 표시는 Codex가 알려준 모델 순서를 옮긴 것입니다. '
-              '실제 사용량은 메일 길이와 분석 횟수에 따라 달라집니다.')
+GRADE_NOTE = ('성능·사용량 표시는 Codex가 알려준 모델 순서를 옮긴 거예요. '
+              '실제 사용량은 메일 길이와 분석 횟수에 따라 달라져요.')
 # 추천은 슬러그가 아니라 *자리*다. 이름을 박아 두면 몇 주 뒤 그 이름이 사라지고 없는
 # 모델을 권하는 화면이 된다 — 하드코딩한 목록을 버린 이유와 같다. 자리는 캐시가 바뀔
 # 때마다 다시 계산되므로 낡을 수가 없다.
 RECOMMEND_WHY = ('이 앱이 모델에게 시키는 일은 메일에서 날짜와 요청을 가려내 정해진 '
-                 '형식으로 옮기는 것입니다. 가장 강한 모델이 필요한 종류의 일이 아니고, '
-                 '가벼운 모델은 상대 날짜를 놓쳐 마감이 틀립니다.')
+                 '형식으로 옮기는 거예요. 가장 강한 모델이 필요한 종류의 일이 아니고, '
+                 '가벼운 모델은 상대 날짜를 놓쳐 마감이 틀려요.')
 # Codex writes this beside its own config whenever it runs, and it holds the models
 # *this account* may use. Reading it beats shipping a list: the slugs turn over every
 # few weeks, and a stale one fails every analysis with '모델을 지원하지 않습니다'.
 MODELS_CACHE = 'models_cache.json'
-NO_MODELS = ('Codex 모델 목록을 찾지 못했습니다. Codex를 한 번 실행하면 '
-             '이 자리에 선택할 수 있는 모델이 나타납니다.')
+NO_MODELS = ('Codex 모델 목록을 찾지 못했어요. Codex를 한 번 실행하면 '
+             '이 자리에 고를 수 있는 모델이 나타나요.')
 
 
 def field_errors(values):
@@ -48,24 +48,24 @@ def field_errors(values):
     """
     errors = {}
     if '@' not in str(values.get('email', '')).strip():
-        errors['email'] = '메일 계정을 user@example.com 형태로 입력하세요.'
+        errors['email'] = '메일 계정을 user@example.com 형태로 적어 주세요.'
     if not str(values.get('host', '')).strip():
-        errors['host'] = '수신 서버를 입력하세요.'
+        errors['host'] = '수신 서버를 적어 주세요.'
     for key, label, low, high in (('port', 'SSL 포트', 1, 65535),
                                   ('interval', '확인 간격', 60, 86400)):
         raw = str(values.get(key, '')).strip()
         try:
             number = int(raw)
         except ValueError:
-            errors[key] = f'{label}은 숫자로 입력하세요.'
+            errors[key] = f'{label}은 숫자로 적어 주세요.'
             continue
         if not low <= number <= high:
-            errors[key] = f'{label}은 {low}~{high} 사이로 입력하세요.'
+            errors[key] = f'{label}은 {low}~{high} 사이로 적어 주세요.'
     path = PureWindowsPath(str(values.get('workbook', '')).strip())
     if not path.is_absolute() or path.suffix.lower() != '.xlsx':
-        errors['workbook'] = '엑셀 파일은 절대 경로의 .xlsx 파일로 지정하세요.'
+        errors['workbook'] = '엑셀 파일은 절대 경로의 .xlsx 파일로 지정해 주세요.'
     if not model_ok(values.get('model', '')):
-        errors['model'] = '모델 이름은 공백 없이 한 단어로 입력하세요.'
+        errors['model'] = '모델 이름은 공백 없이 한 단어로 적어 주세요.'
     return errors
 
 
@@ -82,16 +82,16 @@ def normalize(values):
         try:
             updated[key] = int(updated[key])
         except (KeyError, ValueError):
-            raise ValueError('SSL 포트와 확인 간격은 숫자로 입력하세요.')
+            raise ValueError('SSL 포트와 확인 간격은 숫자로 적어 주세요.')
     if '@' not in updated.get('email', '') or not updated.get('host'):
-        raise ValueError('메일 계정과 수신 서버를 입력하세요.')
+        raise ValueError('메일 계정과 수신 서버를 적어 주세요.')
     if updated['interval'] < 60 or not 1 <= updated['port'] <= 65535:
-        raise ValueError('확인 간격은 60초 이상, 포트는 1~65535로 설정하세요.')
+        raise ValueError('확인 간격은 60초 이상, 포트는 1~65535로 맞춰 주세요.')
     path = PureWindowsPath(updated.get('workbook', ''))
     if not path.is_absolute() or path.suffix.lower() != '.xlsx':
-        raise ValueError('엑셀 파일은 절대 경로의 .xlsx 파일로 지정하세요.')
+        raise ValueError('엑셀 파일은 절대 경로의 .xlsx 파일로 지정해 주세요.')
     if not model_ok(updated.get('model', '')):
-        raise ValueError('모델 이름은 공백 없이 한 단어로 입력하세요.')
+        raise ValueError('모델 이름은 공백 없이 한 단어로 적어 주세요.')
     return updated
 
 
@@ -171,7 +171,7 @@ def model_rows(models, current=''):
     saved = str(current or '').strip()
     if saved and not any(row['value'] == saved for row in rows):
         rows.append({'value': saved, 'name': saved, 'power': '', 'cost': '',
-                     'hint': '지금 설정된 모델입니다. Codex 목록에는 없습니다.'})
+                     'hint': '지금 설정된 모델이에요. Codex 목록에는 없어요.'})
     picked = recommended_slug(models)
     for row in rows:
         # 기본값 줄에는 붙지 않는다: 그 줄은 '고르지 않음'이고, 고르지 않은 것을 권할 수는 없다.

@@ -62,14 +62,14 @@ class RecheckTextTests(unittest.TestCase):
         self.assertIn('0.4.0', recheck_text(NEW, OFFER))
 
     def test_a_check_that_reached_github_is_the_only_one_that_says_최신(self):
-        self.assertEqual(recheck_text(CURRENT), '최신 버전입니다.')
-        self.assertIn('연결하지 못했습니다', recheck_text(UNREACHABLE))
-        self.assertIn('꺼져 있습니다', recheck_text(DISABLED))
+        self.assertEqual(recheck_text(CURRENT), '최신 버전이에요.')
+        self.assertIn('연결하지 못했어요', recheck_text(UNREACHABLE))
+        self.assertIn('꺼져 있어요', recheck_text(DISABLED))
 
     def test_never_checked_says_so_rather_than_showing_1970(self):
         for stamp in (None, 0, '', 'nope'):
             with self.subTest(stamp=stamp):
-                self.assertIn('없습니다', checked_text(stamp))
+                self.assertIn('없어요', checked_text(stamp))
 
     def test_a_stamp_reads_as_a_local_time(self):
         text = checked_text(time.mktime((2026, 9, 14, 13, 20, 0, 0, 0, -1)))

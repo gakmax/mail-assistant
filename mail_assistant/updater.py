@@ -13,34 +13,34 @@ from . import update
 
 IDLE, WORKING, READY, FAILED = 'idle', 'working', 'ready', 'failed'
 # What a 지금 확인 turned out to mean. 'current' is only claimed when the check really
-# reached GitHub, so a proxy that swallowed the request never reads as '최신 버전입니다'.
+# reached GitHub, so a proxy that swallowed the request never reads as '최신 버전이에요'.
 NEW, CURRENT, UNREACHABLE, DISABLED = 'new', 'current', 'unreachable', 'disabled'
 RECHECK_TEXT = {
-    CURRENT: '최신 버전입니다.',
-    UNREACHABLE: '업데이트 서버에 연결하지 못했습니다. 네트워크를 확인하고 다시 시도하세요.',
-    DISABLED: '업데이트 확인이 꺼져 있습니다. 설정 파일의 update 값을 확인하세요.',
+    CURRENT: '최신 버전이에요.',
+    UNREACHABLE: '업데이트 서버에 연결하지 못했어요. 네트워크를 확인하고 다시 시도해 주세요.',
+    DISABLED: '업데이트 확인이 꺼져 있어요. 설정 파일의 update 값을 확인해 주세요.',
 }
 
 
 def failure_text(exc):
     """Why the download stopped, in the words the window used. Pure, so it is testable."""
     if isinstance(exc, update.Cancelled):
-        return '업데이트를 취소했습니다. 지금 버전을 계속 사용합니다.'
+        return '업데이트를 취소했어요. 지금 버전을 계속 써요.'
     if isinstance(exc, update.BadDigest):
-        return ('내려받은 설치 파일이 손상되었습니다. 설치를 중단했습니다. 잠시 후 다시 '
-                '시도하세요. 지금 버전은 그대로 사용할 수 있습니다.')
+        return ('내려받은 설치 파일이 손상됐어요. 설치를 멈췄어요. 잠시 후 다시 '
+                '시도해 주세요. 지금 버전은 그대로 쓸 수 있어요.')
     if isinstance(exc, update.NoSpace):
-        return (f'디스크 공간이 부족해 업데이트를 내려받지 못했습니다. '
-                f'약 {update.describe(exc.needed)}의 여유 공간이 필요합니다.')
-    return (f'업데이트를 내려받지 못했습니다. {type(exc).__name__}: {exc} — '
-            '지금 버전은 그대로 사용할 수 있습니다.')
+        return (f'디스크 공간이 부족해 업데이트를 내려받지 못했어요. '
+                f'약 {update.describe(exc.needed)}의 여유 공간이 필요해요.')
+    return (f'업데이트를 내려받지 못했어요. {type(exc).__name__}: {exc} — '
+            '지금 버전은 그대로 쓸 수 있어요.')
 
 
 def checked_text(stamp):
     """'마지막 확인: 2026-09-14 13:20', or that nothing has been checked here yet."""
     value = float(stamp) if isinstance(stamp, (int, float)) else 0.0
     if value <= 0:
-        return '아직 업데이트를 확인한 적이 없습니다.'
+        return '아직 업데이트를 확인한 적이 없어요.'
     # The Korean is concatenated, never passed to strftime: on Windows the format
     # string goes through the locale codec, and on an English-locale PC '마지막' is
     # a UnicodeEncodeError that takes the whole 업데이트 card down with it.
@@ -50,7 +50,7 @@ def checked_text(stamp):
 def recheck_text(result, offer=None):
     """The one line a 지금 확인 leaves on the screen."""
     if result == NEW:
-        return f"새 버전 {(offer or {}).get('version', '')}이(가) 있습니다."
+        return f"새 버전 {(offer or {}).get('version', '')}이(가) 나왔어요."
     return RECHECK_TEXT.get(result, '')
 
 
@@ -75,11 +75,11 @@ def offer_line(offer, current):
 def consequence(running):
     """What pressing 지금 업데이트 will actually do, which differs while collecting."""
     if running:
-        return ('업데이트하려면 도우미를 잠시 멈춰야 합니다. 지금 돌고 있는 메일·분석·엑셀 '
-                '작업이 끝난 뒤 설치하며 몇 분 걸릴 수 있습니다. 설정과 메일 기록은 그대로 '
-                '유지됩니다.')
-    return ('업데이트하면 도우미가 잠시 종료되었다가 자동으로 다시 시작합니다. 설정과 메일 '
-            '기록은 그대로 유지됩니다.')
+        return ('업데이트하려면 도우미를 잠시 멈춰야 해요. 지금 돌고 있는 메일·분석·엑셀 '
+                '작업이 끝난 뒤 설치하며 몇 분 걸릴 수 있어요. 설정과 메일 기록은 그대로 '
+                '남아요.')
+    return ('업데이트하면 도우미가 잠시 종료됐다가 자동으로 다시 시작해요. 설정과 메일 '
+            '기록은 그대로 남아요.')
 
 
 class Updater:

@@ -520,7 +520,7 @@ class MoneyTests(unittest.TestCase):
         book = money.totals(money.entries([self.row('m1', [self.item('1000'),
                                                            self.item('bad')])]))
         self.assertIn('skipped', book)
-        self.assertEqual(money.skipped_text(book), '확인 필요 1건은 합계에서 뺐습니다')
+        self.assertEqual(money.skipped_text(book), '확인 필요 1건은 합계에서 뺐어요')
         clean = money.totals(money.entries([self.row('m1', [self.item('1000')])]))
         self.assertEqual(money.skipped_text(clean), '')
 
@@ -2406,7 +2406,7 @@ class ChatReplyTests(unittest.TestCase):
     def test_a_failed_turn_says_nothing_about_stdout(self):
         seen, error = self.run_chat(None, returncode=1)
         self.assertIsInstance(error, RuntimeError)
-        self.assertIn('Codex 응답을 받지 못했습니다', str(error))
+        self.assertIn('Codex 응답을 받지 못했어요', str(error))
 
     def test_the_schema_allows_only_a_reply_string(self):
         shape = chat_schema()
@@ -2485,7 +2485,7 @@ class DraftTests(unittest.TestCase):
     def test_a_failure_says_nothing_about_stdout(self):
         seen, error = self.run_draft(None, returncode=1)
         self.assertIsInstance(error, RuntimeError)
-        self.assertIn('초안을 만들지 못했습니다', str(error))
+        self.assertIn('초안을 만들지 못했어요', str(error))
 
     def test_the_schema_allows_only_a_subject_and_a_draft(self):
         shape = draft_schema()
@@ -2620,7 +2620,7 @@ class TranslateTests(unittest.TestCase):
     def test_a_failure_says_nothing_about_stdout(self):
         seen, error = self.run_translate(None, returncode=1)
         self.assertIsInstance(error, RuntimeError)
-        self.assertIn('번역하지 못했습니다', str(error))
+        self.assertIn('번역하지 못했어요', str(error))
 
     def test_a_body_too_long_is_refused_rather_than_clipped(self):
         """Half a mail translated is worse than none: nothing would say which half."""
@@ -2707,9 +2707,9 @@ class CodexInvocationTests(unittest.TestCase):
             Path(command[command.index('-o') + 1]).write_text('{}', encoding='utf-8')
             return types.SimpleNamespace(returncode=1, stdout='', stderr='')
 
-        callers = ((lambda: translate('hello', '', {}), '번역하지 못했습니다'),
-                   (lambda: chat_reply('질문', config={}), 'Codex 응답을 받지 못했습니다'),
-                   (lambda: briefing({}, {}), '브리핑을 만들지 못했습니다'))
+        callers = ((lambda: translate('hello', '', {}), '번역하지 못했어요'),
+                   (lambda: chat_reply('질문', config={}), 'Codex 응답을 받지 못했어요'),
+                   (lambda: briefing({}, {}), '브리핑을 만들지 못했어요'))
         with patch('mail_assistant.services.codex_command', return_value=['codex']), \
              patch('mail_assistant.services.subprocess.run', side_effect=fake_run):
             for call, said in callers:
@@ -3339,7 +3339,7 @@ class UnanalyzableTests(unittest.TestCase):
         return messages
 
     # 다시 물어도 같은 답이 나오는 실패 하나, 두 통 모두에.
-    REFUSAL = '본문을 읽지 못했습니다. 원문은 그대로 보관됩니다.'
+    REFUSAL = '본문을 읽지 못했어요. 원문은 그대로 보관돼요.'
 
     def refuse(self, row):
         raise Unanalyzable(self.REFUSAL)
@@ -3767,7 +3767,7 @@ class GiveUpTests(unittest.TestCase):
         store = self.opened(directory)
         row = store.detail(first)
         self.assertEqual(row['retry_at'], NO_RETRY)
-        self.assertIn('더 시도하지 않습니다', row['error'])
+        self.assertIn('더 시도하지 않아요', row['error'])
         self.assertIn('분석 포기', ' / '.join(messages))
 
     def test_a_quota_outage_never_puts_the_queue_down(self):

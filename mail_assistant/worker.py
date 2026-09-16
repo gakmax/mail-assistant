@@ -19,8 +19,8 @@ BRIEF_BACKOFF = 1800
 # 포기는 (1) 혼자 분석하다 실패했고 (2) 그 메일이 마지막으로 실패한 뒤 다른 메일은 분석에
 # 성공했을 때만 일어난다 — 즉 Codex는 멀쩡한데 이 메일만 안 되는 것이 확인된 때만.
 MAX_ATTEMPTS = 5
-GIVE_UP = (f'분석이 {MAX_ATTEMPTS}회 실패해 더 시도하지 않습니다. '
-           '메일을 열어 다시 분석을 누르면 한 번 더 시도합니다.')
+GIVE_UP = (f'분석이 {MAX_ATTEMPTS}회 실패해 더 시도하지 않아요. '
+           '메일을 열어 다시 분석을 누르면 한 번 더 시도해요.')
 
 
 def subject_of(row):
@@ -64,7 +64,7 @@ def run(config, directory, stop, notify, wake=None):
             except Exception as exc:
                 remember_secret(password)
                 report('메일 연결 실패', exc, f"서버 {config['host']}:{config['port']}")
-                messages.append('메일 연결 실패: 계정·메일 전용 비밀번호·POP3 설정·네트워크를 확인하세요. — '
+                messages.append('메일 연결 실패: 계정·메일 전용 비밀번호·POP3 설정·네트워크를 확인해 주세요. — '
                                 + connect_detail(exc, password))
             pending = store.pending(account, time.time())
             if pending and time.time() >= next_analysis and not stop.is_set():
@@ -135,7 +135,7 @@ def run(config, directory, stop, notify, wake=None):
                                     store.failed(row['id'], GIVE_UP, NO_RETRY)
                                     messages.append(f'분석 포기: {subject_of(row)} — ' + GIVE_UP)
                                     continue
-                                store.failed(row['id'], '분석 실패: 로그인·한도·본문 형식을 확인하세요.',
+                                store.failed(row['id'], '분석 실패: 로그인·한도·본문 형식을 확인해 주세요.',
                                              next_analysis)
                                 waits += 1
                             if waits:
@@ -163,7 +163,7 @@ def run(config, directory, stop, notify, wake=None):
                 except Exception as exc:
                     report('Codex 로그인 확인 실패', exc)
                     next_analysis = time.time() + 300
-                    messages.append('Codex ChatGPT 로그인을 확인하세요. 5분 후 재시도합니다.')
+                    messages.append('Codex ChatGPT 로그인을 확인해 주세요. 5분 뒤에 다시 시도해요.')
             # 분석이 끝난 직후. 창 밖으로 나가는 유일한 것이고, 알린 뒤에는 표시를
             # 남겨 같은 메일을 다시 알리지 않는다 — tell()이 둘 다 한다.
             try:
@@ -203,10 +203,10 @@ def run(config, directory, stop, notify, wake=None):
                     and briefing_due(store.get_meta('briefing:' + account), today,
                                      datetime.now().hour, counts['pending'], asked)):
                 try:
-                    notify('오늘의 AI 브리핑을 만드는 중입니다.')
+                    notify('오늘의 AI 브리핑을 만드는 중이에요.')
                     write_briefing(store, account, config, today)
                     store.set_meta('briefing:' + account, today.isoformat())
-                    messages.append('AI 브리핑을 새로 만들었습니다.')
+                    messages.append('AI 브리핑을 새로 만들었어요.')
                 except Exception as exc:
                     report('브리핑 생성 실패', exc)
                     next_briefing = time.time() + BRIEF_BACKOFF

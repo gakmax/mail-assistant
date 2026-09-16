@@ -45,7 +45,7 @@ def record(exc):
         pass
     write_log(text)
     summary = ''.join(traceback.format_exception_only(type(exc), exc)).strip()
-    show(f'시작하지 못했습니다.\n\n{summary}\n\n자세한 내용은 다음 파일에 있습니다:\n{LOG_HINT}')
+    show(f'시작하지 못했어요.\n\n{summary}\n\n자세한 내용은 다음 파일에 있어요:\n{LOG_HINT}')
 
 
 def run():

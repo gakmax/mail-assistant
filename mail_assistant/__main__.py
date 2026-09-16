@@ -68,7 +68,7 @@ def read_config(config_path, workbook):
             config.update(json.loads(config_path.read_text(encoding='utf-8')))
         except (ValueError, OSError) as exc:
             report('설정 파일 읽기 실패', exc, str(config_path))
-            return config, '설정 파일을 읽지 못했습니다. 설정 화면에서 다시 입력하세요.'
+            return config, '설정 파일을 읽지 못했어요. 설정 화면에서 다시 입력해 주세요.'
     return config, ''
 
 
@@ -93,9 +93,9 @@ def open_native(directory, config, config_path, hub, updater, autostart, complai
         # screen shows it as a blocker rather than stopping the app from opening.
         errors = field_errors(config)
         if errors:
-            hub.log('자동 시작하지 못했습니다 — ' + ' '.join(errors.values()))
+            hub.log('자동 시작하지 못했어요 — ' + ' '.join(errors.values()))
         elif hub.start(dict(config)):
-            hub.log('자동 시작했습니다.')
+            hub.log('자동 시작했어요.')
     webui.serve(directory, config, hub=hub, services=helper_services(),
                 config_path=config_path, native=True, updater=updater)
 
@@ -116,7 +116,7 @@ def open_window(directory, config, config_path, hub, autostart, complaint):
         # A windowed build has no console: without this the error leaves no trace.
         report('화면 조작 오류', value)
         messagebox.showerror('메일 도우미',
-                             f'화면 처리 중 오류가 발생했습니다.\n{type(value).__name__}: {value}')
+                             f'화면 처리 중 오류가 났어요.\n{type(value).__name__}: {value}')
 
     root.report_callback_exception = on_widget_error
     root.protocol('WM_DELETE_WINDOW', app.close)
@@ -145,7 +145,7 @@ def main():
     mutex = win32event.CreateMutex(None, False, MUTEX)
     if win32api.GetLastError() == ALREADY_RUNNING:
         messagebox.showinfo('메일 도우미',
-                            '이미 실행 중입니다. 작업 표시줄에서 메일 도우미를 확인하세요.')
+                            '이미 실행 중이에요. 작업 표시줄에서 메일 도우미를 확인해 주세요.')
         win32api.CloseHandle(mutex)
         return
     directory = Path(os.environ['LOCALAPPDATA']) / 'HiworksMailAssistant'
@@ -186,8 +186,8 @@ def main():
                 try:
                     import ctypes
                     ctypes.windll.user32.MessageBoxW(
-                        None, '설치 프로그램을 실행하지 못했습니다.\n'
-                              '지금 버전은 그대로 사용할 수 있습니다.', '메일 도우미 업데이트', 0x10)
+                        None, '설치 프로그램을 실행하지 못했어요.\n'
+                              '지금 버전은 그대로 쓸 수 있어요.', '메일 도우미 업데이트', 0x10)
                 except Exception:
                     pass
 

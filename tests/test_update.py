@@ -102,7 +102,7 @@ class FormatTests(unittest.TestCase):
         self.assertEqual(len(trimmed.split('\n')), 13)
 
     def test_summarize_explains_an_empty_body(self):
-        self.assertEqual(update.summarize(''), '변경 내용이 제공되지 않았습니다.')
+        self.assertEqual(update.summarize(''), '변경 내용이 제공되지 않았어요.')
 
 
 class OfferTests(unittest.TestCase):

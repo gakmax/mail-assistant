@@ -45,7 +45,7 @@ def codex_slot(timeout=None):
     if timeout is None:
         CODEX_LOCK.acquire()
     elif not CODEX_LOCK.acquire(timeout=timeout):
-        raise CodexBusy('Codex가 다른 작업을 처리하는 중입니다. 잠시 후 다시 시도하세요.')
+        raise CodexBusy('Codex가 다른 작업을 처리하는 중이에요. 잠시 후 다시 시도해 주세요.')
     try:
         yield
     finally:
@@ -153,7 +153,7 @@ def chat_reply(question, history=(), mail=None, config=None, timeout=None):
     }
     # 원문을 처음 읽고 답해야 하고, 물어본 사람이 화면 앞에서 기다린다.
     return codex_json('mail-chat-', CHAT_PROMPT, payload, chat_schema(),
-                      'Codex 응답을 받지 못했습니다. 로그인·사용량 한도·네트워크를 확인하세요.',
+                      'Codex 응답을 받지 못했어요. 로그인·사용량 한도·네트워크를 확인해 주세요.',
                       config, timeout, EFFORT_THINK)['reply']
 
 
@@ -164,7 +164,7 @@ def read_password(email):
         credential = win32cred.CredRead('HiworksMailAssistant/' + email.lower(), win32cred.CRED_TYPE_GENERIC)
     except Exception as exc:
         if getattr(exc, 'winerror', None) == ERROR_NOT_FOUND:
-            raise LookupError('저장된 메일 전용 비밀번호가 없습니다.') from exc
+            raise LookupError('저장된 메일 전용 비밀번호가 없어요.') from exc
         raise
     return credential['CredentialBlob'].decode('utf-16-le')
 
@@ -189,7 +189,7 @@ def delete_password(email):
         win32cred.CredDelete('HiworksMailAssistant/' + email.lower(), win32cred.CRED_TYPE_GENERIC)
     except Exception as exc:
         if getattr(exc, 'winerror', None) == ERROR_NOT_FOUND:
-            raise LookupError('저장된 메일 전용 비밀번호가 없습니다.') from exc
+            raise LookupError('저장된 메일 전용 비밀번호가 없어요.') from exc
         raise
 
 
@@ -229,7 +229,7 @@ def check_connection(config, password, factory=poplib.POP3_SSL):
         client.user(config['email'])
         client.pass_(password)
         listing = client.uidl()[1]
-        return f'연결 성공: 사서함에 메일 {len(listing)}건이 있습니다.'
+        return f'연결 성공: 사서함에 메일 {len(listing)}건이 있어요.'
     finally:
         try:
             client.quit()
@@ -290,19 +290,19 @@ def login_state():
         return '로그인 필요', str(exc)
     except Exception as exc:
         return '확인 실패', f'{type(exc).__name__}: {exc}'
-    return '연결됨', 'Codex에 ChatGPT 계정으로 로그인되어 있습니다.'
+    return '연결됨', 'Codex에 ChatGPT 계정으로 로그인돼 있어요.'
 
 
 def codex_command():
     executable = shutil.which('codex')
     if not executable:
-        raise RuntimeError('Codex CLI가 없습니다. 설치 가이드대로 설치 후 다시 실행하세요.')
+        raise RuntimeError('Codex CLI가 없어요. 설치 가이드대로 설치한 뒤 다시 실행해 주세요.')
     if executable.lower().endswith(('.cmd', '.bat')):
         # Invoke the npm JS entry with node, never interpolate mail into cmd.exe.
         entry = Path(executable).parent / 'node_modules/@openai/codex/bin/codex.js'
         node = shutil.which('node')
         if not entry.exists() or not node:
-            raise RuntimeError('npm 전역 설치 Codex를 찾지 못했습니다. 가이드대로 Codex를 다시 설치하세요.')
+            raise RuntimeError('npm 전역 설치 Codex를 찾지 못했어요. 가이드대로 Codex를 다시 설치해 주세요.')
         return [node, str(entry)]
     return [executable]
 
@@ -322,7 +322,7 @@ def check_login(timeout=None):
                                 env=codex_environment(),
                                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     if result.returncode or 'chatgpt' not in (result.stdout + result.stderr).lower():
-        raise RuntimeError('Codex에서 ChatGPT 계정으로 로그인하세요. 터미널에서 codex login을 실행하세요.')
+        raise RuntimeError('Codex에서 ChatGPT 계정으로 로그인해 주세요. 터미널에서 codex login을 실행하면 돼요.')
 
 
 # Codex 사용량 -------------------------------------------------------------
@@ -348,13 +348,13 @@ def usage_wait(process, answers, wanted, deadline):
     """
     while True:
         if time.monotonic() >= deadline:
-            raise TimeoutError('Codex가 사용량을 알려주지 않았습니다.')
+            raise TimeoutError('Codex가 사용량을 알려주지 않았어요.')
         try:
             message = answers.get(timeout=0.25)
         except queue.Empty:
             if process.poll() is not None and answers.empty():
-                raise RuntimeError('Codex가 사용량을 알려주지 않고 종료했습니다. '
-                                   'Codex CLI를 최신 버전으로 업데이트하세요.')
+                raise RuntimeError('Codex가 사용량을 알려주지 않고 종료했어요. '
+                                   'Codex CLI를 최신 버전으로 업데이트해 주세요.')
             continue
         if message.get('id') != wanted:
             continue
@@ -399,7 +399,7 @@ def codex_usage(timeout=USAGE_TIMEOUT):
                              'params': {'excludeResetCreditDetails': True}})
         return usage_wait(process, answers, 2, deadline)
     except OSError as exc:      # a broken pipe is the server having gone, not a shape
-        raise RuntimeError(f'Codex 사용량을 읽지 못했습니다: {type(exc).__name__}: {exc}')
+        raise RuntimeError(f'Codex 사용량을 읽지 못했어요 · {type(exc).__name__}: {exc}')
     finally:
         # This server has no other work and no clean-shutdown request to wait on; it
         # must not outlive the read, or every beat leaves one behind.
@@ -454,7 +454,7 @@ def briefing(payload, config=None, timeout=None):
     # 입력이 이미 analyze()가 값을 치른 요약과 집계다. 여기서 다시 깊이 생각할 것이 없고,
     # 이 호출은 아침 아홉 시에 읽지 않은 메일의 줄 앞에서 슬롯을 최대 240초 잡는다.
     return codex_json('mail-briefing-', BRIEF_PROMPT, payload, briefing_schema(),
-                      '브리핑을 만들지 못했습니다. 로그인·사용량 한도·네트워크를 확인하세요.',
+                      '브리핑을 만들지 못했어요. 로그인·사용량 한도·네트워크를 확인해 주세요.',
                       config, timeout, EFFORT_READ)
 
 
@@ -519,7 +519,7 @@ mails의 각 항목을 서로 독립적으로 분석하세요. 한 메일의 날
 각 항목의 thread는 그 항목 자신의 앞선 대화입니다. 다른 mail_id에 쓰지 마세요.
 results에는 mails에 있는 mail_id를 그대로 넣고, 받은 메일을 하나도 빠뜨리지 마세요.
 '''
-ANALYSIS_FAILED = 'Codex 분석 실패: 로그인·사용량 한도·네트워크를 확인하세요.'
+ANALYSIS_FAILED = 'Codex 분석 실패: 로그인·사용량 한도·네트워크를 확인해 주세요.'
 
 
 def squeeze_body(text):
@@ -584,12 +584,12 @@ def prepare(row):
     except Exception as exc:
         # The bytes in the database are the bytes the next cycle would read, so this
         # is not a failure a retry fixes.
-        raise Unanalyzable('본문을 읽지 못했습니다. 메일 형식이 손상되었을 수 있습니다. '
-                           '원문은 그대로 보관됩니다.') from exc
+        raise Unanalyzable('본문을 읽지 못했어요. 메일 형식이 손상됐을 수 있어요. '
+                           '원문은 그대로 보관돼요.') from exc
     body = parsed.get('body') or ''
     subject = (parsed.get('subject') or '').strip()
     if not body.strip() and subject in ('', NO_SUBJECT):
-        raise Unanalyzable('분석할 본문도 제목도 없습니다. 원문은 그대로 보관됩니다.')
+        raise Unanalyzable('분석할 본문도 제목도 없어요. 원문은 그대로 보관돼요.')
     # 앞부분만 보내고, 자른 사실은 두 곳에 남는다: 모델에게는 프롬프트로, 화면에는
     # parsed['clipped']로. 저장되는 parsed는 *자르지 않은* 본문이라 원문은 전체가 남는다.
     squeezed = squeeze_body(body)
@@ -752,7 +752,7 @@ def draft(mail, tone='', way='', config=None, timeout=None):
     payload['way'] = '' if way in ('', DRAFT_WAY_FREE) else DRAFT_WAY_ASKS.get(way, '')
     # 사람이 그대로 보낼 글이고, 거절이나 일정 조율은 이유와 대안을 들어야 한다.
     data = codex_json('mail-draft-', DRAFT_PROMPT, payload, draft_schema(),
-                      '초안을 만들지 못했습니다. 로그인·사용량 한도·네트워크를 확인하세요.',
+                      '초안을 만들지 못했어요. 로그인·사용량 한도·네트워크를 확인해 주세요.',
                       config, timeout, EFFORT_THINK)
     return data['subject'], data['draft']
 
@@ -772,13 +772,13 @@ def translate(text, subject='', config=None, timeout=None):
     """
     body = str(text or '')
     if not body.strip():
-        raise RuntimeError('번역할 본문이 없습니다.')
+        raise RuntimeError('번역할 본문이 없어요.')
     if len(body) > TRANSLATE_LIMIT:
-        raise RuntimeError(f'본문이 {TRANSLATE_LIMIT:,}자를 초과해 번역할 수 없습니다. '
-                           '상담 화면에서 필요한 부분만 물어보세요.')
+        raise RuntimeError(f'본문이 {TRANSLATE_LIMIT:,}자를 초과해 번역할 수 없어요. '
+                           '상담 화면에서 필요한 부분만 물어봐 주세요.')
     # 옮기는 일이지 판단하는 일이 아니다.
     data = codex_json('mail-translate-', TRANSLATE_PROMPT,
                       {'subject': str(subject or ''), 'body': body}, translate_schema(),
-                      '번역하지 못했습니다. 로그인·사용량 한도·네트워크를 확인하세요.',
+                      '번역하지 못했어요. 로그인·사용량 한도·네트워크를 확인해 주세요.',
                       config, timeout, EFFORT_READ)
     return data['language'], data['korean']

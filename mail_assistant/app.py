@@ -67,7 +67,7 @@ class App:
         self.check_password()
         self.check_codex()
         self.replay()
-        self.log('설정을 확인하고 시작을 누르세요. 첫 연결에서는 기존 메일을 제외합니다.')
+        self.log('설정을 확인하고 시작을 눌러 주세요. 첫 연결에서는 기존 메일을 제외해요.')
         self.root.after(300, self.poll)
 
     # ------------------------------------------------------------------ data
@@ -90,7 +90,7 @@ class App:
             self.rows = list(self.store().page(account)) if account else []
         except Exception as exc:
             report('메일 목록 읽기 실패', exc)
-            self.log(f'목록을 읽지 못했습니다: {type(exc).__name__}: {exc}')
+            self.log(f'목록을 읽지 못했어요 · {type(exc).__name__}: {exc}')
             self.rows = []
         self.views = [row_view(row) for row in self.rows]
         try:
@@ -255,7 +255,7 @@ class App:
         self.list.tag_configure('긴급', foreground=tk_color(DASH_RED))
         split.add(top, weight=3)
         detail = ttk.Frame(split, padding=(0, 10, 0, 0))
-        self.detail_title = ttk.Label(detail, text='메일을 선택하세요', style='Section.TLabel', wraplength=820)
+        self.detail_title = ttk.Label(detail, text='메일을 골라 주세요', style='Section.TLabel', wraplength=820)
         self.detail_title.pack(anchor='w')
         self.detail_meta = ttk.Label(detail, text='', style='Card.TLabel', wraplength=820)
         self.detail_meta.pack(anchor='w', pady=(2, 8))
@@ -332,7 +332,7 @@ class App:
 
     def show_mail(self, ident, focus=True):
         if self.draft_source not in (None, ident) and self.flush_draft():
-            self.log('편집 중이던 답변 초안을 저장했습니다.')
+            self.log('편집 중이던 답변 초안을 저장했어요.')
             self.refresh()
         row = self.row_of(ident)
         if row is None:
@@ -363,7 +363,7 @@ class App:
                 lines.append(f"일정: {event.get('title', '')} 시작 {event.get('start') or '—'} "
                              f"마감 {event.get('deadline') or '—'}{mark}")
         else:
-            lines.append('아직 분석되지 않았습니다.' + (f" 오류: {row['error']}" if row['error'] else ''))
+            lines.append('아직 분석되지 않았어요.' + (f" 오류: {row['error']}" if row['error'] else ''))
         self.fill(self.detail_body, '\n'.join(lines))
         if not (self.draft_source == ident and self.draft_dirty()):
             # poll() reopens the selected mail on every worker report; an edit must survive that.
@@ -403,17 +403,17 @@ class App:
             self.store().set_draft(ident, text)
         except Exception as exc:
             report('답변 초안 저장 실패', exc)
-            self.log(f'답변 초안을 저장하지 못했습니다: {type(exc).__name__}: {exc}')
+            self.log(f'답변 초안을 저장하지 못했어요 · {type(exc).__name__}: {exc}')
             return None
         self.draft_baseline = text
         return ident
 
     def save_draft(self):
         if not self.draft_dirty():
-            self.log('답변 초안에 변경된 내용이 없습니다.')
+            self.log('답변 초안에 바뀐 내용이 없어요.')
             return
         if self.flush_draft():
-            self.log('답변 초안을 저장했습니다.')
+            self.log('답변 초안을 저장했어요.')
             self.refresh()
 
     def open_reply(self):
@@ -424,7 +424,7 @@ class App:
         draft = self.draft.get('1.0', 'end-1c') or result.get('reply_draft', '')
         link = mailto(row['sender'], result.get('reply_subject') or f"Re: {row['subject']}", draft)
         if not link:
-            messagebox.showinfo('답장 열기', '발신자 주소를 찾지 못했습니다.')
+            messagebox.showinfo('답장 열기', '발신자 주소를 찾지 못했어요.')
             return
         os.startfile(link)
 
@@ -435,7 +435,7 @@ class App:
         try:
             parsed = parse_mail(row['raw'])
         except Exception as exc:
-            messagebox.showerror('원문 보기', f'본문을 읽지 못했습니다: {exc}')
+            messagebox.showerror('원문 보기', f'본문을 읽지 못했어요 · {exc}')
             return
         window = tk.Toplevel(self.root)
         window.title(parsed['subject'] or '원문')
@@ -457,16 +457,16 @@ class App:
         if row is None:
             return
         if not row['result']:
-            self.log('분석이 끝난 뒤에 초안을 만들 수 있습니다.')
+            self.log('분석이 끝난 뒤에 초안을 만들 수 있어요.')
             return
         if not self.services.get('draft'):
-            self.log('이 환경에서는 초안을 만들 수 없습니다.')
+            self.log('이 환경에서는 초안을 만들 수 없어요.')
             return
         ident, result = row['id'], json.loads(row['result'])
         try:
             parsed = json.loads(row['parsed']) if row['parsed'] else parse_mail(row['raw'])
         except Exception as exc:
-            self.log(f'본문을 읽지 못했습니다: {type(exc).__name__}: {exc}')
+            self.log(f'본문을 읽지 못했어요 · {type(exc).__name__}: {exc}')
             return
         view = {'subject': row['subject'], 'sender': row['sender'],
                 'received': row['received'], 'body': parsed.get('body', ''),
@@ -475,7 +475,7 @@ class App:
                 'action': result.get('next_action', '')}
         tone, way = self.draft_tone.get(), self.draft_way.get()
         self.draft_button.state(['disabled'])
-        self.log(f'초안을 만드는 중입니다({tone} · {way}). 분석이 돌고 있으면 그 뒤에 처리됩니다.')
+        self.log(f'초안을 만드는 중이에요({tone} · {way}). 분석이 돌고 있으면 그 뒤에 처리됩니다.')
         self.background('draft',
                         lambda: (ident, self.services['draft'](view, tone, way, self.config)),
                         self.store_draft)
@@ -483,15 +483,15 @@ class App:
     def store_draft(self, result):
         self.draft_button.state(['!disabled'])
         if isinstance(result, Exception):
-            self.log(f'초안을 만들지 못했습니다: {result}')
+            self.log(f'초안을 만들지 못했어요 · {result}')
             return
         ident, (subject, text) = result
         if not self.store().set_reply_draft(ident, subject, text):
-            self.log('분석이 끝난 뒤에 초안을 만들 수 있습니다.')
+            self.log('분석이 끝난 뒤에 초안을 만들 수 있어요.')
             return
         # The box is refilled from the database, which is where the new draft is.
         self.draft_source = None
-        self.log('초안을 만들었습니다.')
+        self.log('초안을 만들었어요.')
         self.refresh()
 
     def reanalyze(self):
@@ -696,11 +696,11 @@ class App:
                 # must not look like a successful save and fail hours later.
                 stored = self.services['read_password'](updated['email'])
             except Exception as exc:
-                messagebox.showerror('설정 확인', '비밀번호를 Windows 자격 증명에 저장하지 못했습니다.\n'
+                messagebox.showerror('설정 확인', '비밀번호를 Windows 자격 증명에 저장하지 못했어요.\n'
                                                  f'{type(exc).__name__}: {exc}')
                 return
             if stored != password:
-                self.log('경고: 자격 증명에 저장된 비밀번호가 입력과 다릅니다. 다시 입력해 보세요.')
+                self.log('자격 증명에 저장된 비밀번호가 입력과 달라요. 다시 입력해 주세요.')
             self.fields['password'].set('')
         temp = self.config_path.with_suffix('.tmp')
         # Merge: webhook and the update keys are not on this form and must survive.
@@ -708,7 +708,7 @@ class App:
                         encoding='utf-8')
         temp.replace(self.config_path)
         self.config.update(updated)
-        self.log('설정을 저장했습니다.')
+        self.log('설정을 저장했어요.')
         self.check_password()
         self.refresh()
 
@@ -790,14 +790,14 @@ class App:
     def password_message(self, absent):
         """'없음' and '읽지 못함' are different problems and need different messages."""
         if self.password_error:
-            return f'메일 전용 비밀번호를 읽지 못했습니다.\n{self.password_error}'
+            return f'메일 전용 비밀번호를 읽지 못했어요.\n{self.password_error}'
         return absent
 
     def check_password(self):
         stored = self.stored_password()
         if self.password_error:
             self.set_lamp('메일 비밀번호', '확인 실패')
-            self.log(f'Windows 자격 증명을 읽지 못했습니다: {self.password_error}')
+            self.log(f'Windows 자격 증명을 읽지 못했어요 · {self.password_error}')
             return
         self.set_lamp('메일 비밀번호', '저장됨' if stored else '없음')
 
@@ -805,7 +805,7 @@ class App:
         password = password or self.stored_password()
         if not password:
             messagebox.showwarning('연결 테스트',
-                                   self.password_message('메일 전용 비밀번호가 없습니다. 설정에서 입력하세요.'))
+                                   self.password_message('메일 전용 비밀번호가 없어요. 설정에서 입력해 주세요.'))
             return
         self.log('연결 테스트 중…')
         self.background('test', lambda: self.services['check_connection'](source or self.config, password),
@@ -822,7 +822,7 @@ class App:
     def show_test(self, result):
         if isinstance(result, Exception):
             self.log(f'연결 테스트 실패: {type(result).__name__}: {result}')
-            messagebox.showerror('연결 테스트', f'실패: {result}\n\n계정·메일 전용 비밀번호·POP3 설정·허용 IP를 확인하세요.')
+            messagebox.showerror('연결 테스트', f'실패: {result}\n\n계정·메일 전용 비밀번호·POP3 설정·허용 IP를 확인해 주세요.')
             return
         self.log(result)
         messagebox.showinfo('연결 테스트', result)
@@ -841,17 +841,17 @@ class App:
         try:
             normalize({key: self.config.get(key, '') for key, _ in FIELDS if key != 'password'})
         except ValueError as exc:
-            messagebox.showerror('설정 확인', f'{exc}\n\n설정 탭에서 입력하세요.')
+            messagebox.showerror('설정 확인', f'{exc}\n\n설정 탭에서 입력해 주세요.')
             self.tabs.select(4)
             return
         if not self.stored_password():
             messagebox.showerror('설정 확인', self.password_message(
-                '메일 전용 비밀번호가 저장되어 있지 않습니다. 설정 탭에서 입력하세요.'))
+                '메일 전용 비밀번호가 저장돼 있지 않아요. 설정 탭에서 입력해 주세요.'))
             self.tabs.select(4)
             return
         if not self.hub.start(dict(self.config)):
             return
-        self.log('시작했습니다. 창을 최소화해 두어도 계속 실행됩니다.')
+        self.log('시작했어요. 창을 최소화해 두어도 계속 돌아요.')
         self.set_lamp('실행', '실행 중')
         self.update_buttons()
 
@@ -863,14 +863,14 @@ class App:
 
     def check_now(self):
         if self.hub.wake():
-            self.log('지금 확인을 요청했습니다.')
+            self.log('지금 확인을 요청했어요.')
 
     def codex_login(self):
         try:
             subprocess.Popen(self.services['codex_command']() + ['login'],
                              env=self.services['codex_environment'](),
                              creationflags=subprocess.CREATE_NEW_CONSOLE)
-            self.log('Codex 로그인 창을 열었습니다. 로그인 후 상태를 다시 확인하세요.')
+            self.log('Codex 로그인 창을 열었어요. 로그인한 뒤에 상태를 다시 확인해 주세요.')
         except Exception as exc:
             report('Codex 로그인 실행 실패', exc)
             messagebox.showerror('Codex 로그인', str(exc))
@@ -913,7 +913,7 @@ class App:
             return
         self.offer = result
         self.update_button.pack(side='left', padx=8)
-        self.log(f"새 버전 {result['version']}이(가) 나왔습니다. 업데이트 단추로 설치할 수 있습니다.")
+        self.log(f"새 버전 {result['version']}이(가) 나왔어요. 업데이트 단추로 설치할 수 있어요.")
 
     def release_autostart(self):
         """Let the worker start whether or not the update check has answered yet."""
@@ -944,7 +944,7 @@ class App:
         dialog.resizable(False, False)
         body = ttk.Frame(dialog, padding=20)
         body.pack(fill='both', expand=True)
-        ttk.Label(body, text=f"새 버전 {self.offer['version']}이(가) 나왔습니다.",
+        ttk.Label(body, text=f"새 버전 {self.offer['version']}이(가) 나왔어요.",
                   font=('맑은 고딕', 14, 'bold')).pack(anchor='w')
         detail = f'현재 {__version__}'
         if self.offer['size']:
@@ -958,7 +958,7 @@ class App:
         notes.pack(fill='both', expand=True, pady=(4, 12))
         ttk.Label(body, wraplength=520, text=(
             '업데이트하려면 도우미를 잠시 멈춰야 합니다. 현재 메일·분석·엑셀 작업이 끝난 뒤\n'
-            '설치하며 몇 분 걸릴 수 있습니다. 설정과 메일 기록은 그대로 유지됩니다.'
+            '설치하며 몇 분 걸릴 수 있어요. 설정과 메일 기록은 그대로 남아요.'
             if self.running() else
             '업데이트하면 도우미가 잠시 종료되었다가 자동으로 다시 시작합니다.\n'
             '설정과 메일 기록은 그대로 유지됩니다.')).pack(anchor='w')
@@ -968,7 +968,7 @@ class App:
 
         def later():
             dialog.destroy()
-            self.log('업데이트를 나중에 합니다. 실행 탭의 업데이트 버튼으로 언제든 설치할 수 있습니다.')
+            self.log('업데이트는 나중에 해요. 실행 탭의 업데이트 버튼으로 언제든 설치할 수 있어요.')
 
         def skip():
             update.remember(self.config_path, {'update_skip': self.offer['version']})
@@ -1012,7 +1012,7 @@ class App:
         window.resizable(False, False)
         body = ttk.Frame(window, padding=20)
         body.pack(fill='both', expand=True)
-        phase = tk.StringVar(value='설치 파일을 내려받는 중입니다…')
+        phase = tk.StringVar(value='설치 파일을 내려받는 중이에요…')
         ttk.Label(body, textvariable=phase, width=54).pack(anchor='w')
         bar = ttk.Progressbar(body, length=420,
                               mode='determinate' if progress['total'] else 'indeterminate')
@@ -1020,7 +1020,7 @@ class App:
         if not progress['total']:
             bar.start(15)
         ttk.Label(body, foreground='#6b7280', wraplength=420,
-                  text='창을 닫지 마세요. 취소해도 지금 버전은 그대로 사용할 수 있습니다.').pack(anchor='w')
+                  text='창을 닫지 마세요. 취소해도 지금 버전은 그대로 쓸 수 있어요.').pack(anchor='w')
         stop_button = ttk.Button(body, text='취소', command=self.cancel.set)
         stop_button.pack(anchor='e', pady=(12, 0))
         window.protocol('WM_DELETE_WINDOW', self.cancel.set)
@@ -1031,7 +1031,7 @@ class App:
                 return
             if state['downloading'] and progress['total']:
                 bar.configure(maximum=progress['total'], value=progress['done'])
-                phase.set('설치 파일을 내려받는 중입니다…  '
+                phase.set('설치 파일을 내려받는 중이에요…  '
                           f"{update.describe(progress['done'])} / {update.describe(progress['total'])}")
             window.after(200, tick)
 
@@ -1047,7 +1047,7 @@ class App:
             stop_button.configure(state='disabled')
             bar.configure(mode='indeterminate')
             bar.start(15)
-            phase.set('현재 메일·분석·엑셀 작업이 끝나기를 기다리는 중입니다. 몇 분 걸릴 수 있습니다…'
+            phase.set('지금 돌고 있는 메일·분석·엑셀 작업이 끝나기를 기다리는 중이에요. 몇 분 걸릴 수 있어요…'
                       if self.running() else '설치를 시작합니다. 잠시 후 메일 도우미가 다시 열립니다…')
             # poll() destroys the root once the worker is gone, then main()'s
             # finally releases the mutex and starts the installer.
@@ -1062,17 +1062,17 @@ class App:
 
     def fail_update(self, exc):
         if isinstance(exc, update.Cancelled):
-            self.log('업데이트를 취소했습니다. 지금 버전을 계속 사용합니다.')
+            self.log('업데이트를 취소했어요. 지금 버전을 계속 써요.')
             return
         if isinstance(exc, update.BadDigest):
-            text = ('내려받은 설치 파일이 손상되었습니다. 설치를 중단했습니다.\n'
-                    '잠시 후 다시 시도하세요. 지금 버전은 그대로 사용할 수 있습니다.')
+            text = ('내려받은 설치 파일이 손상됐어요. 설치를 멈췄어요.\n'
+                    '잠시 후 다시 시도해 주세요. 지금 버전은 그대로 쓸 수 있어요.')
         elif isinstance(exc, update.NoSpace):
-            text = (f'디스크 공간이 부족해 업데이트를 내려받지 못했습니다.\n'
+            text = (f'디스크 공간이 부족해 업데이트를 내려받지 못했어요.\n'
                     f'약 {update.describe(exc.needed)}의 여유 공간이 필요합니다.')
         else:
-            text = (f'업데이트를 내려받지 못했습니다.\n{type(exc).__name__}: {exc}\n\n'
-                    '지금 버전은 그대로 사용할 수 있습니다.')
+            text = (f'업데이트를 내려받지 못했어요.\n{type(exc).__name__}: {exc}\n\n'
+                    '지금 버전은 그대로 쓸 수 있어요.')
         self.log(f'업데이트 실패: {type(exc).__name__}: {exc}')
         report('업데이트 실패', exc, self.offer and self.offer.get('version'))
         messagebox.showerror('업데이트', text)

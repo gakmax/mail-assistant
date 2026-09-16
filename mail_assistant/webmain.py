@@ -81,8 +81,8 @@ def main(argv=()):
                 'codex_usage': helpers.codex_usage}
     can_start, handle = claim_worker()
     if not can_start:
-        print('메일 도우미 창이 이미 실행 중입니다. 화면은 열지만 여기서 수집을 시작할 수는 '
-              '없습니다. 창을 닫고 다시 실행하세요.', flush=True)
+        print('메일 도우미 창이 이미 실행 중이에요. 화면은 열지만 여기서 수집을 시작할 수는 '
+              '없어요. 창을 닫고 다시 실행해 주세요.', flush=True)
     try:
         # --native opens the pywebview frame from a source checkout, which is the
         # cheapest way to see the real window: pywebview has been in requirements.txt

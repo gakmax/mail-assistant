@@ -196,9 +196,9 @@ class Excel:
                     book = app.Workbooks.Add()
             stage = '엑셀 편집 가능 여부 확인'
             if book.ReadOnly:
-                raise RuntimeError('대상 파일이 읽기 전용입니다. 다른 Excel 창의 파일 잠금이나 파일 권한을 확인하세요.')
+                raise RuntimeError('대상 파일이 읽기 전용이에요. 다른 Excel 창의 파일 잠금이나 파일 권한을 확인해 주세요.')
             if not app.Ready:
-                raise RuntimeError('Excel이 작업 중입니다. 셀 입력·대화상자를 마치면 다시 반영합니다.')
+                raise RuntimeError('Excel이 작업 중이에요. 셀 입력·대화상자를 마치면 다시 반영해요.')
             stage = '시트 및 셀 쓰기'
             self._write(book, rows, status)
             stage = '엑셀 파일 저장'
@@ -250,7 +250,7 @@ class Excel:
                 # Name every offending column so the sheet can be repaired without guessing.
                 diff = '; '.join(f'{column_name(i)}1: 현재 "{c}" / 기대 "{h}"'
                                  for i, (c, h) in enumerate(zip(trimmed, headers)) if c != h)
-                raise RuntimeError(f'{name} 시트의 열 구성이 바뀌었습니다. 가이드의 열 순서를 복원하세요. ({diff})')
+                raise RuntimeError(f'{name} 시트의 열 구성이 바뀌었어요. 가이드의 열 순서를 되돌려 주세요. ({diff})')
             if any(trimmed) and current != headers:
                 head.Value = (tuple(headers),)  # Same columns, cosmetic difference only.
             if not any(trimmed):

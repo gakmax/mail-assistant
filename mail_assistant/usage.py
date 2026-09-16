@@ -137,7 +137,7 @@ def taken_text(at, now=None):
     moment = time.time() if now is None else float(now)
     if moment - float(at) < STALE_SECONDS:
         return ''
-    return f'{clock_text(at, now)} 기준입니다.'
+    return f'{clock_text(at, now)} 기준이에요.'
 
 
 def view(snap, message='', now=None):
@@ -158,8 +158,8 @@ def view(snap, message='', now=None):
                          snap.get('secondary'), now)]
     if blocked:
         after = clock_text(top.get('resets'), now)
-        lines.append(f'{after}에 다시 쓸 수 있습니다.' if after
-                     else '한도가 풀리면 다시 분석합니다.')
+        lines.append(f'{after}에 다시 쓸 수 있어요.' if after
+                     else '한도가 풀리면 다시 분석해요.')
     lines += [plan_text(snap.get('plan')), taken_text(snap.get('at'), now), message]
     return {'known': True,
             'text': 'Codex 한도 도달' if blocked else f"Codex 사용량 {top['percent']}%",
@@ -171,8 +171,8 @@ def view(snap, message='', now=None):
 def read_error(exc):
     """Why the last read failed, in one line. The chip keeps the older reading beside it."""
     if isinstance(exc, TimeoutError):
-        return 'Codex 사용량을 확인하지 못했습니다. 응답이 없습니다.'
-    return f'Codex 사용량을 확인하지 못했습니다. {type(exc).__name__}: {exc}'
+        return 'Codex 사용량을 확인하지 못했어요. 응답이 없어요.'
+    return f'Codex 사용량을 확인하지 못했어요. {type(exc).__name__}: {exc}'
 
 
 class Meter:

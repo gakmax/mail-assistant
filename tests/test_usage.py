@@ -107,7 +107,7 @@ class SentenceTests(unittest.TestCase):
 
     def test_a_failure_keeps_its_type_where_a_reader_can_repeat_it(self):
         self.assertIn('OSError', read_error(OSError('끊겼습니다')))
-        self.assertIn('응답이 없습니다', read_error(TimeoutError()))
+        self.assertIn('응답이 없어요', read_error(TimeoutError()))
 
 
 class LevelTests(unittest.TestCase):
@@ -144,7 +144,7 @@ class ViewTests(unittest.TestCase):
         found = view(snapshot(payload), now=moment('2026-09-15T09:00:00'))
         self.assertEqual(found['text'], 'Codex 한도 도달')
         self.assertEqual(found['level'], FULL)
-        self.assertIn('14:16에 다시 쓸 수 있습니다.', found['lines'])
+        self.assertIn('14:16에 다시 쓸 수 있어요.', found['lines'])
 
     def test_a_high_but_open_quota_warns_without_claiming_it_is_spent(self):
         found = view(snapshot({'rateLimits': {'primary': {'usedPercent': 82}}}))

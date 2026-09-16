@@ -127,7 +127,7 @@ def totals(found):
 
     제외 건수를 합계와 떼어 놓지 않는 것이 이 함수의 요점이다: 부르는 쪽이 합계만 집어
     화면에 그리는 일이 생기지 않게 하려고 한 dict에 같이 담는다. '확인 필요 3건은 합계에서
-    뺐습니다'가 없는 합계는, 이 앱이 하지 않기로 한 종류의 문장이다.
+    뺐어요'가 없는 합계는, 이 앱이 하지 않기로 한 종류의 문장이다.
     """
     sums, counts = {}, {}
     skipped = []
@@ -146,10 +146,10 @@ def totals(found):
 
 
 def skipped_text(book):
-    """'확인 필요 3건은 합계에서 뺐습니다', 뺀 것이 없으면 ''."""
+    """'확인 필요 3건은 합계에서 뺐어요', 뺀 것이 없으면 ''."""
     if not book['skipped']:
         return ''
-    return f"확인 필요 {book['skipped']}건은 합계에서 뺐습니다"
+    return f"확인 필요 {book['skipped']}건은 합계에서 뺐어요"
 
 
 def months(found, limit=12):

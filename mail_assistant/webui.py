@@ -1434,7 +1434,7 @@ def briefing_view(row, today):
     The day it was written for travels with it rather than being checked away: a
     briefing from yesterday is still worth reading and is not today's, and a card that
     showed one without saying which day it covered would be the same silence
-    '최신 버전입니다' behind a dead proxy was.
+    '최신 버전이에요' behind a dead proxy was.
     """
     blank = {'has': False, 'stale': False, 'day': '', 'stamp': '',
              'headline': '', 'sections': [], 'watch': []}
@@ -1506,19 +1506,19 @@ def briefing_card(opened, account, today):
 def briefing_empty(running, total, hour):
     """Why the card has nothing in it. Never blank space with no reason beside it."""
     if not total:
-        return '수집된 메일이 없어 아직 브리핑할 내용이 없습니다.'
+        return '수집된 메일이 없어 아직 브리핑할 내용이 없어요.'
     if not running:
-        return '아직 브리핑이 없습니다. 수집을 시작하면 오늘 치를 만듭니다.'
+        return '아직 브리핑이 없어요. 수집을 시작하면 오늘 치를 만들어요.'
     if hour < BRIEF_HOUR:
-        return f'아직 브리핑이 없습니다. 오전 {BRIEF_HOUR}시 이후 첫 수집 때 만듭니다.'
-    return '아직 브리핑이 없습니다. 분석 대기가 비면 다음 수집 차례에 만듭니다.'
+        return f'아직 브리핑이 없어요. 오전 {BRIEF_HOUR}시 이후 첫 수집 때 만듭니다.'
+    return '아직 브리핑이 없어요. 분석 대기가 비면 다음 수집 차례에 만들어요.'
 
 
 def briefing_text(running):
     """다시 만들기 is a booking, exactly as 다시 분석 is: the worker does the work."""
     if running:
-        return '브리핑을 다시 만들도록 요청했습니다. 다음 수집 차례에 반영됩니다.'
-    return '브리핑을 다시 만들도록 예약했습니다. 수집을 시작하면 만들어집니다.'
+        return '브리핑을 다시 만들도록 요청했어요. 다음 수집 차례에 반영돼요.'
+    return '브리핑을 다시 만들도록 예약했어요. 수집을 시작하면 만들어져요.'
 
 
 def stale_text(view, today):
@@ -1527,7 +1527,7 @@ def stale_text(view, today):
         gap = (today - date.fromisoformat(view['day'])).days
     except ValueError:
         return ''
-    return f'{gap}일 전 브리핑입니다. 오늘 치는 다음 수집 차례에 만들어집니다.'
+    return f'{gap}일 전 브리핑이에요. 오늘 치는 다음 수집 차례에 만들어져요.'
 
 
 def run_summary(hub, directory, config, limit=RUN_LINES):
@@ -2161,7 +2161,7 @@ def collect_text(message, running):
     and it can take minutes per mail. A screen that did not say so looked as though
     the mail had arrived broken.
     """
-    message = str(message or '').strip() or '가져올 새 메일이 없습니다.'
+    message = str(message or '').strip() or '가져올 새 메일이 없어요.'
     if running:
         return message
     return message + ' · 분석은 수집을 시작하면 진행됩니다.'
@@ -2181,7 +2181,7 @@ def reanalyze_text(asked, wanted, running=True):
 
     Store.reset() skips a mail that is in Codex right now, because clearing its result
     would be overwritten by the answer already on its way. A button that then said
-    '요청했습니다' would be describing something that did not happen.
+    '요청했어요' would be describing something that did not happen.
 
     Nor does the button analyse anything itself — it clears the result and wakes the
     worker, and with the collector stopped there is no worker to wake. So it says so,
@@ -2190,11 +2190,11 @@ def reanalyze_text(asked, wanted, running=True):
     """
     skipped = max(0, wanted - asked)
     if skipped and not asked:
-        return ('지금 분석 중이라 다시 분석할 수 없습니다. '
+        return ('지금 분석 중이라 다시 분석할 수 없어요. '
                 '분석이 끝나면 다시 눌러 주세요.')
-    text = f'{asked}건을 다시 분석하도록 요청했습니다.'
+    text = f'{asked}건을 다시 분석하도록 요청했어요.'
     if skipped:
-        text += f' {skipped}건은 지금 분석 중이라 건너뛰었습니다.'
+        text += f' {skipped}건은 지금 분석 중이라 건너뛰었어요.'
     if not running:
         text += ' 분석은 수집을 시작하면 진행됩니다.'
     return text
@@ -2332,22 +2332,22 @@ def model_option(row):
 
 
 def clipped_note(total, limit=BODY_LIMIT):
-    """'본문 123,456자 중 앞부분 20,000자만 분석했습니다' — or '' for an ordinary mail.
+    """'본문 123,456자 중 앞부분 20,000자만 분석했어요' — or '' for an ordinary mail.
 
     Said out loud and in the warning tone, because a clipped analysis that looked like
     every other analysis is the one way this limit can quietly cost a deadline.
     """
     if not total:
         return ''
-    return (f'본문이 {int(total):,}자여서 앞부분 {limit:,}자만 분석했습니다. '
-            '뒤쪽에 있는 일정이나 요청은 빠졌을 수 있으니 원문을 확인하세요. '
-            '원문은 전체가 보관되어 있습니다.')
+    return (f'본문이 {int(total):,}자여서 앞부분 {limit:,}자만 분석했어요. '
+            '뒤쪽에 있는 일정이나 요청은 빠졌을 수 있으니 원문을 확인해 주세요. '
+            '원문은 전체가 보관돼 있어요.')
 
 
 def translated_note(language):
     """번역문 위에 붙는 한 줄. What it was, and what it cannot be trusted for."""
     source = f'{language} 원문을' if language else '원문을'
-    return f'{source} Codex가 옮긴 것입니다. 금액·수량·날짜·품번은 원문에서 확인하세요.'
+    return f'{source} Codex가 옮긴 거예요. 금액·수량·날짜·품번은 원문에서 확인해 주세요.'
 
 
 def detail_view(row):
@@ -2454,7 +2454,7 @@ def thread_strip(rows, token):
             ui.label('이 대화').classes('ma-head__title').style('font-size:12.5px')
             ui.label(thread_line(rows)).classes('ma-meta__item')
         if hidden:
-            ui.label(f'앞선 {hidden}통은 접었습니다').classes('ma-meta__item')
+            ui.label(f'앞선 {hidden}통은 접었어요').classes('ma-meta__item')
         with ui.element('div').classes('ma-today'):
             for row in shown:
                 with ui.element('div').classes('ma-today__row'):
@@ -2474,26 +2474,29 @@ def thread_strip(rows, token):
 # 꺼낸 첨부가 놓이는 폴더 이름. 데이터 폴더 아래이고, 메일마다 제 하위 폴더를 갖는다.
 # 알림이 무엇을 하고 무엇을 하지 않는지. '창을 닫아도'가 아니라 '수집이 도는 동안'인
 # 것이 중요하다 — 알림을 띄우는 것은 수집기이지 창이 아니다.
-NOTIFY_NOTE = '수집이 도는 동안만 알립니다. 이미 알린 메일은 다시 알리지 않습니다'
+NOTIFY_NOTE = '수집이 도는 동안만 알려요. 이미 알린 메일은 다시 알리지 않아요'
 ATTACH_DIR = 'attachments'
 # 첨부는 이 앱이 만든 것이 아니라 남이 보낸 파일이고, 여는 것은 Windows다. 화면이
 # 그 사실을 한 번 말해 두는 자리 — 도우미는 첨부를 분석에 보내지도, 열어 보지도 않는다.
-ATTACH_NOTE = '첨부는 분석에 보내지 않습니다. 꺼낸 파일은 데이터 폴더에 남습니다'
+ATTACH_NOTE = '첨부는 분석에 보내지 않아요. 꺼낸 파일은 데이터 폴더에 남아요'
 SIZE_UNITS = (('GB', 1024 ** 3), ('MB', 1024 ** 2), ('KB', 1024), ('B', 1))
 
 
-# 금액 줄에 붙는 색. 들어오는 돈과 나가는 돈이 한 목록에 섞여 서는 화면이라, 종류가
-# 색을 갖지 않으면 합계 옆의 줄들이 전부 같은 것으로 읽힌다. 견적은 아직 돈이 아니라서
-# 중립이고, 입금만 초록이다 — 실제로 들어온 유일한 종류.
-MONEY_TONES = {'견적': NEUTRAL, '청구': SOON, '입금': DASH_GREEN, '계약': LINK, '기타': NEUTRAL}
+# 금액 줄에 붙는 색. 입금 하나만 색을 갖는다 — 넷에 색을 주면 어느 것도 먼저 읽히지
+# 않는다는 것이 ANALYSIS_PARTS가 넷 중 둘에만 accent를 주는 이유이고, 여기에는 그보다
+# 더 강하게 적용된다: 견적·청구·계약은 전부 '아직 일어나지 않은 돈'이라 서로 구분할
+# 이유가 색만큼 크지 않은 반면, 입금은 '이미 들어온 돈'이라 종류가 아니라 상태다.
+# 종류 자체는 태그의 글자가 이미 말하고 있고, 색이 답하는 질문은 '끝났는가' 하나다.
+MONEY_TONES = {'견적': NEUTRAL, '청구': NEUTRAL, '입금': DASH_GREEN, '계약': NEUTRAL,
+               '기타': NEUTRAL}
 # 확인 필요가 걸린 줄. 합계에서 빠졌다는 사실이 줄 자체에도 보여야 한다 — 합계 밑의
 # 한 문장만으로는 '어느 줄이' 빠졌는지 말하지 않는다.
-MONEY_REVIEW_TIP = '합계에서 빠져 있습니다. 금액을 고치면 합계에 들어갑니다'
-MONEY_EDITED_TIP = '사람이 고친 금액입니다'
+MONEY_REVIEW_TIP = '합계에서 빠져 있어요. 금액을 고치면 합계에 들어가요'
+MONEY_EDITED_TIP = '사람이 고친 금액이에요'
 MONEY_HINT = '쉼표 없이 숫자만. 비워 두면 합계에서 계속 빠집니다'
 # 이 화면 전체가 무엇인지 한 줄로. '분석이 읽은'이 중요하다 — 회계 자료가 아니라 모델이
 # 메일에서 옮긴 숫자이고, 화면이 그 사실을 감추면 합계가 장부처럼 읽힌다.
-MONEY_NOTE = '분석이 메일에서 읽은 금액입니다. 회계 자료가 아닙니다'
+MONEY_NOTE = '분석이 메일에서 읽은 금액이에요. 회계 자료가 아니에요'
 MONEY_ROW_NOTE = '누르면 그 메일이 열립니다'
 # 한 번에 그리는 금액 줄. 더 있으면 달과 종류로 좁힌다.
 MONEY_ROWS = 80
@@ -3115,7 +3118,7 @@ def deadlines(data, today, token, on_tick):
     from nicegui import ui
     rows = deadline_rows(data, today)
     if not rows:
-        empty('마감이 있는 일정이 없습니다.')
+        empty('마감이 있는 일정이 없어요.')
         return
     done = deadline_progress(rows)
     with ui.element('div').classes('ma-due__head'):
@@ -3179,7 +3182,7 @@ def waiting_panel(rows, token, on_done):
             ui.space()
             ui.label(WAIT_NOTE).classes('ma-meta__item')
         if not rows:
-            empty(f'{WAIT_DAYS}일 넘게 답장을 기다리는 메일이 없습니다.')
+            empty(f'{WAIT_DAYS}일 넘게 답장을 기다리는 메일이 없어요.')
             return
         with ui.element('div').classes('ma-duelist'):
             for row in rows:
@@ -3278,7 +3281,7 @@ def today_panel(rows, today, token):
             ui.link('달력 열기', href('/calendar', token)) \
                 .style(f'color:{BRAND};font-size:12px;text-decoration:none')
         if not rows:
-            empty('오늘 예정된 일정이 없습니다.')
+            empty('오늘 예정된 일정이 없어요.')
             return
         with ui.element('div').classes('ma-today'):
             for row in rows:
@@ -3317,10 +3320,10 @@ def event_error(title, start, deadline):
     show up in the list below, and appear on no calendar, with nothing saying why.
     """
     if not str(title or '').strip():
-        return '일정 제목을 입력하세요.'
+        return '일정 제목을 적어 주세요.'
     for label, value in (('시작', start), ('마감', deadline)):
         if str(value or '').strip() and not parse_day(value)[0]:
-            return f'{label} 날짜를 읽을 수 없습니다. {EVENT_HINT} 형식으로 입력하세요.'
+            return f'{label} 날짜를 읽을 수 없어요. {EVENT_HINT} 형식으로 적어 주세요.'
     if not str(start or '').strip() and not str(deadline or '').strip():
         return '시작이나 마감 중 하나는 있어야 달력에 올라갑니다.'
     return ''
@@ -3365,8 +3368,8 @@ def manual_panel(directory, account, token, on_change):
 
     with card('직접 추가한 일정', 'edit_calendar'):
         ui.label(f'분석이 잡지 못한 일정을 손으로 올립니다. 날짜는 {EVENT_HINT} 형식이고, '
-                 '시작과 마감 중 하나만 있어도 됩니다. 메일에 딸리지 않으므로 누를 메일이 '
-                 '없고, Excel 일정 시트에는 나가지 않습니다.').classes('ma-lede')
+                 '시작과 마감 중 하나만 있어도 돼요. 메일에 딸리지 않으므로 누를 메일이 '
+                 '없고, Excel 일정 시트에는 나가지 않아요.').classes('ma-lede')
         with ui.element('div').style('display:flex;gap:8px;flex-wrap:wrap;'
                                      'align-items:center;margin-bottom:12px'):
             title = ui.input(placeholder='일정 제목').props('dense outlined') \
@@ -3379,7 +3382,7 @@ def manual_panel(directory, account, token, on_change):
                 .style('flex:1 1 160px')
             ui.button('추가', icon='add', on_click=add).props('unelevated dense no-caps')
         if not rows:
-            empty('직접 추가한 일정이 없습니다.')
+            empty('직접 추가한 일정이 없어요.')
             return
         for row in rows:
             with ui.element('div').classes('ma-row'):
@@ -3409,7 +3412,7 @@ def todo_tally(counts, token):
             ui.link('할 일 판 열기', href('/todo', token)) \
                 .style(f'color:{BRAND};font-size:12px;text-decoration:none')
         if not counts['total']:
-            empty('메일에서 나온 할 일도, 직접 적은 것도 없습니다.')
+            empty('메일에서 나온 할 일도, 직접 적은 것도 없어요.')
             return
         with ui.element('div').classes('ma-tally'):
             for state, label in COLUMNS:
@@ -3466,7 +3469,7 @@ def pinned_panel(views, token, total=0):
             ui.link('메모 열기', href('/memo', token)) \
                 .style(f'color:{BRAND};font-size:12px;text-decoration:none')
         if not views:
-            empty('고정한 메모가 없습니다. 메모 화면에서 압정을 누르면 여기에 올라옵니다.')
+            empty('고정한 메모가 없어요. 메모 화면에서 압정을 누르면 여기에 올라와요.')
             return
         with ui.element('div').style('display:grid;gap:8px;padding:2px 18px 16px'):
             for view in views:
@@ -3785,7 +3788,7 @@ def refused():
     ui.add_head_html(THEME)
     with ui.element('div').classes('ma-page'):
         with card():
-            ui.label('이 주소로는 열 수 없습니다. 메일 도우미가 띄운 창에서 다시 열어 주세요.') \
+            ui.label('이 주소로는 열 수 없어요. 메일 도우미가 띄운 창에서 다시 열어 주세요.') \
                 .style(f'color:{INK};font-size:13px')
 
 
@@ -3924,7 +3927,7 @@ window.mailCalendar = function (events, tries) {
     // A missing vendor file must say so instead of leaving an empty page.
     if (host) {
       host.dataset.state = 'no-library';
-      host.textContent = '달력 구성 요소를 불러오지 못했습니다. 설치가 손상되었을 수 있습니다.';
+      host.textContent = '달력 구성 요소를 불러오지 못했어요. 설치가 손상됐을 수 있어요.';
     }
     return;
   }
@@ -3953,7 +3956,7 @@ window.mailCalendar = function (events, tries) {
                     right: 'dayGridMonth,timeGridWeek,listMonth'},
     buttonText: {today: '오늘', month: '월', week: '주', list: '목록'},
     allDayText: '종일',
-    noEventsText: '이 기간에는 일정이 없습니다.',
+    noEventsText: '이 기간에는 일정이 없어요.',
     moreLinkText: (n) => `외 ${n}건`,
     dayHeaderContent: (arg) => weekdays[arg.date.getDay()],
     datesSet: (info) => {
@@ -4016,13 +4019,13 @@ window.mailCalendar = function (events, tries) {
       const body = [];
       body.push(`<div class="ma-tip__row"><b>${stamp(info.event.start)}</b>`
                 + ` ${weekdays[info.event.start.getDay()]}요일</div>`);
-      if (props.missed) body.push('<div class="ma-tip__row ma-tip__miss">마감이 지났습니다</div>');
+      if (props.missed) body.push('<div class="ma-tip__row ma-tip__miss">마감이 지났어요</div>');
       if (props.evidence) {
         body.push(`<div class="ma-tip__row">근거: ${escapeHtml(props.evidence)}</div>`);
       }
       body.push('<div class="ma-tip__hint">'
-                + (props.manual ? '직접 추가한 일정입니다.'
-                                : '누르면 이 일정이 나온 메일이 열립니다.')
+                + (props.manual ? '직접 추가한 일정이에요.'
+                                : '누르면 이 일정이 나온 메일이 열려요.')
                 + '</div>');
       const html = '<div class="ma-tip__head">'
         + `<span class="ma-tip__dot" style="background:${info.event.backgroundColor}"></span>`
@@ -4259,7 +4262,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
     def update_body(refresh, close=None):
         """Whichever of the four states the updater is in. Built by both screens."""
         if updater is None:
-            empty('이 환경에서는 업데이트를 확인할 수 없습니다.')
+            empty('이 환경에서는 업데이트를 확인할 수 없어요.')
             return
         if updater.state == READY:
             with ui.element('div').classes('ma-wait'):
@@ -4270,7 +4273,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
         if updater.state == WORKING:
             total = updater.progress.get('total') or 0
             done = updater.progress.get('done') or 0
-            ui.label('설치 파일을 내려받는 중입니다. 창을 닫지 마세요.') \
+            ui.label('설치 파일을 내려받는 중이에요. 창을 닫지 마세요.') \
                 .style(f'color:{INK};font-size:13px;margin-bottom:8px')
             ui.linear_progress(done / total if total else 0, show_value=False) \
                 .classes('ma-progress').props('size=6px rounded'
@@ -4281,9 +4284,9 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 ui.button('취소', on_click=updater.stop).props('flat dense no-caps')
             return
         if updater.offer is None:
-            empty(f'최신 버전입니다. (현재 {__version__})')
+            empty(f'최신 버전이에요. (현재 {__version__})')
             return
-        ui.label(f"새 버전 {updater.offer['version']}이(가) 나왔습니다.") \
+        ui.label(f"새 버전 {updater.offer['version']}이(가) 나왔어요.") \
             .style(f'color:{INK};font-size:16px;font-weight:700;letter-spacing:-.01em')
         ui.label(offer_line(updater.offer, __version__)).classes('ma-meta__item') \
             .style('margin:2px 0 12px')
@@ -4337,12 +4340,12 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
 
         Whatever state the updater is in, then when it was last asked, then the way to
         ask again. 지금 확인 says which of the four things happened rather than going
-        quiet: '새 버전이 없습니다' and '물어보지 못했습니다' are not the same sentence.
+        quiet: '새 버전이 없어요' and '물어보지 못했어요' are not the same sentence.
         """
         def say(text):
             """The one line under the card. It lives outside `block` on purpose.
 
-            Saying '확인하는 중입니다…' by rebuilding the panel deletes the 지금 확인
+            Saying '확인하는 중이에요…' by rebuilding the panel deletes the 지금 확인
             button — and the handler is running in that button's slot, so after the
             await ui.notify() could not find the client any more: the RuntimeError
             killed the rest of the handler and the waiting line stayed on screen for
@@ -4572,6 +4575,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 dialog.open()
 
         read()
+        prefs = home_prefs(app.storage.user.get('home'))
         with page_shell('/'):
             dialog = ui.dialog()
             with dialog, card().style('max-width:620px'):
@@ -5092,7 +5096,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
 
                 with ui.element('div').classes('ma-foot'):
                     ui.label(f"{data['first']}–{data['last']} / {data['total']}건"
-                             if data['total'] else '조건에 맞는 메일이 없습니다.') \
+                             if data['total'] else '조건에 맞는 메일이 없어요.') \
                         .classes('ma-meta__item')
                     ui.button('처리 완료', icon='done', on_click=lambda: mark(HANDLED)) \
                         .props('flat dense no-caps text-color=secondary')
@@ -5121,7 +5125,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             row = store(directory).detail(ident) if ident else None
             if row is None:
                 with card().classes('ma-modal'):
-                    empty('메일을 찾을 수 없습니다. 목록에서 다시 선택하세요.')
+                    empty('메일을 찾을 수 없어요. 목록에서 다시 골라 주세요.')
                 return
             view = detail_view(row)
             if not reading['tab']:
@@ -5369,7 +5373,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                                 .style(f'margin-bottom:8px;min-height:{HEAD_ROW}px'):
                             ui.label('분석 결과').classes('ma-head__title')
                         if not view['analysed']:
-                            empty('아직 분석되지 않았습니다.')
+                            empty('아직 분석되지 않았어요.')
                         for part in analysis_blocks(view):
                             accent = f" ma-part--{part['accent']}" if part['accent'] else ''
                             with ui.element('div').classes('ma-part' + accent):
@@ -5385,7 +5389,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                                     # than offering to put it there a second time.
                                     with ui.element('div').classes('ma-part__foot'):
                                         if view['todo_hidden']:
-                                            ui.label('할 일 판에서 치운 항목입니다.') \
+                                            ui.label('할 일 판에서 치운 항목이에요.') \
                                                 .classes('ma-meta__item')
                                         else:
                                             ui.link('할 일 판에서 보기',
@@ -5417,8 +5421,8 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                                         # The one thing the calendar cannot say: this
                                         # event carries no date it could be drawn on.
                                         ui.label('읽을 수 있는 날짜가 없어 달력에는 '
-                                                 '올라가지 않습니다. 일정 화면에서 직접 '
-                                                 '추가할 수 있습니다.') \
+                                                 '올라가지 않아요. 일정 화면에서 직접 '
+                                                 '추가할 수 있어요.') \
                                             .classes('ma-meta__item')
                         for item in money_view(view):
                             tone = css_color(MONEY_TONES.get(item['kind'], NEUTRAL))
@@ -5538,7 +5542,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                             memo_cards(memos, panel.refresh, fresh.pop('id', None),
                                        linked=False)
                         if not memos:
-                            empty('이 메일에 붙인 메모가 없습니다.')
+                            empty('이 메일에 붙인 메모가 없어요.')
                         ui.button('이 메일에 메모 붙이기', icon='add', on_click=attach) \
                             .props('outline dense no-caps').style('margin-top:8px')
                 with ui.element('div').classes('ma-head').style('margin:18px 0 6px'):
@@ -5864,14 +5868,14 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                                         ui.button(icon='delete_outline',
                                                   on_click=lambda c=item: drop(c)) \
                                             .props('flat dense round size=sm color=grey-7') \
-                                            .tooltip('할 일 판에서 치우기 (메일은 남습니다)'
+                                            .tooltip('할 일 판에서 치우기 (메일은 남아요)'
                                                      if item['kind'] == 'mail' else '삭제')
 
         with page_shell('/todo'):
             ui.label('메일에서 나온 다음 행동과, 직접 적은 할 일을 한 판에 둡니다. '
                      '카드를 끌어다 옮기거나 화살표 버튼을 눌러 옮길 수 있고, '
                      '메일 카드를 옮기면 그 메일의 처리 상태가 함께 바뀝니다. '
-                     '휴지통은 카드를 판에서 치웁니다 — 메일 카드는 메일을 지우지 않습니다.') \
+                     '휴지통은 카드를 판에서 치워요 — 메일 카드는 메일을 지우지 않아요.') \
                 .classes('ma-lede')
             with card().style('padding:12px 14px;margin-bottom:14px'):
                 with ui.element('div').style('display:flex;gap:8px;flex-wrap:wrap'):
@@ -5906,8 +5910,8 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             live['ids'] = tuple(item['id'] for item in data['queue'])
             if not data['queue']:
                 with card():
-                    empty('답장을 기다리는 메일이 없습니다. 답변이 필요한 메일이 분석되면 '
-                          '여기에 모입니다.')
+                    empty('답장을 기다리는 메일이 없어요. 답변이 필요한 메일이 분석되면 '
+                          '여기에 모여요.')
                 return
             view = data['current']
 
@@ -5986,8 +5990,8 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                         .classes('ma-meta__item').style('text-decoration:none')
 
         with page_shell('/drafts'):
-            ui.label('답장이 필요한데 아직 손대지 않은 메일입니다. 말투와 방향을 골라 초안을 '
-                     '만들고, 고쳐 쓰면 자동 저장되며 저장한 메일은 목록에서 빠집니다.') \
+            ui.label('답장이 필요한데 아직 손대지 않은 메일이에요. 말투와 방향을 골라 초안을 '
+                     '만들고, 고쳐 쓰면 자동 저장되며 저장한 메일은 목록에서 빠져요.') \
                 .classes('ma-lede')
             with ui.element('div').classes('ma-alert ma-alert--warn') \
                     .style('margin-bottom:12px') as notice:
@@ -6015,8 +6019,8 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     queue.refresh()     # nothing on screen to lose
                     return
                 fresh = len([ident for ident in ids if ident not in live['ids']])
-                arrived.set_text(f'새 초안 {fresh}건이 도착했습니다.' if fresh
-                                 else '검토할 초안 목록이 바뀌었습니다.')
+                arrived.set_text(f'새 초안 {fresh}건이 도착했어요.' if fresh
+                                 else '검토할 초안 목록이 바뀌었어요.')
                 notice.set_visibility(True)
 
             ui.timer(REFRESH_SECONDS, watch)
@@ -6182,11 +6186,11 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     .props('no-caps dense unelevated toggle-color=primary').classes('ma-seg')
             if not views:
                 with card():
-                    empty('아직 메모가 없습니다. 메일도 일정도 할 일도 아닌 것 — 전화번호, '
-                          '양식이 있는 자리, 회의 중에 흘려 적은 한 줄을 여기에 둡니다.')
+                    empty('아직 메모가 없어요. 메일도 일정도 할 일도 아닌 것 — 전화번호, '
+                          '양식이 있는 자리, 회의 중에 흘려 적은 한 줄을 여기에 둬요.')
             elif not data['pinned'] and not data['rest']:
                 with card():
-                    empty('이 조건에 맞는 메모가 없습니다.')
+                    empty('이 조건에 맞는 메모가 없어요.')
             for title, icon, key in (('고정', 'push_pin', 'pinned'),
                                      ('메모', 'sticky_note_2', 'rest')):
                 if not data[key]:
@@ -6203,9 +6207,9 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             live['fresh'] = None
 
         with page_shell('/memo'):
-            ui.label('메일도 일정도 할 일도 아닌 것을 적어두는 곳입니다. 입력을 멈추면 저장되고, '
-                     '메일에 붙인 메모는 그 메일을 열 때 같이 나옵니다. 압정을 누르면 '
-                     '대시보드에도 올라옵니다.').classes('ma-lede')
+            ui.label('메일도 일정도 할 일도 아닌 것을 적어두는 곳이에요. 입력을 멈추면 저장되고, '
+                     '메일에 붙인 메모는 그 메일을 열 때 같이 나와요. 압정을 누르면 '
+                     '대시보드에도 올라와요.').classes('ma-lede')
             with ui.element('div').classes('ma-alert ma-alert--warn') \
                     .style('margin-bottom:12px') as notice:
                 ui.icon('sticky_note_2').style('font-size:16px')
@@ -6237,7 +6241,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 if not live['signature']:
                     board.refresh()     # an empty wall has nothing to lose
                     return
-                arrived.set_text('다른 화면에서 메모가 바뀌었습니다.')
+                arrived.set_text('다른 화면에서 메모가 바뀌었어요.')
                 notice.set_visibility(True)
 
             ui.timer(REFRESH_SECONDS, watch)
@@ -6353,7 +6357,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 reply = await nicerun.io_bound(helpers.chat_reply, question, history,
                                                chat_context(mail_of(room)), config)
             except Exception as exc:
-                reply = f'답하지 못했습니다: {type(exc).__name__}: {exc}'
+                reply = f'답하지 못했어요 · {type(exc).__name__}: {exc}'
             store(directory).add_chat(account, 'codex', reply, room)
             busy['now'] = False
             box.enable()
@@ -6436,7 +6440,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             """The thread list. Rebuilt on every write, which is cheap: one grouped query."""
             shaped = room_search(current()[0], state['query'])
             if not shaped:
-                empty('찾는 대화가 없습니다.')
+                empty('찾는 대화가 없어요.')
                 return
             for entry in shaped:
                 classes = 'ma-room' + (' is-open' if entry['open'] else '')
@@ -6498,7 +6502,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                         thread()
                     with ui.element('div').classes('ma-compose'):
                         box = ui.textarea(
-                            placeholder='질문을 입력하세요 · Enter 전송, Shift+Enter 줄바꿈')
+                            placeholder='질문을 적어 주세요 · Enter 전송, Shift+Enter 줄바꿈')
                         box.props('outlined autogrow dense') \
                             .style('flex:1 1 auto;min-width:0')
                         # .exact so Shift+Enter still writes a newline; .prevent so the
@@ -6532,7 +6536,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             found = money_entries(store(directory).page(account)) if account else []
             if not found:
                 with card('금액', 'payments', note=MONEY_NOTE):
-                    empty('분석된 메일에서 금액을 찾지 못했습니다.')
+                    empty('분석된 메일에서 금액을 찾지 못했어요.')
                 return
             month_list = months(found)
             if picked['month'] and picked['month'] not in month_list:
@@ -6547,7 +6551,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     ui.space()
                     ui.label(MONEY_NOTE).classes('ma-meta__item')
                 if not book['sums']:
-                    empty('합계를 낼 수 있는 금액이 없습니다.')
+                    empty('합계를 낼 수 있는 금액이 없어요.')
                 tiles = grid(minimum=180, gap=10)
                 # 통화마다 그리드를 따로 두면 통화 하나에 종류 하나뿐인 줄이 페이지
                 # 폭을 다 쓰는 카드가 된다. 묶음은 카드 이름('입금 · USD')이 이미
@@ -6579,7 +6583,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             with ui.element('div').style('margin-top:14px'):
                 with card('금액이 적힌 메일', 'receipt_long', note=MONEY_ROW_NOTE):
                     if not shown:
-                        empty('이 조건에 맞는 금액이 없습니다.')
+                        empty('이 조건에 맞는 금액이 없어요.')
                     for entry in shown[:MONEY_ROWS]:
                         tone = css_color(MONEY_TONES.get(entry['kind'], NEUTRAL))
                         with ui.element('div').classes('ma-due'):
@@ -6598,7 +6602,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                             ui.label(entry['text'] or '금액 미상') \
                                 .classes('ma-due__left').style(f'color:{INK};font-weight:650')
                     if len(shown) > MONEY_ROWS:
-                        ui.label(f'{len(shown) - MONEY_ROWS}건은 표시하지 않았습니다. '
+                        ui.label(f'{len(shown) - MONEY_ROWS}건은 표시하지 않았어요. '
                                  '달이나 종류로 좁혀 보세요.').classes('ma-meta__item')
 
         def pick_month(value):
@@ -6654,10 +6658,10 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 if len(shown) != len(found):
                     ui.label(f'{len(shown)}곳만 표시').classes('ma-meta__item')
             if not rows:
-                empty('아직 수집된 메일이 없습니다.')
+                empty('아직 수집된 메일이 없어요.')
                 return
             if not found:
-                empty('그 이름이나 주소로 받은 메일이 없습니다.')
+                empty('그 이름이나 주소로 받은 메일이 없어요.')
                 return
             with grid(minimum=250, gap=12):
                 for row in shown:
@@ -6726,7 +6730,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     if data['trend']:
                         chart(trend_option(data['trend']), 240)
                     else:
-                        empty('아직 기록이 없습니다.')
+                        empty('아직 기록이 없어요.')
             with grid(minimum=280).style('margin-top:14px'):
                 # The same two charts as the 대시보드's, off the same counts, so they
                 # open the same filtered list — a bar that was a link on one page and
@@ -6792,8 +6796,8 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 with ui.element('div').classes('ma-alert ma-alert--warn') \
                         .style('margin-top:14px'):
                     ui.icon('info_outline').style('font-size:16px')
-                    ui.label('창이 이미 실행 중입니다. 이 화면에서는 수집을 시작할 수 없습니다 — '
-                             '수집기는 하나만 돕니다.').style('font-size:12px')
+                    ui.label('창이 이미 실행 중이에요. 이 화면에서는 수집을 시작할 수 없어요 — '
+                             '수집기는 하나만 돌아요.').style('font-size:12px')
             for blocker in view['blockers']:
                 with ui.element('div').classes('ma-alert').style('margin-top:10px'):
                     ui.icon('error_outline').style('font-size:16px')
@@ -6804,7 +6808,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                         ui.label(view['message']).style(f'color:{INK};font-size:13px;'
                                                         'margin-bottom:8px')
                     if not view['lines']:
-                        empty('아직 기록이 없습니다.')
+                        empty('아직 기록이 없어요.')
                     else:
                         with ui.element('div').classes('ma-sunken ma-scroll ma-log') \
                                 .style('display:block;max-height:380px;width:100%'):
@@ -7068,8 +7072,8 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                         .props('unelevated dense no-caps').style('margin-top:4px')
 
                 with card('Codex 모델', 'smart_toy'):
-                    ui.label('메일 분석과 상담에 쓸 모델입니다. 목록은 Codex CLI가 이 PC에 '
-                             '저장해 둔, 지금 계정으로 쓸 수 있는 모델입니다.') \
+                    ui.label('메일 분석과 상담에 쓸 모델이에요. 목록은 Codex CLI가 이 PC에 '
+                             '저장해 둔, 지금 계정으로 쓸 수 있는 모델이에요.') \
                         .classes('ma-lede').style('margin-bottom:10px')
                     if not models:
                         with ui.element('div').classes('ma-alert').style('margin-bottom:10px'):
@@ -7122,7 +7126,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                         .props('unelevated dense no-caps').style('margin-top:10px')
 
                 with card('메일 전용 비밀번호', 'key'):
-                    ui.label('Windows 자격 증명에 저장됩니다. 설정 파일에는 기록되지 않습니다.') \
+                    ui.label('Windows 자격 증명에 저장돼요. 설정 파일에는 기록되지 않아요.') \
                         .classes('ma-lede').style('margin-bottom:10px')
                     password_box = ui.input(password=True, placeholder='입력 후 저장') \
                         .classes('w-full')
@@ -7137,10 +7141,13 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     ui.label('연결 실패와 분석 실패의 원인을 단계별로 확인합니다. '
                              '아무것도 수정하지 않고 읽기만 합니다.') \
                         .classes('ma-lede').style('margin-bottom:10px')
+                    # 둘 다 읽기만 하는 점검이므로 무게가 같아야 한다. 하나만 brand fill이면
+                    # 그 카드에서 해야 할 일이 그것이라는 뜻이 되는데, 점검은 저장과 달리
+                    # 해야 하는 일이 아니다 — brand는 그 화면에서 commit하는 버튼의 것이다.
                     with ui.element('div').style('display:flex;gap:6px;flex-wrap:wrap;'
                                                  'margin-bottom:4px'):
                         ui.button('메일 연결 점검', icon='lan', on_click=check_mail) \
-                            .props('unelevated dense no-caps')
+                            .props('outline dense no-caps')
                         ui.button('Codex 상태 점검', icon='terminal', on_click=check_codex) \
                             .props('outline dense no-caps')
                     report_block()

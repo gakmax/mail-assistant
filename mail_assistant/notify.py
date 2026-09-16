@@ -54,9 +54,9 @@ def summarise(rows):
     subject = first['subject'][:TITLE_MAX]
     if len(rows) == 1:
         title = f"{first['priority']} 메일: {subject}"
-        return title, first['action'] or '메일 도우미에서 확인하세요.'
+        return title, first['action'] or '메일 도우미에서 확인해 주세요.'
     title = f"{first['priority']} 메일 {len(rows)}건"
-    return title, f'{subject} 외 {len(rows) - 1}건 — 메일 도우미에서 확인하세요.'
+    return title, f'{subject} 외 {len(rows) - 1}건 — 메일 도우미에서 확인해 주세요.'
 
 
 def enabled(config):

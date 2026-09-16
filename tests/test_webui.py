@@ -305,7 +305,7 @@ class MoneyScreenTests(unittest.TestCase):
 
     def test_the_screen_says_it_is_not_a_ledger(self):
         """회계 자료가 아니라 모델이 메일에서 옮긴 숫자다."""
-        self.assertIn('회계 자료가 아닙니다', MONEY_NOTE)
+        self.assertIn('회계 자료가 아니에요', MONEY_NOTE)
         self.assertIn('합계', MONEY_HINT)
 
     def test_a_corrected_row_is_marked_as_corrected(self):
@@ -341,7 +341,7 @@ class AttachmentRowTests(unittest.TestCase):
         self.assertFalse(rows[0]['empty'])
 
     def test_the_note_says_the_helper_does_not_read_them(self):
-        self.assertIn('분석에 보내지 않습니다', ATTACH_NOTE)
+        self.assertIn('분석에 보내지 않아요', ATTACH_NOTE)
 
 
 class SenderCardTests(unittest.TestCase):
@@ -817,7 +817,7 @@ class CollectTextTests(unittest.TestCase):
         self.assertIn('분석', collect_text('새 메일 2건 수집', False))
 
     def test_a_silent_fetch_still_reports(self):
-        self.assertEqual(collect_text('', True), '가져올 새 메일이 없습니다.')
+        self.assertEqual(collect_text('', True), '가져올 새 메일이 없어요.')
 
 
 class ListingTests(unittest.TestCase):
@@ -1449,12 +1449,12 @@ class ReanalyzeTextTests(unittest.TestCase):
     """다시 분석 reports what reset() actually did, not what the button meant."""
 
     def test_everything_asked_for_was_requested(self):
-        self.assertEqual(reanalyze_text(3, 3), '3건을 다시 분석하도록 요청했습니다.')
+        self.assertEqual(reanalyze_text(3, 3), '3건을 다시 분석하도록 요청했어요.')
 
     def test_a_mail_in_codex_right_now_says_so_instead_of_lying(self):
         said = reanalyze_text(0, 1)
         self.assertIn('지금 분석 중', said)
-        self.assertNotIn('요청했습니다', said)
+        self.assertNotIn('요청했어요', said)
 
     def test_a_mixed_selection_reports_both_halves(self):
         said = reanalyze_text(2, 3)
@@ -1466,12 +1466,12 @@ class ReanalyzeTextTests(unittest.TestCase):
         # at 분석 대기 and the old sentence claimed the work had been requested of
         # something that was not running.
         said = reanalyze_text(3, 3, running=False)
-        self.assertIn('3건을 다시 분석하도록 요청했습니다.', said)
+        self.assertIn('3건을 다시 분석하도록 요청했어요.', said)
         self.assertIn('수집을 시작하면', said)
 
     def test_a_running_collector_says_nothing_extra(self):
         self.assertEqual(reanalyze_text(3, 3, running=True),
-                         '3건을 다시 분석하도록 요청했습니다.')
+                         '3건을 다시 분석하도록 요청했어요.')
         self.assertNotIn('수집', reanalyze_text(2, 3, running=True))
 
     def test_the_skipped_half_still_shows_when_the_collector_is_stopped(self):
@@ -2614,7 +2614,7 @@ class RecommendedModelTests(unittest.TestCase):
         """Codex가 한 번도 돈 적 없는 PC에는 고를 목록 자체가 없으므로 이 줄은 남는다."""
         row = model_rows([], '')[0]
         self.assertEqual(row['value'], '')
-        self.assertIn('이 화면에 나오지 않습니다', row['hint'])
+        self.assertIn('이 화면에 나오지 않아요', row['hint'])
 
     def test_the_open_list_says_it_and_so_does_the_closed_field(self):
         rows = self.rows(5)

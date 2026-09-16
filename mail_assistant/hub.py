@@ -157,7 +157,7 @@ class Hub:
             self.run(settings, self.directory, self.stopping, self.publish, self.waking)
         except Exception as exc:
             self.report('작업 스레드 중단', exc)
-            self.log('실행 오류: 데이터 폴더 접근 권한과 설치 상태를 확인하세요.')
+            self.log('실행 오류: 데이터 폴더 접근 권한과 설치 상태를 확인해 주세요.')
         finally:
             with self.lock:
                 self.thread = None
