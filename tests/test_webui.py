@@ -3725,7 +3725,15 @@ class CountFormTests(unittest.TestCase):
         self.assertEqual(series['data'][0]['itemStyle']['color'], STATUS['긴급'])
 
     def test_the_legend_is_what_makes_a_zero_reachable(self):
-        for rule in ('.ma-leg', '.ma-leg__gone', '.ma-comp'):
+        """It carries the contrast relief too, which is the less obvious half.
+
+        Three of SEGMENT_TONES sit under 3:1 against the card, and that is allowed only
+        while the picture is not the only label — the legend writes the name, the count
+        and the share beside every swatch. Drawing 합산 or 도넛 without it would break
+        both halves at once: the 0 becomes unreachable and the palette becomes illegal.
+        """
+        for rule in ('.ma-leg', '.ma-leg__gone', '.ma-leg__name', '.ma-leg__num',
+                     '.ma-comp'):
             self.assertIn(rule, THEME)
 
 

@@ -193,14 +193,25 @@ COUNT_NOTES = {'rows': '누르면 메일 목록으로', 'bars': '누르면 메�
 # own — 우선순위 has STATUS, which is a *status* palette and must not be borrowed for
 # categories that mean nothing of the sort. One hue in steps was the first try and is
 # the wrong job: six steps of blue put 공지 beside 기타 at ΔE 7.6 for normal vision,
-# under the floor of 15, and four of the six fell below 3:1 against the card. So this
-# is the one categorical palette in the app, ordered so that no *neighbouring* pair is
-# the weak one — measured, not judged, and a test re-runs the same arithmetic. Handed
-# out by CATEGORIES' own fixed position and never by count: by rank it would encode
-# size twice and repaint the survivors every time the numbers moved. It is the second
-# palette here that is not style.py's, for the reason 메모 paper is the first — the
-# window draws no 합산 and no 도넛, so there is nothing to drift apart from.
-SEGMENT_TONES = ('#2563eb', '#c2410c', '#0d9488', '#7c3aed', '#65a30d', '#db2777')
+# under the floor of 15. So this is the one categorical palette in the app, ordered so
+# that no *neighbouring* pair is the weak one (worst adjacent 20.3 normal, 18.9 deutan)
+# — measured, not judged, and a test re-runs the same arithmetic.
+#
+# Three of the six sit under 3:1 against the card, which is allowed only because the
+# picture is never the only label: count_legend() writes the name, the count and the
+# share beside every swatch. **Take the legend away and this palette becomes illegal**,
+# which is the second reason 합산 and 도넛 may not be drawn without one.
+#
+# Judged on *every* pair rather than neighbours it fails — 업무 요청 and 공지 are two
+# blues at ΔE 6.3 — but so does every six-colour set, the one shipped before this one
+# included (보라↔파랑 at deutan 0.4), because the all-pairs gate is for scatter and
+# choropleth and caps at three series. At six the sanctioned relief is the legend.
+#
+# Handed out by CATEGORIES' own fixed position and never by count: by rank it would
+# encode size twice and repaint the survivors every time the numbers moved. It is the
+# second palette here that is not style.py's, for the reason 메모 paper is the first —
+# the window draws no 합산 and no 도넛, so there is nothing to drift apart from.
+SEGMENT_TONES = ('#5b8def', '#f2994a', '#9b51e0', '#27ae60', '#2d9cdb', '#eb5757')
 # The movable units. 메일 종류 and 우선순위 are one each: they take a whole column at
 # every width now, so gluing them into a single unit would only mean dragging one and
 # getting the other.

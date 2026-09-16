@@ -1044,10 +1044,15 @@ forms are exactly the failure 목록 exists to prevent. Two more things hold the
 all. And 메일 종류 has no palette of its own — `STATUS` is a *status* palette and must
 not be borrowed for categories that mean no such thing — so `SEGMENT_TONES` is the one
 categorical palette in the app. Six steps of one blue was tried and measured out: 공지
-beside 기타 at ΔE 7.6 for normal vision against a floor of 15, and four of the six under
-3:1 on the card. The six that replaced it are **ordered so no neighbouring pair is the
-weak one** (worst adjacent 27.1), handed out by `CATEGORIES`' fixed position and never by
-count, and a test re-runs the same OKLab arithmetic rather than trusting the comment.
+beside 기타 at ΔE 7.6 for normal vision against a floor of 15. What replaced it is
+**ordered so no neighbouring pair is the weak one** (worst adjacent 20.3 normal, 18.9
+deutan), handed out by `CATEGORIES`' fixed position and never by count, and a test
+re-runs the same OKLab arithmetic rather than trusting the comment. Three of the six sit
+under 3:1 against the card, and that is legal **only** while the picture is not the only
+label — which is the second reason neither form may be drawn without `count_legend()`.
+Judged on every pair rather than neighbours it fails, on two blues at ΔE 6.3; so does
+every six-colour set, the one shipped before it included at deutan 0.4, because the
+all-pairs gate is for scatter and choropleth and caps at three series.
 
 **A card is dragged by its grip, and only the drop reaches the server.** `.ma-slot__grip`
 is a 14px band over the card's own top padding, which is what lets every panel be
