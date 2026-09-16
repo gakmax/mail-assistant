@@ -17,7 +17,7 @@ that break silently if you don't know them.
 ## Commands
 
 ```bash
-python -m unittest discover -s tests -v    # from the repo root; 737 tests, all platforms
+python -m unittest discover -s tests -v    # from the repo root; 865 tests, all platforms
 ```
 
 ```powershell
@@ -239,6 +239,79 @@ apart. Two of those rules exist because nicegui's own defaults fight the page:
 `.nicegui-content` is a flex column with `align-items:start`, which shrink-wraps the
 header band and stops a long log line wrapping, and every surface that stacks text
 (`.ma-card`, `.ma-sunken`, `.ma-note`) therefore declares `display:block`.
+
+**Radius is a ladder of five and motion is three lengths and one curve.** Colour and
+type were tokenised from the start and these two were not, so they drifted to nine
+radii (`2·4·5·6·7·8·9·10·12`, with only `--r` named) and two durations used
+interchangeably — `.14s` nineteen times, `.12s` twelve — with nothing anywhere saying
+why 5 was not 7 or `.12` not `.14`. There was no reason; that was the whole finding.
+`--r-xs/-s/-m/-l/-full` (6/8/10/12/999) and `--dur-fast/-base/-slow` (.12/.2/.32) with
+one `--ease` replace them, and each has a job: `--dur-fast` for anything that repaints
+(opacity, colour, background), `--dur-base` for the three hover lifts that actually
+move something, `--dur-slow` for the fold — which is why `SIDE_EASE` is now
+`var(--dur-slow) var(--ease)` rather than a figure only this file knows. Three things
+stay off the ladder and a test names each: circles (`50%`), and anything whose radius
+is really its own height — the bar fills, the drop indicators and the scrollbar thumbs
+all take `--r-full` — and the two ambient loops (`ma-beat` 1.7s, `ma-beam` 5s), which
+are background rather than interaction. A test fails on any `border-radius` or
+`transition` in `THEME` that carries its own number.
+
+**A toast's surface never changes; its icon is what says whether it worked.** All 79
+`ui.notify` calls were typed `None` — `'설정을 저장했어요'` and `'저장하지 못했어요'`
+arrived as the same grey box, and the reader had to finish the sentence to learn which
+one it was. `toast(message, mark=…)` is the only caller now and `TOAST_MARKS` has
+exactly three: `done`, `fail`, and `wait` for a booking whose answer comes later —
+which this app has more of than either of the others, because 다시 분석, 브리핑 and
+초안 are all handed to the worker. Quasar's own `type=` is deliberately not used: it
+paints the whole surface green or red, and a toast here lands over the list or the
+draft somebody is reading, where that block of colour is bigger than anything under
+it. The surface stays the slate the hover cards and chart tooltips already use. It is
+`toast()` and not `say()` because `update_panel` has a local `say(text)` of its own,
+which is the same trap `note_tally()` is named around.
+
+**A keyboard has somewhere to be, and pressed is an overlay.** There was no focus rule
+at all — not one `:focus-visible`, not one `outline` — so what a Tab press looked like
+was whatever Quasar gave, in Quasar's blue, decided by nobody. It is `:focus-visible`
+rather than `:focus` so a mouse press does not leave a ring on what it just pressed,
+and it is `outline` rather than `box-shadow` so it survives `overflow:hidden` and moves
+nothing. Pressed is `--press` painted as a background *image* over the fill the surface
+already has: `.q-btn:before` is Quasar's own elevation shadow and `.q-focus-helper` is
+its hover machinery, so neither is available, and a background layer needs neither.
+Disabled dims the whole node with `--disabled` instead of repainting its ground — a
+button that goes grey underneath and keeps its label has stopped looking like the button
+it still is. `shoot.ps1` cannot press a key, so none of this is visible to any test this
+project can run; the tests hold the rules, not the rendering.
+
+**Tabular figures are for columns, and prose is not a column.** `body` carried
+`font-variant-numeric:tabular-nums`, which is a table setting applied to the whole site:
+'미처리 11건' in a briefing sentence had its 1s padded out to the width of a 0, and every
+count in a summary, a memo or a log line read with a hole in it. The default is
+`proportional-nums` now and five places ask for tabular by name — the list, the 원문
+sheet, the KPI figure, the log and the money rows. A test holds `body` to proportional,
+because the cheapest way for this to come back is one line in a reset.
+
+**Brand fill is for the button that commits; a diagnostic is not one.** The rule is one
+brand button per surface, and a settings page made of independent form cards honestly
+has one per card — two 저장 and 비밀번호 저장 each commit their own card and all three
+keep it. What was wrong was 메일 연결 점검 wearing brand while Codex 상태 점검 beside it
+was outline: two buttons that do the same kind of thing, drawn at two weights, on the
+one screen where the difference matters. `run_page` already had this right (시작 brand,
+중지 outline, the rest flat) and is the shape to copy.
+
+**Screen copy is 해요체; the Codex prompts are not.** 206 sentences were 격식체 and 47
+were bare imperatives (`~하세요`). The app's whole position — reading mail on somebody's
+behalf and telling them what it found — is the one 해요체 is for, and the rule arrives
+with a second one worth as much: an error moves the reader on rather than stopping them,
+so `'설정을 먼저 저장하세요'` became `'아직 설정이 비어 있어요. 설정 화면에서 메일
+주소부터 저장해 주세요'`. `collect_text()`, `reanalyze_text()` and `briefing_text()`
+were already doing exactly this; they just had no name for it. Three things are outside
+the rule and `tests/test_copy.py` names each: **`services.py`'s prompts**, where
+`~하세요` is an instruction to a model and changing the tone changes what is being asked;
+docstrings and comments, which developers read; and a developer-only exception like
+`core.py`'s `SQL 리터럴에 쓸 수 없는 값입니다`, which is a programming error and not a
+situation a user can act on. `~해 주세요` and `~마세요` are 해요체 and stay — what the
+test rejects is the bare imperative, because the Don't being followed is about
+directive *labels*, not about asking politely.
 
 **The destinations live in `PAGES`; `NAV_GROUPS` holds nothing but paths.**
 `nav_rows()` takes the name and icon from the first and the order and grouping from the
@@ -463,7 +536,12 @@ carries its `evidence`**, the mail's own phrase, kept even after a human edit: t
 is what lets a reader decide whether to believe the total at all, and `MONEY_NOTE` says
 out loud on the page that this is 분석이 읽은 금액, not 회계 자료. Mail analysed before
 the schema grew simply has no `money` and contributes nothing — 다시 분석 is the way in,
-as it is for `parsed`'s table text.
+as it is for `parsed`'s table text. **Only 입금 carries a colour** in `MONEY_TONES`:
+견적·청구·계약 all had one and four accents are none, which is the arithmetic
+`ANALYSIS_PARTS` already spends two of four by. It applies harder here — those three
+are all money that has not happened yet, so the thing worth telling apart at a glance
+is not the kind but whether it is finished, and the kind is what the tag's own text is
+for.
 
 **The toast is the only thing this app says outside its own window, and it says it
 once.** `Store.unnotified()`/`mark_notified()` existed from the beginning with no
@@ -850,6 +928,56 @@ that visit only — `remember()` is not called for a query parameter, exactly as
 cards' `state=미처리` has always worked — and only a dropdown the reader touched is
 kept in `app.storage.user`.
 
+**화면 배치 moves the cards; it never rebuilds them.** `home()` builds three
+`.ma-stack`s and hides the spare, wraps every unit in its own `.ma-slot`, and `arrange()`
+calls `Element.move()` — so changing 1:1 to 1:1:1 keeps every canvas, the 마감 창 and the
+수집 기록 fold, which is the same reason `paint()` writes chart options in place. A
+`ui.navigate.to` would have been shorter and would have taken all three. Three things
+follow. The slot is a box of its own and **not** the refreshable's own container:
+`refresh()` replaces the card inside it on every beat, and what survives a repaint is
+the only thing a move — or later a drag — can hold on to. All three stacks are built
+even when two are used, because a stack created on demand has nowhere to be moved
+*from* when the reader goes back. And a canvas does not re-measure when its container
+changes width with the window the same size, so `arrange()` ends in
+`run_chart_method('resize')`; nothing else is going to tell it. `.ma-split` is
+`repeat(2,minmax(0,1fr))` for the reason the whole thing is possible at all — at
+1.35:1 the left column was the charts' and the right the panels', and a card changed
+shape when it crossed. `HOME_LAYOUT` keeps one plan per column *count*, never one
+shared order, or switching 2↔3 and back scrambles both; a test holds every plan
+against `HOME_BLOCKS` the way `STATE_SQL` is held against `STATES`.
+
+**메일 종류·우선순위 are rows by default, and the reason is a 0.** `tally()` draws the
+same picture `bar_option` does — `bar_rows()` feeds both, off the same counts — but each
+row is a `ui.link`, so 긴급 0 keeps a full-height click target. A 0 *bar* draws nothing,
+which is the whole reason `yAxis.triggerEvent` exists: it leaves an 11px axis label
+doing the job. The canvas form stays on offer because 통계 draws the same two charts
+through the same `bar_link`, so none of `BAR_EVENT`/`clicked_bar()` was going to be
+deleted anyway. `counts_unit` is the one refreshable that branches: in 목록 the beat
+refreshes it, in 막대 `paint()` writes options in place — refreshing there would drop
+two canvases and replay their entry animation every five seconds.
+
+**A card is dragged by its grip, and only the drop reaches the server.** `.ma-slot__grip`
+is a 14px band over the card's own top padding, which is what lets every panel be
+draggable without any of them knowing: a whole-card drag would fight the 마감 tick, the
+7/14/30 toggle and every link inside. `dragover` fires once per frame, so
+`SLOT_OVER`/`SLOT_LEAVE`/`SLOT_END` and `slot_drag_start()` are `js_handler`s and only
+`SLOT_DROP` calls `emit` — the kanban's rule, and here the stack under each card is a
+drop target too, so `SLOT_DROP` also calls `stopPropagation` or a drop *on* a card would
+also append to its column. That `stopPropagation` is why the `is-over` sweep lives in
+`SLOT_END`: the stack added the class on the way in and never hears the drop.
+`home_plan()` repairs whatever was stored rather than trusting it — an unknown key is
+dropped, a known one the saved order never mentioned is appended where the default
+wanted it — and `home_reorder()` returns None for a drop that moved nothing, exactly as
+`drag_drop()` does for a card returned to its own lane.
+
+**A class name reused in `THEME` loses silently.** `.ma-bars` was `.ma-tally` until the
+count rows came out side by side: the 할 일 판 tally had owned that name since before,
+its `display:flex` sat later in the one stylesheet, and it beat the `display:grid` above
+it with nothing on screen or in a test saying so. `ThemeCollisionTests` now fails the
+build when two top-level rules give the same selector a `display`; a grouped base rule
+refined by a narrower one (`.ma-sheet td, .ma-sheet th` then `.ma-sheet th`) is fine and
+is why the check is on that one property rather than on duplicate selectors.
+
 **The 대시보드 charts are updated, not rebuilt.** `home()` creates its four `ui.echart`
 elements once and `paint()` writes new options into them every `REFRESH_SECONDS`; only
 the text blocks are `@ui.refreshable`. Wrapping a chart in a refreshable drops the
@@ -1207,9 +1335,15 @@ card, sending a chat turn.
 
 ## Style
 
-Korean for anything a user reads, English for docstrings and comments. A `.ps1`
+Korean for anything a user reads, English for docstrings and comments — and the
+Korean a user reads is **해요체**, never 격식체 and never a bare `~하세요` (see the
+invariant above; `tests/test_copy.py` holds it). What Codex reads is the exception:
+prompts keep their imperative because there the mood is the instruction. A `.ps1`
 carrying Korean needs a UTF-8 BOM (see the invariant above) — that applies to
 throwaway scripts too, which is a mistake easy to repeat.
+New CSS spends the tokens rather than a figure: `--r-*` for a radius, `--dur-*` with
+`--ease` for a transition, `--press`/`--disabled` for the two states. A literal in
+either fails a test.
 Docstrings are one line and say *why*, not what. Stdlib only unless there is no
 alternative — `report.py` and `update.py` both do HTTP with `urllib` rather than
 add a dependency. Background work never disturbs the app: it runs on a daemon
