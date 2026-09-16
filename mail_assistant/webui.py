@@ -159,6 +159,31 @@ DEFAULT_LIST = {'query': '', 'state': '', 'category': '', 'priority': '', 'sende
                 'sort': 'received', 'desc': True,
                 'page': 0, 'per': LIST_LIMIT, 'selected': None}
 WINDOWS = (7, 14, 30)           # the 마감 windows the 대시보드 card offers
+# 화면 배치. The key is the column *count*, because that is what decides where a card
+# can go at all; the two halves of the 1.35:1 split were the charts' and the panels'
+# and a card moved between them stopped looking like itself.
+HOME_COLS = (('even', '1 : 1'), ('three', '1 : 1 : 1'))
+HOME_DEFAULT = 'even'
+# 메일 종류·우선순위를 어떻게 그릴지. 목록이 기본인 이유는 0건이다: a bar of 0 draws
+# nothing, so the canvas needs yAxis.triggerEvent to leave an 11px axis label as the
+# whole of the click target, while a row is an <a> whether it counts 47 or 0. 막대 stays
+# on offer because 통계 draws the same two charts and the helpers are there anyway.
+COUNT_FORMS = (('rows', '목록'), ('bars', '막대'))
+COUNT_DEFAULT = 'rows'
+# The movable units. 메일 종류 and 우선순위 travel as one — their grid(minimum=240)
+# collapses to a single column at three-column widths anyway, so splitting them would
+# buy nothing and cost a unit.
+HOME_BLOCKS = ('trend', 'counts', 'today', 'wait', 'deadline', 'todo', 'memo', 'run')
+# Which stack each unit opens in, per column count. Kept per count and not as one list,
+# or switching 2↔3 and back would scramble both. Three columns read 지표 · 시간 · 작업;
+# a test holds every plan against HOME_BLOCKS the way STATE_SQL is held against STATES.
+HOME_LAYOUT = {
+    'even': (('trend', 'counts'),
+             ('today', 'wait', 'deadline', 'todo', 'memo', 'run')),
+    'three': (('trend', 'counts'),
+              ('today', 'wait', 'deadline'),
+              ('todo', 'memo', 'run')),
+}
 TREND_LABELS = (('collected', '수집'), ('analyzed', '분석'), ('exported', '반영'))
 TREND_TONES = {'collected': css_color(LINK), 'analyzed': css_color(NEUTRAL),
                'exported': css_color(DASH_GREEN)}
@@ -466,37 +491,98 @@ body {{
 .ma-head__title {{ font-size:13.5px; font-weight:700; letter-spacing:-.01em; }}
 .ma-grid {{ display:grid; gap:14px; }}
 .ma-stack {{ display:grid; gap:14px; align-content:start; }}
+/* Equal columns, so a card carried from one to the other still looks like itself —
+   which is the whole reason 화면 배치 can offer anything at all. It was 1.35:1 until
+   0.9.0, and that made the left column the charts' and the right the panels'. */
 .ma-split {{
   display:grid; gap:14px; align-items:start;
-  grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);
+  grid-template-columns:repeat(2,minmax(0,1fr));
 }}
-@media (max-width:1080px) {{ .ma-split {{ grid-template-columns:minmax(0,1fr); }} }}
+.ma-split--three {{ grid-template-columns:repeat(3,minmax(0,1fr)); }}
+/* Three columns only where there is room for them: at 1240px of page they are 390px
+   each, and below that the 추이 chart and the 브리핑 have nothing left to be. */
+@media (max-width:1279px) {{
+  .ma-split--three {{ grid-template-columns:repeat(2,minmax(0,1fr)); }}
+}}
+@media (max-width:1080px) {{
+  .ma-split, .ma-split--three {{ grid-template-columns:minmax(0,1fr); }}
+}}
+/* One movable unit. A plain box rather than the refreshable's own container: refresh()
+   replaces the card inside it every beat, and 배치 has to hold something that never
+   goes. min-width:0 because a grid item's default minimum is its content, which the
+   추이 chart would push past the column. */
+.ma-slot {{ display:block; min-width:0; position:relative; }}
+/* The handle: a band over the card's own top padding, so it covers nothing that can be
+   clicked and needs no change to the panels it sits on. Shown on hover rather than
+   always, because eight permanent grips on one page is eight things to read. */
+.ma-slot__grip {{
+  position:absolute; top:0; left:0; right:0; height:14px; z-index:2;
+  display:grid; place-items:center; cursor:grab; opacity:0;
+  border-radius:var(--r-l) var(--r-l) 0 0;
+  background:linear-gradient(var(--sunken), rgba(247,248,250,0));
+  transition:opacity var(--dur-fast) var(--ease);
+}}
+.ma-slot:hover > .ma-slot__grip {{ opacity:1; }}
+.ma-slot__grip:active {{ cursor:grabbing; }}
+.ma-slot__grip .q-icon {{ font-size:13px; color:var(--muted); }}
+.ma-slot.is-dragging {{ opacity:.45; }}
+/* Where it would land. On a card: the gap above it. On a column: one more grid row at
+   the end, which is what an append is. */
+.ma-slot.is-over::after {{
+  content:''; position:absolute; top:-8px; left:0; right:0; height:2px;
+  background:var(--brand); border-radius:var(--r-full);
+}}
+.ma-stack.is-over::after {{
+  content:''; height:2px; background:var(--brand); border-radius:var(--r-full);
+}}
+.ma-pagetop {{ display:flex; align-items:center; justify-content:flex-end; margin-bottom:8px; }}
+.ma-menu {{ display:grid; gap:8px; padding:12px 14px; min-width:184px; }}
+.ma-menu__label {{ font-size:11px; font-weight:600; color:var(--muted); }}
+/* A count row, which is the same picture the canvas drew and a real link besides: a
+   0 keeps its row, its hover and its href, where a 0 bar drew nothing at all. */
+.ma-bars {{ display:grid; gap:2px; }}
+.ma-bars__row {{
+  display:grid; grid-template-columns:5.4em minmax(0,1fr) 2.4em; gap:10px;
+  align-items:center; padding:5px 7px; margin:0 -7px; border-radius:var(--r-s);
+  text-decoration:none; color:inherit;
+}}
+.ma-bars__row:hover {{ background:var(--sunken); }}
+.ma-bars__name {{
+  font-size:12px; color:var(--ink);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}}
+.ma-bars__track {{ height:11px; border-radius:var(--r-full); background:var(--hair); }}
+.ma-bars__fill {{ display:block; height:100%; border-radius:var(--r-full); }}
+.ma-bars__num {{ font-size:11px; font-weight:600; color:var(--subtle); text-align:right; }}
+.ma-bars__num--zero {{ color:var(--muted); }}
+.ma-fill {{ min-width:0; }}
 .ma-seg {{
   background:var(--sunken); border:1px solid var(--line);
-  border-radius:9px; padding:2px; box-shadow:none;
+  border-radius:var(--r-m); padding:2px; box-shadow:none;
 }}
 .ma-seg .q-btn {{
-  font-size:11.5px; min-height:24px; padding:0 9px; border-radius:7px; font-weight:600;
+  font-size:11.5px; min-height:24px; padding:0 9px; border-radius:var(--r-s); font-weight:600;
 }}
 .ma-seg .q-btn__content {{ color:var(--muted); }}
 .ma-seg .q-btn.bg-primary .q-btn__content {{ color:#fff; }}
 .ma-sunken {{
   display:block; background:var(--sunken); border:1px solid var(--hair);
-  border-radius:10px; padding:12px 14px;
+  border-radius:var(--r-m); padding:12px 14px;
 }}
 
 .ma-kpi {{
   display:flex; align-items:flex-start; gap:12px;
-  background:var(--card); border:1px solid var(--line); border-radius:var(--r);
+  background:var(--card); border:1px solid var(--line); border-radius:var(--r-l);
   box-shadow:var(--shadow); padding:14px 16px; text-decoration:none; color:inherit;
-  transition:box-shadow .14s ease, transform .14s ease, border-color .14s ease;
+  transition:box-shadow var(--dur-base) var(--ease), transform var(--dur-base) var(--ease),
+             border-color var(--dur-base) var(--ease);
 }}
 a.ma-kpi:hover {{
   box-shadow:0 4px 10px rgba(24,24,27,.07); transform:translateY(-1px);
   border-color:#d7d8dc;
 }}
 .ma-kpi__icon {{
-  display:grid; place-items:center; width:34px; height:34px; border-radius:9px;
+  display:grid; place-items:center; width:34px; height:34px; border-radius:var(--r-m);
   background:var(--sunken); color:var(--muted); flex:none;
 }}
 .ma-kpi__icon .q-icon {{ font-size:19px; }}
@@ -552,6 +638,7 @@ a.ma-sender:hover {{
 /* A card that never stops moving is a card a reader learns to look away from. */
 @media (prefers-reduced-motion:reduce) {{
   .ma-beam::before {{ animation:none; background:var(--brand-soft); }}
+  .ma-slot__grip {{ transition:none; }}
 }}
 .ma-brief__lede {{
   display:block; font-size:15px; font-weight:650; line-height:1.55;
@@ -2721,6 +2808,28 @@ def chart(option, height=200, cap=None):
 BAR_NOTE = '누르면 메일 목록으로'
 
 
+def tally(pairs, key, token, tones=None):
+    """메일 종류·우선순위 as rows, and the reason the 대시보드 no longer needs a canvas.
+
+    Same picture as `bar_option` draws — a track, a fill, the count on the right — and
+    the same filter behind it, because both read `bar_rows()` off the same counts. What
+    changes is that the row is an `<a>`: a 0 keeps its full-height click target, where a
+    0 bar draws nothing and `yAxis.triggerEvent` had to make an 11px axis label do the
+    whole job. It also costs no `resize` when 화면 배치 changes a column's width.
+    """
+    from nicegui import ui
+    with ui.element('div').classes('ma-bars'):
+        for name, value, percent in bar_rows(pairs):
+            with ui.link(target=href('/mail', token, **{key: name})) \
+                    .classes('ma-bars__row'):
+                ui.label(name).classes('ma-bars__name')
+                with ui.element('div').classes('ma-bars__track'):
+                    ui.element('div').classes('ma-bars__fill').style(
+                        f'width:{percent}%;background:{(tones or {}).get(name, SERIES)}')
+                ui.label(str(value)).classes(
+                    'ma-bars__num' + ('' if value else ' ma-bars__num--zero'))
+
+
 def bar_link(element, key, names, token):
     """A count bar is the way into the mail behind it.
 
@@ -2771,6 +2880,78 @@ def card_hint(name, data):
         # is no attempt cap, so the honest line is how often, not whether.
         return '최대 1시간 간격으로 자동 재시도'
     return ''
+
+
+def home_prefs(saved):
+    """What 화면 배치 remembered, with anything this build does not know dropped."""
+    saved = saved if isinstance(saved, dict) else {}
+    cols = saved.get('cols')
+    form = saved.get('form')
+    order = saved.get('order')
+    return {'cols': cols if cols in dict(HOME_COLS) else HOME_DEFAULT,
+            'form': form if form in dict(COUNT_FORMS) else COUNT_DEFAULT,
+            # Kept raw: home_plan() is what repairs it, and it has to repair a stored
+            # order every time anyway — this build's HOME_BLOCKS may differ from the one
+            # that wrote it.
+            'order': order if isinstance(order, dict) else {}}
+
+
+def home_columns(cols):
+    """The stacks a 대시보드 opens with, one tuple of block keys per column."""
+    return HOME_LAYOUT.get(cols) or HOME_LAYOUT[HOME_DEFAULT]
+
+
+def home_plan(cols, order=None):
+    """The stacks to draw: what the reader last arranged for this column count.
+
+    Repaired rather than trusted. A key this build does not know is dropped, and one it
+    knows that the saved order never mentioned is appended where the default wanted it —
+    a card added in a later version must not vanish because somebody dragged something
+    once, which is the rule that keeps a row for a model Codex has stopped listing.
+    """
+    fallback = HOME_LAYOUT.get(cols) or HOME_LAYOUT[HOME_DEFAULT]
+    wanted = len(fallback)
+    saved = order.get(cols) if isinstance(order, dict) else None
+    columns = [[] for _ in range(wanted)]
+    seen = set()
+    if isinstance(saved, (list, tuple)):
+        for index, keys in enumerate(saved[:wanted]):
+            if not isinstance(keys, (list, tuple)):
+                continue
+            for key in keys:
+                if key in HOME_BLOCKS and key not in seen:
+                    seen.add(key)
+                    columns[index].append(key)
+    if not seen:
+        return [list(keys) for keys in fallback]
+    for index, keys in enumerate(fallback):
+        for key in keys:
+            if key not in seen:
+                seen.add(key)
+                columns[min(index, wanted - 1)].append(key)
+    return columns
+
+
+def home_reorder(plan, moved, column, before=None):
+    """`plan` with `moved` lifted out and put back, or None when nothing would change.
+
+    None and not the plan itself, for the reason `drag_drop()` returns None for a card
+    dropped into its own lane: a drop that moved nothing would otherwise rewrite the
+    stored order and repaint the page, which reads as a flicker with no cause.
+    """
+    if moved not in HOME_BLOCKS or moved == before:
+        return None
+    if not 0 <= column < len(plan):
+        return None
+    was = [list(keys) for keys in plan]
+    columns = [[key for key in keys if key != moved] for keys in plan]
+    if before is None:
+        columns[column].append(moved)
+    elif before in columns[column]:
+        columns[column].insert(columns[column].index(before), moved)
+    else:
+        return None
+    return columns if columns != was else None
 
 
 def card_rows(data):
@@ -3523,6 +3704,41 @@ DRAG_DROP = ("(e) => { e.preventDefault(); e.currentTarget.classList.remove('is-
              " emit(e.dataTransfer.getData('text/plain')); }")
 
 
+# 화면 배치's drag. Same rule as the kanban's above and for the same reason: dragover
+# fires once per frame, and a 대시보드 card crossing a 1200px page with a Python handler
+# on it is hundreds of websocket messages to decorate a layout that is re-read from
+# app.storage anyway. Only the drop calls emit. The slot stops the event because the
+# stack under it is a drop target too — without it, dropping *on* a card would also be
+# dropping at the end of its column.
+SLOT_OVER = ("(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move';"
+             " e.currentTarget.classList.add('is-over'); }")
+SLOT_LEAVE = ("(e) => { if (!e.currentTarget.contains(e.relatedTarget))"
+              " e.currentTarget.classList.remove('is-over'); }")
+SLOT_DROP = ("(e) => { e.preventDefault(); e.stopPropagation();"
+             " e.currentTarget.classList.remove('is-over');"
+             " emit(e.dataTransfer.getData('text/plain')); }")
+# The grip is what is draggable, never the card: a 대시보드 card holds a 마감 tick, a
+# 7/14/30 toggle and links, and a whole-card drag would fight every one of them. The
+# drag image is set to the slot so what follows the pointer is the card, not the 14px
+# band the press landed on.
+# dragend is the only event that fires however the drag ended, so the sweep lives here:
+# a drop on a slot calls stopPropagation, which means the .ma-stack under it added
+# is-over on the way in and never heard the drop that would have taken it off again.
+SLOT_END = ("(e) => { const box = e.currentTarget.parentElement;"
+            " if (box) box.classList.remove('is-dragging');"
+            " document.querySelectorAll('.is-over')"
+            " .forEach((n) => n.classList.remove('is-over')); }")
+
+
+def slot_drag_start(key):
+    """json.dumps for the reason drag_start uses it: the payload is written into JS."""
+    return ("(e) => { e.dataTransfer.effectAllowed = 'move';"
+            " e.dataTransfer.setData('text/plain', %s);"
+            " const box = e.currentTarget.parentElement;"
+            " if (box) { e.dataTransfer.setDragImage(box, 30, 14);"
+            " box.classList.add('is-dragging'); } }" % json.dumps(key))
+
+
 def drag_start(payload):
     """The card's identity rides in the drag, so the drop needs no server state.
 
@@ -4257,47 +4473,216 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                          if updater.state == WORKING else None)
                 if updater.waiting() and not updater.asked:
                     dialog.open()
+            slots = {}
+            made = {}
+
+            def slot(key):
+                """One movable unit, and what 배치 holds on to.
+
+                A box of its own rather than the refreshable's container: refresh()
+                replaces the card inside it on every beat, so anything that has to
+                survive a repaint — the move, and later the drag — needs something
+                that never goes.
+                """
+                box = ui.element('div').classes('ma-slot')
+                box.on('dragover', js_handler=SLOT_OVER)
+                box.on('dragleave', js_handler=SLOT_LEAVE)
+                box.on('drop', lambda event, k=key: dropped(event.args, k),
+                       js_handler=SLOT_DROP)
+                with box:
+                    grip = ui.element('div').classes('ma-slot__grip') \
+                        .props('draggable=true')
+                    grip.on('dragstart', js_handler=slot_drag_start(key))
+                    grip.on('dragend', js_handler=SLOT_END)
+                    with grip:
+                        ui.icon('drag_handle')
+                slots[key] = box
+                return box
+
+            def build_trend():
+                with card('일별 처리량', 'show_chart'):
+                    made['trend'] = chart(trend_option(latest['trend']), 196)
+
+            def count_pairs():
+                return ([(name, latest['data']['categories'][name])
+                         for name in CATEGORIES],
+                        [(name, latest['data']['priorities'][name])
+                         for name, _ in PRIORITIES])
+
+            @ui.refreshable
+            def counts_unit():
+                """Rebuilt only when the form changes or, in 목록, on the beat.
+
+                In 막대 this must NOT be refreshed on the timer — it would drop the two
+                canvases and replay their entry animation every five seconds, which is
+                what paint() writes options in place to avoid. Rows hold nothing and
+                cost nothing to redraw, so there they are the ordinary refreshable the
+                panels beside them already are.
+                """
+                kinds, ranks = count_pairs()
+                made.pop('kinds', None)
+                made.pop('ranks', None)
+                with grid(minimum=240):
+                    if prefs['form'] == 'bars':
+                        with card('메일 종류', 'label', note=BAR_NOTE):
+                            made['kinds'] = bar_link(
+                                chart(bar_option(kinds),
+                                      24 * len(CATEGORIES) + 12, cap=460),
+                                'category', CATEGORIES, token)
+                        with card('우선순위', 'flag', note=BAR_NOTE):
+                            made['ranks'] = bar_link(
+                                chart(bar_option(ranks, STATUS),
+                                      24 * len(PRIORITIES) + 12, cap=460),
+                                'priority', PRIORITY_NAMES, token)
+                    else:
+                        with ui.element('div').classes('ma-fill'), \
+                                card('메일 종류', 'label', note=BAR_NOTE):
+                            tally(kinds, 'category', token)
+                        with ui.element('div').classes('ma-fill'), \
+                                card('우선순위', 'flag', note=BAR_NOTE):
+                            tally(ranks, 'priority', token, STATUS)
+
+            def build_counts():
+                counts_unit()
+
+            def build_deadline():
+                with card(flush=True):
+                    with ui.element('div').classes('ma-head') \
+                            .style('padding:16px 18px 0;margin-bottom:10px'):
+                        ui.icon('event_busy').style(f'color:{MUTED};font-size:17px')
+                        ui.label('마감 임박 · 지난 마감').classes('ma-head__title')
+                        ui.space()
+                        ui.toggle({days: f'{days}일' for days in WINDOWS},
+                                  value=window['days'],
+                                  on_change=lambda event: pick(event.value)) \
+                            .props('no-caps dense unelevated toggle-color=primary') \
+                            .classes('ma-seg')
+                    deadline_block()
+
+            BUILD = {'trend': build_trend, 'counts': build_counts,
+                     'today': today_block, 'wait': wait_block,
+                     'deadline': build_deadline, 'todo': todo_block,
+                     'memo': memo_block, 'run': run_block}
+
+            with ui.element('div').classes('ma-pagetop'):
+                with ui.button(icon='dashboard_customize').props('flat dense round'):
+                    ui.tooltip('화면 배치')
+                    with ui.menu():
+                        with ui.element('div').classes('ma-menu'):
+                            ui.label('열 배치').classes('ma-menu__label')
+                            ui.toggle(dict(HOME_COLS), value=prefs['cols'],
+                                      on_change=lambda event: choose_cols(event.value)) \
+                                .props('no-caps dense unelevated '
+                                       'toggle-color=primary') \
+                                .classes('ma-seg')
+                            ui.label('메일 종류 · 우선순위') \
+                                .classes('ma-menu__label').style('margin-top:4px')
+                            ui.toggle(dict(COUNT_FORMS), value=prefs['form'],
+                                      on_change=lambda event: choose_form(event.value)) \
+                                .props('no-caps dense unelevated '
+                                       'toggle-color=primary') \
+                                .classes('ma-seg')
             with briefing_frame():
                 brief_block()
             with ui.element('div').style('margin-top:14px'):
                 kpi_row()
-            with ui.element('div').classes('ma-split').style('margin-top:14px'):
-                with ui.element('div').classes('ma-stack'):
-                    with card('일별 처리량', 'show_chart'):
-                        daily = chart(trend_option(latest['trend']), 196)
-                    with grid(minimum=240):
-                        with card('메일 종류', 'label', note=BAR_NOTE):
-                            kinds = bar_link(chart(bar_option(
-                                [(name, latest['data']['categories'][name])
-                                 for name in CATEGORIES]),
-                                24 * len(CATEGORIES) + 12, cap=460),
-                                'category', CATEGORIES, token)
-                        with card('우선순위', 'flag', note=BAR_NOTE):
-                            ranks = bar_link(chart(bar_option(
-                                [(name, latest['data']['priorities'][name])
-                                 for name, _ in PRIORITIES], STATUS),
-                                24 * len(PRIORITIES) + 12, cap=460),
-                                'priority', PRIORITY_NAMES, token)
-                with ui.element('div').classes('ma-stack'):
-                    today_block()
-                    wait_block()
-                    with card(flush=True):
-                        with ui.element('div').classes('ma-head') \
-                                .style('padding:16px 18px 0;margin-bottom:10px'):
-                            ui.icon('event_busy').style(f'color:{MUTED};font-size:17px')
-                            ui.label('마감 임박 · 지난 마감').classes('ma-head__title')
-                            ui.space()
-                            ui.toggle({days: f'{days}일' for days in WINDOWS},
-                                      value=window['days'],
-                                      on_change=lambda event: pick(event.value)) \
-                                .props('no-caps dense unelevated toggle-color=primary') \
-                                .classes('ma-seg')
-                        deadline_block()
-                    todo_block()
-                    memo_block()
-                    run_block()
+            plan = home_plan(prefs['cols'], prefs['order'])
+            split = ui.element('div').classes('ma-split').style('margin-top:14px')
+            if len(plan) > 2:
+                split.classes(add='ma-split--three')
+            stacks = []
+            with split:
+                # All three always exist, hidden when unused: a stack created on demand
+                # would have nowhere to be moved from when the reader goes back to two.
+                for _ in range(3):
+                    stack = ui.element('div').classes('ma-stack')
+                    stack.on('dragover', js_handler=SLOT_OVER)
+                    stack.on('dragleave', js_handler=SLOT_LEAVE)
+                    stack.on('drop',
+                             lambda event, i=len(stacks): landed(event.args, i),
+                             js_handler=SLOT_DROP)
+                    stacks.append(stack)
+            for index, keys in enumerate(plan):
+                with stacks[index]:
+                    for key in keys:
+                        with slot(key):
+                            BUILD[key]()
+            for index, stack in enumerate(stacks):
+                stack.set_visibility(index < len(plan))
             with ui.element('div').style('margin-top:14px'):
                 summary_row()
+
+            def arrange(cols):
+                """Move the cards; never rebuild them.
+
+                A rebuild would drop every canvas on the page and replay its entry
+                animation, which is the same reason paint() writes options in place —
+                and it would take the 마감 창 and the 수집 기록 fold with it, the two
+                pieces of state this page deliberately keeps outside the refreshables.
+                """
+                wanted = home_plan(cols, prefs['order'])
+                for index, stack in enumerate(stacks):
+                    stack.set_visibility(index < len(wanted))
+                for index, keys in enumerate(wanted):
+                    for order, key in enumerate(keys):
+                        slots[key].move(stacks[index], order)
+                if len(wanted) > 2:
+                    split.classes(add='ma-split--three')
+                else:
+                    split.classes(remove='ma-split--three')
+                # A canvas does not re-measure when its container changes width, and
+                # the window did not resize, so nothing else is going to tell it.
+                for key in ('trend', 'kinds', 'ranks'):
+                    if key in made:
+                        made[key].run_chart_method('resize')
+
+            def remember():
+                """Kept per browser user, like the 메일 목록's own filters."""
+                app.storage.user['home'] = dict(prefs)
+
+            def rearranged(plan):
+                """Store what the drag made and let arrange() do the moving."""
+                prefs['order'] = dict(prefs['order'])
+                prefs['order'][prefs['cols']] = [list(keys) for keys in plan]
+                remember()
+                arrange(prefs['cols'])
+
+            def dropped(moved, target):
+                """Dropped on a card: the dragged one goes in above it."""
+                plan = home_plan(prefs['cols'], prefs['order'])
+                column = next((index for index, keys in enumerate(plan)
+                               if target in keys), 0)
+                fresh = home_reorder(plan, str(moved or ''), column, target)
+                if fresh:
+                    rearranged(fresh)
+
+            def landed(moved, column):
+                """Dropped on the column itself, below the last card: append."""
+                plan = home_plan(prefs['cols'], prefs['order'])
+                fresh = home_reorder(plan, str(moved or ''), column)
+                if fresh:
+                    rearranged(fresh)
+
+            def choose_cols(cols):
+                if cols == prefs['cols']:
+                    return
+                prefs['cols'] = cols
+                remember()
+                arrange(cols)
+
+            def choose_form(form):
+                """The one rebuild this unit is allowed: a person asked for it.
+
+                counts_unit is refreshed on the beat only in 목록; in 막대 the timer
+                writes options in place. Here the form itself changed, so there is no
+                canvas worth keeping — the one that was there is the thing being
+                replaced.
+                """
+                if form == prefs['form']:
+                    return
+                prefs['form'] = form
+                remember()
+                counts_unit.refresh()
 
             def paint():
                 data = read()
@@ -4305,12 +4690,17 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                               deadline_block, todo_block, memo_block, run_block,
                               summary_row):
                     block.refresh()
-                for element, option in (
-                        (daily, trend_option(latest['trend'])),
-                        (kinds, bar_option([(name, data['categories'][name])
-                                            for name in CATEGORIES])),
-                        (ranks, bar_option([(name, data['priorities'][name])
-                                            for name, _ in PRIORITIES], STATUS))):
+                if prefs['form'] == 'bars':
+                    kinds, ranks = count_pairs()
+                    charts = ((made['trend'], trend_option(latest['trend'])),
+                              (made['kinds'], bar_option(kinds)),
+                              (made['ranks'], bar_option(ranks, STATUS)))
+                else:
+                    # Rows carry no canvas and no animation, so they take the ordinary
+                    # refresh every other panel on this page takes.
+                    counts_unit.refresh()
+                    charts = ((made['trend'], trend_option(latest['trend'])),)
+                for element, option in charts:
                     # Update in place rather than rebuild: a refreshable would drop the
                     # canvas and replay the entry animation every five seconds.
                     element.options.clear()

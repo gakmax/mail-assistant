@@ -53,6 +53,11 @@ from mail_assistant.webui import (CARD_TONES, COST_TONES, DEFAULT_LIST, FONT_FIL
                                   SENDER_SHOWN, SENDER_SORTS, sender_rows, sender_sort,
                                   sender_search, sender_line,
                                   board, board_counts, card_hint, card_rows,
+                                  HOME_BLOCKS, HOME_COLS, HOME_DEFAULT, HOME_LAYOUT,
+                                  home_columns, home_prefs, home_plan, home_reorder,
+                                  COUNT_DEFAULT, COUNT_FORMS,
+                                  SLOT_DROP, SLOT_END, SLOT_LEAVE, SLOT_OVER,
+                                  slot_drag_start,
                                   chat_context, draft_view, label_step, stats_view,
                                   deadline_progress, drag_drop, drag_payload, drag_start,
                                   rich_text,
@@ -3236,6 +3241,222 @@ class NoteShapeTests(unittest.TestCase):
             self.assertEqual([v['text'] for v in wall['pinned']], ['고정한 메모'])
             self.assertEqual(wall['rest'][0]['subject'], '견적 요청')
             self.assertEqual(wall['rest'][0]['ground'], note_tone('green')[0])
+
+
+class HomeLayoutTests(unittest.TestCase):
+    """화면 배치: the plans, and what a saved choice is allowed to be."""
+
+    def test_every_plan_draws_every_block_exactly_once(self):
+        """A block missing from a plan is a card that vanishes when the reader picks
+        that column count, and a repeated one is a move() that fights itself. Held the
+        way core.STATES is held against STATE_SQL."""
+        for cols, plan in HOME_LAYOUT.items():
+            keys = [key for column in plan for key in column]
+            self.assertEqual(sorted(keys), sorted(HOME_BLOCKS), cols)
+            self.assertEqual(len(keys), len(set(keys)), cols)
+
+    def test_the_menu_offers_exactly_the_plans_that_exist(self):
+        """A column count with no plan behind it would fall back and say nothing."""
+        self.assertEqual(sorted(dict(HOME_COLS)), sorted(HOME_LAYOUT))
+        self.assertIn(HOME_DEFAULT, HOME_LAYOUT)
+
+    def test_no_plan_asks_for_more_stacks_than_the_page_builds(self):
+        """home() creates three and hides the spare; a fourth would have nowhere to go."""
+        for cols, plan in HOME_LAYOUT.items():
+            self.assertLessEqual(len(plan), 3, cols)
+            self.assertTrue(all(column for column in plan), cols)
+
+    def test_a_saved_choice_this_build_does_not_know_falls_back(self):
+        self.assertEqual(home_prefs({'cols': 'three'})['cols'], 'three')
+        self.assertEqual(home_prefs({'cols': 'wide'})['cols'], HOME_DEFAULT)
+        self.assertEqual(home_prefs({})['cols'], HOME_DEFAULT)
+        self.assertEqual(home_prefs(None)['cols'], HOME_DEFAULT)
+        self.assertEqual(home_prefs('even')['cols'], HOME_DEFAULT)
+
+    def test_the_default_is_two_equal_columns(self):
+        """Three columns are 390px each at 1240px of page, which the 추이 chart and the
+        브리핑 have nothing left to be."""
+        self.assertEqual(len(home_columns(HOME_DEFAULT)), 2)
+        self.assertEqual(len(home_columns('three')), 3)
+        self.assertEqual(home_columns('nonsense'), HOME_LAYOUT[HOME_DEFAULT])
+
+    def test_the_split_no_longer_has_a_wide_half(self):
+        """The 1.35:1 split is what stopped a card being moved: the left column was the
+        charts' and the right the panels', so a card changed shape when it crossed."""
+        self.assertNotIn('1.35fr', THEME)
+        self.assertIn('.ma-split--three', THEME)
+        self.assertIn('.ma-slot', THEME)
+
+
+
+class CountFormTests(unittest.TestCase):
+    """메일 종류·우선순위: 목록 by default, 막대 still on offer."""
+
+    def test_the_default_is_the_one_that_can_draw_a_zero(self):
+        """A 0 bar draws nothing and needed yAxis.triggerEvent to leave an 11px axis
+        label as the whole click target; a 0 row is an <a> like every other row."""
+        self.assertEqual(COUNT_DEFAULT, 'rows')
+        self.assertIn(COUNT_DEFAULT, dict(COUNT_FORMS))
+
+    def test_a_saved_form_this_build_does_not_know_falls_back(self):
+        self.assertEqual(home_prefs({'form': 'bars'})['form'], 'bars')
+        self.assertEqual(home_prefs({'form': 'donut'})['form'], COUNT_DEFAULT)
+        self.assertEqual(home_prefs({})['form'], COUNT_DEFAULT)
+
+    def test_a_row_is_styled_as_a_link_and_a_zero_keeps_its_own_tone(self):
+        for rule in ('.ma-bars__row', '.ma-bars__track', '.ma-bars__fill',
+                     '.ma-bars__num--zero'):
+            self.assertIn(rule, THEME)
+
+
+class HomeArrangeTests(unittest.TestCase):
+    """드래그가 만드는 순서와, 저장된 것을 믿지 않고 고치는 자리."""
+
+    def test_nothing_saved_is_the_default_plan(self):
+        self.assertEqual(home_plan('even'), [list(k) for k in HOME_LAYOUT['even']])
+        self.assertEqual(home_plan('even', {}), [list(k) for k in HOME_LAYOUT['even']])
+        self.assertEqual(home_plan('even', {'even': 'rubbish'}),
+                         [list(k) for k in HOME_LAYOUT['even']])
+
+    def test_a_saved_order_is_drawn_as_saved(self):
+        saved = {'even': [['counts', 'trend'], ['run', 'memo', 'todo',
+                                                'deadline', 'wait', 'today']]}
+        self.assertEqual(home_plan('even', saved), saved['even'])
+
+    def test_a_key_this_build_does_not_know_is_dropped(self):
+        saved = {'even': [['trend', 'weather', 'counts'], list(HOME_LAYOUT['even'][1])]}
+        plan = home_plan('even', saved)
+        self.assertNotIn('weather', [key for column in plan for key in column])
+
+    def test_a_card_the_saved_order_never_heard_of_still_gets_drawn(self):
+        """A block added in a later version must not vanish because somebody dragged
+        something once — the rule that keeps a row for a model Codex stopped listing."""
+        saved = {'even': [['trend'], ['today']]}
+        plan = home_plan('even', saved)
+        self.assertEqual(sorted(key for column in plan for key in column),
+                         sorted(HOME_BLOCKS))
+        self.assertEqual(plan[0][0], 'trend')
+
+    def test_a_duplicate_is_kept_once(self):
+        saved = {'even': [['trend', 'trend', 'counts'], ['counts', 'today']]}
+        plan = home_plan('even', saved)
+        keys = [key for column in plan for key in column]
+        self.assertEqual(len(keys), len(set(keys)))
+
+    def test_the_two_column_counts_do_not_share_an_order(self):
+        saved = {'even': [['counts', 'trend'], list(HOME_LAYOUT['even'][1])]}
+        self.assertEqual(home_plan('even', saved)[0], ['counts', 'trend'])
+        self.assertEqual(home_plan('three', saved), [list(k) for k in HOME_LAYOUT['three']])
+
+    def test_a_plan_always_has_the_column_count_it_was_asked_for(self):
+        saved = {'three': [['trend'], ['today']]}
+        self.assertEqual(len(home_plan('three', saved)), 3)
+        self.assertEqual(len(home_plan('even', {'even': [['a'], ['b'], ['c']]})), 2)
+
+    def test_a_card_moves_inside_its_column(self):
+        plan = [['trend', 'counts'], ['today', 'wait']]
+        self.assertEqual(home_reorder(plan, 'counts', 0, 'trend'),
+                         [['counts', 'trend'], ['today', 'wait']])
+
+    def test_a_card_moves_between_columns(self):
+        plan = [['trend', 'counts'], ['today', 'wait']]
+        self.assertEqual(home_reorder(plan, 'counts', 1, 'wait'),
+                         [['trend'], ['today', 'counts', 'wait']])
+
+    def test_a_drop_on_the_column_appends(self):
+        plan = [['trend', 'counts'], ['today']]
+        self.assertEqual(home_reorder(plan, 'trend', 1),
+                         [['counts'], ['today', 'trend']])
+
+    def test_a_drop_that_moves_nothing_is_none(self):
+        """None for the reason drag_drop() gives None for a card dropped into its own
+        lane: rewriting the stored order and repainting reads as a flicker."""
+        plan = [['trend', 'counts'], ['today']]
+        self.assertIsNone(home_reorder(plan, 'counts', 0, 'counts'))
+        self.assertIsNone(home_reorder(plan, 'trend', 0, 'counts'))
+        self.assertIsNone(home_reorder(plan, 'today', 1))
+
+    def test_a_drop_that_cannot_be_read_is_none(self):
+        plan = [['trend', 'counts'], ['today']]
+        self.assertIsNone(home_reorder(plan, '', 0, 'trend'))
+        self.assertIsNone(home_reorder(plan, 'weather', 0, 'trend'))
+        self.assertIsNone(home_reorder(plan, 'trend', 7))
+        self.assertIsNone(home_reorder(plan, 'trend', 1, 'counts'))
+
+    def test_only_the_drop_talks_to_the_server(self):
+        """dragover fires once per frame; a Python handler on it turns one card's
+        travel into hundreds of websocket messages."""
+        for handler in (SLOT_OVER, SLOT_LEAVE, SLOT_END, slot_drag_start('trend')):
+            self.assertNotIn('emit(', handler)
+        self.assertIn('emit(', SLOT_DROP)
+
+    def test_the_slot_keeps_the_drop_from_its_own_column(self):
+        """The stack under a card is a drop target too, and without this a drop *on* a
+        card would also be a drop at the end of the column."""
+        self.assertIn('stopPropagation', SLOT_DROP)
+
+    def test_the_handle_drags_the_card_and_not_the_band(self):
+        start = slot_drag_start('trend')
+        self.assertIn('setDragImage', start)
+        self.assertIn('"trend"', start)
+        self.assertIn('.ma-slot__grip', THEME)
+
+
+
+    def test_the_grip_stays_inside_the_card_s_own_top_padding(self):
+        """The handle is a band over padding, which is the only reason every panel can
+        be draggable without one of them knowing. Measured at 3px of clearance, so the
+        two numbers are held together here the way CHAT_CHROME is held to .ma-page's:
+        shrink .ma-card's padding and the grip starts eating the 마감 card's 7/14/30
+        toggle and the 오늘 일정 link, with nothing else saying so.
+        """
+        card = re.search(r'\.ma-card \{[^}]*padding:(\d+)px', THEME)
+        grip = re.search(r'\.ma-slot__grip \{[^}]*height:(\d+)px', THEME)
+        self.assertIsNotNone(card)
+        self.assertIsNotNone(grip)
+        self.assertLess(int(grip.group(1)), int(card.group(1)))
+
+
+class ThemeCollisionTests(unittest.TestCase):
+    """THEME is one stylesheet, and a reused class name loses silently."""
+
+    @staticmethod
+    def top_level_rules():
+        """(selector, body) for every rule outside a @media / @keyframes block."""
+        rules, selector, body, depth = [], '', '', 0
+        for char in THEME:
+            if char == '{':
+                depth += 1
+                if depth == 1:
+                    selector, body = body.strip(), ''
+                    continue
+            elif char == '}':
+                depth -= 1
+                if depth == 0:
+                    if selector and not selector.startswith('@'):
+                        for part in selector.split(','):
+                            if part.strip():
+                                rules.append((part.strip(), body))
+                    body = ''
+                    continue
+            body += char
+        return rules
+
+    def test_no_selector_is_given_display_twice(self):
+        """A second `.ma-x { display: … }` wins over the first wherever it sits, and
+        nothing says so — `.ma-bars` was `.ma-tally` until it turned out the 할 일 판
+        tally had owned that name since before it, and the count rows came out in a
+        row because the later flex beat the earlier grid.
+        """
+        seen = {}
+        for selector, body in self.top_level_rules():
+            if 'display:' not in body:
+                continue
+            self.assertNotIn(selector, seen,
+                             f'{selector} is given display twice: '
+                             f'{seen.get(selector)!r} then {body.strip()!r}')
+            seen[selector] = body.strip()
+
 
 
 if __name__ == '__main__':
