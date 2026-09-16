@@ -29,8 +29,9 @@ from .overview import (BRIEF_HOUR, DUE_DAYS, RECENT_DAYS, UPCOMING, overview, pa
                        results, review_queue, trend)
 from .services import BODY_LIMIT, DRAFT_TONES, DRAFT_WAYS
 from .money import (CURRENCIES as MONEY_CURRENCIES, KINDS as MONEY_KINDS,
+                    UNKNOWN_CURRENCY as MONEY_UNKNOWN,
                     entries as money_entries, entry_of, in_month, by_kind,
-                    main_currency, money_text, month_title, months,
+                    main_currency, money_text, money_value, month_title, months,
                     skipped_text, totals, trend as money_trend)
 from .notify import enabled as notify_enabled
 from .settings import (DEFAULTS, FIELDS, GRADE_NOTE, NO_MODELS, RECOMMEND_WHY,
@@ -1419,6 +1420,17 @@ a.ma-sender:hover {{
 }}
 .ma-say b {{ font-weight:600; color:var(--subtle); }}
 
+/* 거래처 카드는 전체가 링크라, 고치기와 지우기는 그 위에 얹힌다. hover 에서만
+   나타나는 것은 메모 카드와 같은 이유다 — 카드 스무 장에 버튼 마흔 개가 늘 서 있으면
+   읽을 것이 아니라 피할 것이 된다. */
+.ma-sender__box {{ position:relative; }}
+.ma-sender__acts {{
+  position:absolute; top:8px; right:8px; display:flex; gap:2px;
+  opacity:0; transition:opacity var(--dur-fast) var(--ease);
+}}
+.ma-sender__box:hover .ma-sender__acts,
+.ma-sender__box:focus-within .ma-sender__acts {{ opacity:1; }}
+
 /* 날짜와 시각처럼 한 값을 둘로 나눠 받는 칸. 좁아지면 쌓인다 — 시각 칸이 120px
    밑으로 눌리면 네이티브 date/time 위젯의 아이콘이 글자를 덮는다. */
 .ma-pair {{ display:grid; grid-template-columns:minmax(0,1fr) 132px; gap:8px; }}
@@ -2779,6 +2791,9 @@ def attachment_rows(items):
 # 것은 그리는 쪽보다 읽는 쪽이 먼저 포기하는 일이다.
 SENDER_SHOWN = 60
 SENDER_SORTS = (('recent', '최근순'), ('open', '남은 일 순'))
+# 사람이 손으로 적는 주소를 받아 주기 전에 한 번. core.ADDRESS 는 헤더의
+# <...> 에서 주소를 *꺼내는* 것이라 여기 쓸 수 없다 — 묻는 것이 다르다.
+ADDRESS_OK = re.compile(r'^[^\s@]+@[^\s@]+\.[^\s@]+$')
 
 
 def sender_rows(rows, today):
@@ -2801,6 +2816,38 @@ def sender_rows(rows, today):
                        'last': local_text(row['last'], '%Y-%m-%d'), 'quiet': quiet,
                        'since': local_text(row['first'], '%Y-%m-%d')})
     return shaped
+
+
+def merge_contacts(rows, contacts):
+    """집계한 거래처와 사람이 적어 둔 거래처를, 주소로 겹쳐 한 목록으로.
+
+    둘이 답하는 질문이 다르다. 집계는 '이 주소로 몇 통이 왔고 몇 개가 남았나'이고,
+    contact 는 '이 주소를 뭐라고 부를 것이며 무엇을 기억해 둘 것인가'이다. 그래서
+    겹칠 때 숫자는 언제나 집계에서 오고 이름만 사람이 적은 것으로 바뀐다 — 반대로
+    하면 카드의 숫자와 그 카드가 여는 목록이 다른 메일을 세게 된다.
+
+    메일이 한 통도 오지 않은 거래처는 뒤에 붙는다. 최근순은 마지막 수신이 기준인데
+    그런 행에는 마지막이 없고, 없는 것을 0으로 세면 '가장 오래된 거래처'로 올라선다.
+    """
+    held = {str(row['addr'] or '').strip().lower(): row for row in contacts}
+    merged = []
+    for row in rows:
+        known = held.pop(row['addr'], None)
+        if known is None:
+            merged.append({**row, 'memo': '', 'contact': None})
+            continue
+        chosen = (known['name'] or '').strip()
+        merged.append({**row,
+                       'name': chosen or row['name'],
+                       'named': bool(chosen) or row['named'],
+                       'memo': known['memo'] or '', 'contact': known['id']})
+    for addr, known in held.items():
+        chosen = (known['name'] or '').strip()
+        merged.append({'addr': addr, 'name': chosen or addr, 'named': bool(chosen),
+                       'total': 0, 'open': 0, 'waiting': 0, 'done': 0,
+                       'last': '', 'quiet': None, 'since': '',
+                       'memo': known['memo'] or '', 'contact': known['id']})
+    return merged
 
 
 def sender_sort(rows, mode='recent'):
@@ -7067,13 +7114,26 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             return
         picked = {'month': '', 'kind': ''}
 
+        def read_money():
+            """분석이 읽은 줄과 사람이 적은 줄을, 한 번에 한 목록으로.
+
+            제목 조회는 한 번의 IN (…) 이다 — 붙인 메일마다 detail() 을 부르면 줄 수만큼
+            질의가 나가고, 그 규칙은 Store.rooms() 가 이미 따르고 있다.
+            """
+            account = account_of(config)
+            if not account:
+                return []
+            manual = list(store(directory).money(account))
+            subjects = store(directory).mail_subjects(
+                [row['mail_id'] for row in manual if row['mail_id']])
+            return money_entries(store(directory).page(account), manual, subjects)
+
         @ui.refreshable
         def body():
-            account = account_of(config)
-            found = money_entries(store(directory).page(account)) if account else []
+            found = read_money()
             if not found:
                 with card('금액', 'payments', note=MONEY_NOTE):
-                    empty('분석된 메일에서 금액을 찾지 못했어요.')
+                    empty('분석된 메일에서도, 적어 둔 것에서도 금액을 찾지 못했어요.')
                 return
             month_list = months(found)
             if picked['month'] and picked['month'] not in month_list:
@@ -7150,13 +7210,110 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             picked['kind'] = value or ''
             body.refresh()
 
-        with page_shell('/money'):
+        def written():
+            """메일에 적혀 있지 않은 금액을 올린다.
+
+            전화로 받은 견적, 계약서의 숫자. 지금까지 금액은 분석이 메일에서 읽은 것
+            뿐이었고, 그것은 이 화면이 답하는 질문('이번 달에 얼마가 오갔나')의 절반만
+            답하는 일이었다. 손으로 적었다고 더 믿지는 않는다 — 같은 money_value() 를
+            지나고, '약 90,000' 은 여기서도 합계에서 빠진다.
+            """
             account = account_of(config)
-            found = money_entries(store(directory).page(account)) if account else []
+            if not account:
+                toast('아직 설정이 비어 있어요. 설정 화면에서 메일 주소부터 저장해 주세요',
+                      mark='fail')
+                return
+            state = {'mail': None, 'query': ''}
+            mails = list(store(directory).page(account, limit=200))
+            box, body_of = sheet('금액 추가', '메일에 적혀 있지 않은 금액도 여기 올려요.',
+                                 on_add=lambda: keep())
+
+            def reading():
+                """지금 적힌 값이 합계에 들어가는지를, 적는 동안 말한다."""
+                value = money_value(amount.value)
+                counted = value is not None and (unit.value or '') != MONEY_UNKNOWN
+                shown = money_text(value, unit.value or '') or (amount.value or '').strip()
+                mark.set_text(shown or '—')
+                mark.style(f"color:{INK if counted else MUTED}")
+                warn.set_text('' if counted else (
+                    '무슨 통화인지 모르는 금액은 합계에서 빠져요. 통화를 골라 주면 들어가요.'
+                    if value is not None else
+                    '숫자로 읽히지 않아 합계에서 빠져요. 줄은 남고, 나중에 고치면 합계에 들어가요.'))
+                warn.set_visibility(not counted)
+
+            def keep():
+                if not (amount.value or '').strip():
+                    toast('금액을 적어 주세요', mark='fail')
+                    return
+                store(directory).add_money(
+                    account, (amount.value or '').strip(), unit.value or '',
+                    sort_of.value or '', (what.value or '').strip(),
+                    (why.value or '').strip(), day.value or '',
+                    (state['mail'] or {}).get('id', ''))
+                bump()
+                box.close()
+                counted = (money_value(amount.value) is not None
+                           and (unit.value or '') != MONEY_UNKNOWN)
+                toast('금액을 올렸어요. 합계에 넣었어요' if counted
+                      else '금액을 올렸어요. 합계에서는 빠져 있어요', mark='done')
+                body.refresh()
+
+            with body_of:
+                lab('금액', need=True)
+                with ui.element('div').classes('ma-pair'):
+                    amount = ui.input(placeholder='90000') \
+                        .props('dense outlined autofocus inputmode=numeric') \
+                        .style('font-variant-numeric:tabular-nums') \
+                        .on_value_change(lambda: reading())
+                    unit = ui.select({code: f'{code} {symbol}'.strip()
+                                      for code, symbol in MONEY_CURRENCIES},
+                                     value='KRW') \
+                        .props('dense outlined options-dense') \
+                        .on_value_change(lambda: reading())
+                say('쉼표 없이 숫자만 적어 주세요. 약 90,000, 9만, 90,000~100,000 은 숫자로 '
+                    '읽지 않아요. 짐작한 숫자가 합계에 들어가면, 그 합계는 틀렸다고 스스로 '
+                    '말하지 않아요.')
+                with ui.element('div').classes('ma-sunken').style('margin-top:12px'):
+                    with ui.element('div').classes('ma-meta'):
+                        ui.label('목록에서는 이렇게 읽혀요').classes('ma-meta__item')
+                        mark = ui.label('—').classes('ma-tally__n') \
+                            .style(f'color:{MUTED};font-size:var(--fs-b2)')
+                warn = ui.label('').classes('ma-alert ma-alert--warn') \
+                    .style('margin-top:10px')
+                warn.set_visibility(False)
+
+                lab('종류')
+                sort_of = ui.select({name: name for name in MONEY_KINDS}, value='견적') \
+                    .props('dense outlined options-dense').classes('w-full')
+
+                lab('내용', opt='선택')
+                what = ui.input(placeholder='공급가액, 유지보수 연간') \
+                    .props('dense outlined').classes('w-full')
+
+                lab('날짜')
+                day = ui.input(value=local_text(now(), '%Y-%m-%d')) \
+                    .props('dense outlined type=date').classes('w-full')
+
+                lab('메일 붙이기', opt='선택')
+                mail_picker(state, mails)
+
+                lab('어디서 나온 숫자인가', opt='선택')
+                why = ui.textarea(placeholder='전화로 받은 구두 견적, 계약서 3조') \
+                    .props('dense outlined autogrow').classes('w-full')
+                say('분석이 읽은 금액은 메일의 원문 구절을 늘 같이 들고 있어요. 손으로 적은 '
+                    '것도 같은 자리를 채워 두면, 나중에 이 합계를 믿어도 되는지 판단할 수 '
+                    '있어요.')
+            reading()
+            box.open()
+
+        with page_shell('/money'):
+            found = read_money()
             with ui.element('div').classes('ma-head').style('margin-bottom:12px'):
-                ui.icon('payments').style(f'color:{MUTED};font-size:17px')
+                ui.icon('payments').style(f'color:{MUTED};font-size:var(--ic-m)')
                 ui.label('금액').classes('ma-head__title')
                 ui.space()
+                ui.button('금액 추가', icon='add', on_click=written) \
+                    .props('unelevated dense no-caps')
                 ui.select({'': '전체 기간',
                            **{month: month_title(month) for month in months(found)}},
                           value='', on_change=lambda event: pick_month(event.value)) \
@@ -7185,7 +7342,9 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
         @ui.refreshable
         def body():
             account = account_of(config)
-            rows = sender_rows(store(directory).senders(account), date.today()) if account else []
+            rows = merge_contacts(
+                sender_rows(store(directory).senders(account), date.today()),
+                store(directory).contacts(account)) if account else []
             found = sender_sort(sender_search(rows, picked['query']), picked['sort'])
             shown = found[:SENDER_SHOWN]
             with ui.element('div').classes('ma-meta').style('margin-bottom:12px'):
@@ -7195,30 +7354,50 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                 if len(shown) != len(found):
                     ui.label(f'{len(shown)}곳만 표시').classes('ma-meta__item')
             if not rows:
-                empty('아직 수집된 메일이 없어요.')
+                empty('아직 수집된 메일도, 적어 둔 거래처도 없어요.')
                 return
             if not found:
                 empty('그 이름이나 주소로 받은 메일이 없어요.')
                 return
             with grid(minimum=250, gap=12):
                 for row in shown:
-                    with ui.link(target=href('/mail', token, sender=row['addr'])) \
-                            .classes('ma-card ma-sender'):
-                        ui.label(row['name']).classes('ma-sender__name')
-                        if row['named']:
-                            ui.label(row['addr']).classes('ma-sender__addr')
-                        with ui.element('div').classes('ma-meta').style('margin-top:9px'):
-                            tag(f"전체 {row['total']}")
-                            if row['open']:
-                                tag(f"미처리 {row['open']}", css_color(LINK),
-                                    soft_of(css_color(LINK)))
-                            if row['waiting']:
-                                # 답장 대기와 같은 색: 두 화면이 같은 것을 세고 있다.
-                                tag(f"답장 대기 {row['waiting']}", css_color(SOON),
-                                    soft_of(css_color(SOON)))
-                        line = sender_line(row)
-                        if line:
-                            ui.label(line).classes('ma-sender__foot')
+                    with ui.element('div').classes('ma-sender__box ma-in') as slot:
+                        with ui.link(target=href('/mail', token, sender=row['addr'])) \
+                                .classes('ma-card ma-sender'):
+                            ui.label(row['name']).classes('ma-sender__name')
+                            if row['named']:
+                                ui.label(row['addr']).classes('ma-sender__addr')
+                            with ui.element('div').classes('ma-meta').style('margin-top:9px'):
+                                if row['total']:
+                                    tag(f"전체 {row['total']}")
+                                else:
+                                    # 적어 두기만 한 거래처. 0으로 그리면 '전체 0통'이
+                                    # 숫자로 읽혀서, 세어 본 결과처럼 보인다.
+                                    tag('받은 메일 없음', MUTED, SUNKEN)
+                                if row['open']:
+                                    tag(f"미처리 {row['open']}", css_color(LINK),
+                                        soft_of(css_color(LINK)))
+                                if row['waiting']:
+                                    # 답장 대기와 같은 색: 두 화면이 같은 것을 세고 있다.
+                                    tag(f"답장 대기 {row['waiting']}", css_color(SOON),
+                                        soft_of(css_color(SOON)))
+                            if row['memo']:
+                                ui.label(row['memo']).classes('ma-sender__foot')
+                            line = sender_line(row)
+                            if line:
+                                ui.label(line).classes('ma-sender__foot')
+                        if row['contact']:
+                            # 카드 전체가 링크라서 버튼은 그 위에 얹는다. 카드를 누르면
+                            # 목록이 열리고, 이 두 개는 사람이 적어 둔 것만 건드린다.
+                            with ui.element('div').classes('ma-sender__acts'):
+                                ui.button(icon='edit',
+                                          on_click=lambda r=row: edit(r)) \
+                                    .props('flat dense round size=sm color=grey-7') \
+                                    .tooltip('이름과 메모 고치기')
+                                ui.button(icon='delete_outline',
+                                          on_click=lambda r=row, e=slot: forget(r, e)) \
+                                    .props('flat dense round size=sm text-color=negative') \
+                                    .tooltip('적어 둔 것만 지우기 (메일은 그대로예요)')
 
         def pick(mode):
             picked['sort'] = mode
@@ -7228,11 +7407,90 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
             picked['query'] = text
             body.refresh()
 
+        def written(row=None):
+            """거래처 하나를 적어 두거나, 적어 둔 것을 고친다.
+
+            지금까지 거래처는 받은 메일에서만 생겼다. 그래서 아직 연락이 없는 곳은
+            적어 둘 자리가 없었고, 이름은 언제나 보내는 쪽 클라이언트가 이번 주에
+            쓰기로 한 것이었다 — 같은 사람이 김과장·KIM·주소 셋으로 서는 이유다.
+            """
+            account = account_of(config)
+            if not account:
+                toast('아직 설정이 비어 있어요. 설정 화면에서 메일 주소부터 저장해 주세요',
+                      mark='fail')
+                return
+            box, body_of = sheet('거래처 고치기' if row else '거래처 추가',
+                                 '이 주소를 뭐라고 부를지 정해 둬요.'
+                                 if row else '아직 메일이 없는 곳도 미리 적어 둘 수 있어요.',
+                                 add='저장하기' if row else SHEET_ADD,
+                                 on_add=lambda: keep())
+
+            def keep():
+                if row:
+                    store(directory).set_contact(row['contact'], (name.value or '').strip(),
+                                                 (memo.value or '').strip())
+                    said = '거래처를 고쳤어요'
+                else:
+                    wanted = (addr.value or '').strip().lower()
+                    if not wanted:
+                        toast('메일 주소를 적어 주세요', mark='fail')
+                        return
+                    if not ADDRESS_OK.match(wanted):
+                        toast('메일 주소 모양이 아니에요. name@domain 형태로 적어 주세요',
+                              mark='fail')
+                        return
+                    known = {held['addr'] for held in store(directory).contacts(account)}
+                    if wanted in known:
+                        toast('이미 적어 둔 거래처예요. 카드의 연필을 눌러 고쳐 주세요',
+                              mark='fail')
+                        return
+                    store(directory).add_contact(account, wanted, (name.value or '').strip(),
+                                                 (memo.value or '').strip())
+                    said = '거래처를 올렸어요'
+                bump()
+                box.close()
+                toast(said, mark='done')
+                body.refresh()
+
+            with body_of:
+                lab('메일 주소', need=True)
+                addr = ui.input(placeholder='dhkim@daesung.co.kr',
+                                value=row['addr'] if row else '') \
+                    .props('dense outlined autofocus'
+                           + (' readonly' if row else '')).classes('w-full')
+                say('거래처를 묶는 열쇠는 언제나 주소예요. 표시 이름은 보내는 쪽 메일 '
+                    '프로그램이 그때그때 쓰는 것이라, 같은 사람이 여러 이름으로 서요.')
+
+                lab('부를 이름', opt='선택')
+                name = ui.input(placeholder='대성 김도현 과장',
+                                value=row['name'] if row and row['named'] else '') \
+                    .props('dense outlined').classes('w-full')
+                say('적어 두면 이 주소는 어디서든 이 이름으로 읽혀요.')
+
+                lab('메모', opt='선택')
+                memo = ui.textarea(placeholder='발주 담당, 계산서는 정산팀으로',
+                                   value=(row or {}).get('memo', '')) \
+                    .props('dense outlined autogrow').classes('w-full')
+            box.open()
+
+        def edit(row):
+            written(row)
+
+        def forget(row, slot):
+            """적어 둔 것만 지운다. 그 주소로 온 메일도, 카드의 숫자도 그대로 선다."""
+            store(directory).delete_contact(row['contact'])
+            bump()
+            slot.classes(add='ma-out')
+            ui.timer(LEAVE_SECONDS, body.refresh, once=True)
+            toast('적어 둔 이름과 메모를 지웠어요. 메일은 그대로 있어요', mark='done')
+
         with page_shell('/senders'):
             with ui.element('div').classes('ma-head').style('margin-bottom:12px'):
-                ui.icon('contacts').style(f'color:{MUTED};font-size:17px')
+                ui.icon('contacts').style(f'color:{MUTED};font-size:var(--ic-m)')
                 ui.label('거래처').classes('ma-head__title')
                 ui.space()
+                ui.button('거래처 추가', icon='add', on_click=lambda: written()) \
+                    .props('unelevated dense no-caps')
                 ui.input(placeholder='이름 또는 주소', value=picked['query'],
                          on_change=lambda event: look(event.value)) \
                     .props('dense outlined clearable debounce=250').style('width:210px')
