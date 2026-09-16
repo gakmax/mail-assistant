@@ -1,5 +1,6 @@
 """The web 현황 screen's shaping, which needs no nicegui and so runs on every platform."""
 import datetime
+import inspect
 import re
 import socket
 import tempfile
@@ -27,7 +28,9 @@ from mail_assistant.overview import (BRIEF_DRAFTS, BRIEF_EVENTS, BRIEF_HOUR, BRI
                                      BRIEF_TEXT, DUE_DAYS, briefing_due, briefing_input,
                                      due_window, failures, oldest_open, overview)
 from mail_assistant.money import entries as money_entries, entry_of, manual_entry, totals
-from mail_assistant.webui import (CARD_TONES, COST_TONES, DEFAULT_LIST, FONT_FILE, MUTED,
+from mail_assistant.webui import (CAL_LOCALE, CAL_WIDTH, DATE_HINT, PICK_WAIT,
+                                  TIME_HINT, WEEKDAYS,
+                                  CARD_TONES, COST_TONES, DEFAULT_LIST, FONT_FILE, MUTED,
                                   STATE_TONES, STATUS, USAGE_TONES, usage_chip,
                                   THEME, TOAST_MARKS, TREND_LABELS,
                                   NAV_BADGE_MAX, NAV_GROUPS, PAGES, RAIL_BOOT, RAIL_KEY,
@@ -3927,6 +3930,159 @@ class ThemeCollisionTests(unittest.TestCase):
                                  f'{seen.get(key)!r} then {value!r}')
                 seen[key] = value
 
+
+
+class HoverMotionTests(unittest.TestCase):
+    """A hover that repaints has to take time doing it.
+
+    Twenty rules changed a background or a colour on :hover with nothing saying how
+    long, so the ground under the pointer went grey in one frame and back in one —
+    which is a flicker rather than an answer. The two that this cost most are the
+    ones a reader's pointer spends the day in: every row of the 메일 목록, and the
+    four count rows and two panels of the 대시보드.
+
+    The rule is not 'every rule has a transition'. It is that a selector which
+    *changes* on hover must be able to travel: the resting rule it belongs to —
+    or a rule that already names the same base, which is how the sidebar's padding
+    and the memo's shadow are declared — has to carry a transition.
+    """
+
+    REPAINTS = ('background', 'background-color', 'color', 'opacity',
+                'border-color', 'box-shadow', 'transform')
+
+    @staticmethod
+    def moving(selector):
+        """The classes on the element a rule actually repaints — its last compound.
+
+        '.ma-memo:hover .ma-memo__acts' moves .ma-memo__acts, so that is where the
+        transition has to be. q-btn--dense and q-btn--rectangle are Quasar's own
+        modifiers and never stand without q-btn beside them, so they answer to the
+        one .q-btn rule rather than needing one each.
+        """
+        last = re.sub(r':[a-z-]+(\([^)]*\))?', '', selector).strip().rsplit(' ', 1)[-1]
+        names = {re.sub(r'^(q-btn)--.*', r'\1', name)
+                 for name in re.findall(r'\.([A-Za-z0-9_-]+)', last)}
+        return names or {last}
+
+    def test_every_hover_that_repaints_has_somewhere_to_travel(self):
+        resting, states = {}, []
+        for selector, body, _ in ThemeCollisionTests.top_level_rules():
+            if any(mark in selector for mark in (':hover', ':focus', ':active')):
+                states.append((selector, body))
+                continue
+            if 'transition:' in body:
+                resting.setdefault(frozenset(self.moving(selector)), []).append(selector)
+        missing = []
+        for selector, body in states:
+            if ':hover' not in selector and ':focus-within' not in selector:
+                continue
+            if not any(re.search(rf'(^|;)\s*{name}\s*:', body) for name in self.REPAINTS):
+                continue
+            names = self.moving(selector)
+            if not any(names & set(named) for named in resting):
+                missing.append(selector)
+        self.assertEqual(missing, [], f'시간 없이 다시 칠해지는 hover: {missing}')
+
+
+class IconInButtonTests(unittest.TestCase):
+    """버튼의 크기가 곧 그 안의 아이콘의 칸이다.
+
+    Quasar 는 아이콘을 버튼 글자의 1.715배로 그리므로, 손대지 않으면 13px 짜리 라벨
+    옆에 20px 이 서고 32px 짜리 동그란 버튼은 그 하나로 62%가 찬다. 전수로 재 보면
+    이 앱의 버튼은 하나만 빼고 전부 32px 이었으니, '버튼이 크다'는 실은 이 비율이다.
+    --ic-* 가 본문 램프와 따로 있는 이유가 여기에 있다.
+    """
+
+    def test_the_two_button_sizes_take_the_two_icon_rungs(self):
+        self.assertIn('.q-btn .q-icon { font-size:var(--ic-m); }', THEME)
+        self.assertIn('.q-btn--dense .q-icon { font-size:var(--ic-s); }', THEME)
+
+    def test_a_button_that_keeps_its_own_transition_outranks_the_base_rule(self):
+        """.q-btn 의 transition 은 이 파일에서 이 둘보다 뒤에 있다 — 한 클래스끼리는
+        뒤가 이기므로, 나타났다 사라지는 것이 전부인 이 둘은 이름에 .q-btn 을 붙여
+        둔다. 붙이지 않으면 opacity 가 계단을 잃고 깜빡인다."""
+        for name in ('.q-btn.ma-said__copy', '.q-btn.ma-side__fold'):
+            self.assertIn(name, THEME, name)
+
+
+class SegmentWrapTests(unittest.TestCase):
+    """'목록'이 '목/록'이 되면 그것은 글자가 아니라 얼룩이다.
+
+    화면 배치 메뉴의 네 칸짜리 토글이 고정 폭 안에서 줄바꿈되고 있었다. 고친 것이
+    더 큰 숫자가 아닌 이유는, 한 칸의 폭을 정하는 것이 글꼴이기 때문이다 — Pretendard
+    가 늦게 오면 이 앱은 맑은 고딕으로 한 번 그려지고, 그때 맞는 숫자는 다른 숫자다.
+    """
+
+    def test_a_segment_label_never_wraps(self):
+        rule = THEME.split('.ma-seg .q-btn {', 1)[1].split('}', 1)[0]
+        self.assertIn('white-space:nowrap', rule)
+
+    def test_the_menu_is_as_wide_as_what_is_in_it(self):
+        rule = THEME.split('.ma-menu {', 1)[1].split('}', 1)[0]
+        self.assertIn('width:max-content', rule)
+
+
+class DateFieldTests(unittest.TestCase):
+    """날짜를 고르는 칸. 브라우저의 type=date 가 있던 자리다.
+
+    그것을 두지 않는 이유는 모양이 아니라 말이다: WebView2 의 그것은 mm/dd/yyyy 로
+    묻고 달력은 영어로 열리는데, 이 앱이 날짜를 적는 자리는 전부 2026-09-25 다.
+    """
+
+    def test_no_screen_asks_the_browser_for_a_date_widget(self):
+        """한 번 돌아오면 그 폼만 다시 다른 앱의 부품을 달고 있게 된다.
+
+        Quasar 의 prop 은 늘 따옴표로 닫히므로 그 모양만 본다 — 왜 쓰지 않는지를
+        적어 둔 문장들이 이 파일에 여럿 있고, 그것까지 금지할 일은 아니다.
+        """
+        source = Path(mail_assistant.webui.__file__).read_text(encoding='utf-8')
+        for quote in ("'", '"'):
+            for kind in ('date', 'time'):
+                self.assertNotIn(f'type={kind}{quote}', source)
+
+    def test_the_week_starts_where_the_calendar_screen_starts_it(self):
+        """일정 화면의 FullCalendar 는 firstDay:1 이다. 창 안의 달력만 일요일부터
+        시작하면 같은 9월이 두 가지 모양이 된다."""
+        self.assertEqual(CAL_LOCALE['firstDayOfWeek'], 1)
+
+    def test_the_day_names_come_from_the_one_list(self):
+        """QDate 의 locale 은 일요일부터 세고, core 의 WEEKDAYS 는 월요일부터 센다 —
+        그래서 순서를 옮기는 곳이 하나여야 한다."""
+        self.assertEqual(CAL_LOCALE['daysShort'], ['일'] + list(WEEKDAYS[:-1]))
+        self.assertEqual(CAL_LOCALE['days'][1], '월요일')
+        self.assertEqual(CAL_LOCALE['months'][8], '9월')
+
+    def test_the_calendar_carries_its_own_width(self):
+        """QDate 의 칸들은 flex row 라 자리가 있는 만큼 벌어진다 — 폭을 주지 않으면
+        창 안에서 시트보다 넓은 달력이 열린다."""
+        self.assertIn(f'width:{CAL_WIDTH}px', THEME)
+
+    def test_the_hint_is_not_a_date_somebody_could_read_as_a_value(self):
+        """자리표시자가 그럴듯한 날짜이면, 빈 칸과 채운 칸을 글자 색으로만 구별하게
+        된다."""
+        self.assertNotRegex(DATE_HINT, r'\d')
+        self.assertNotRegex(TIME_HINT, r'\d')
+
+
+class PickerFocusTests(unittest.TestCase):
+    """메일 붙이기 피커가 글자 하나마다 제 입력칸을 다시 만들고 있었다.
+
+    panel.refresh() 가 칸과 찾은 줄을 한꺼번에 지웠고, 새로 만들어진 칸에는 캐럿이
+    없다 — 한 글자 적을 때마다 포커스가 빠지는 칸이었다. 고친 것은 둘이다: 찾은 줄만
+    따로 다시 그리고, 서버가 그 말을 듣는 것을 손이 멈출 때까지 미룬다.
+    """
+
+    def test_the_search_box_waits_for_the_hand_to_stop(self):
+        source = inspect.getsource(mail_assistant.webui.mail_picker)
+        self.assertIn('debounce={PICK_WAIT}', source)
+        self.assertGreater(PICK_WAIT, 0)
+
+    def test_typing_never_rebuilds_the_box_it_is_typed_into(self):
+        """look() 이 panel 을 새로 그리면 그 안에 이 칸이 있다."""
+        look = inspect.getsource(mail_assistant.webui.mail_picker) \
+            .split('def look(', 1)[1].split('\n\n', 1)[0]
+        self.assertIn('hits.refresh()', look)
+        self.assertNotIn('panel.refresh()', look)
 
 
 if __name__ == '__main__':

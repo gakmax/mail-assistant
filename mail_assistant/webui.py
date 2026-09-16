@@ -152,6 +152,25 @@ NAV_BADGE_MAX = 99
 # Monday first, and never through strftime: Windows encodes a format string with the
 # locale codec, so a Korean pattern raises UnicodeEncodeError off a Korean PC.
 WEEKDAYS = ('월', '화', '수', '목', '금', '토', '일')
+
+# ── 날짜를 고르는 칸 ─────────────────────────────────────────────────────────
+# QDate 의 locale 은 일요일부터 세고, firstDayOfWeek 만 첫 칸을 옮긴다. 1(월요일)인
+# 것은 취향이 아니라 이 앱이 이미 그렇게 세기 때문이다 — 일정 화면의 FullCalendar 도
+# firstDay:1 이고, 요일 이름은 바로 위 WEEKDAYS 와 같은 순서(월~일)에서 온다.
+DATE_MASK = '####-##-##'          # QInput 의 마스크: 숫자만 받고 하이픈은 저절로 선다
+DATE_HINT = '연-월-일'
+CAL_LOCALE = {'days': [f'{name}요일' for name in ('일',) + WEEKDAYS[:-1]],
+              'daysShort': ['일'] + list(WEEKDAYS[:-1]),
+              'months': [f'{month}월' for month in range(1, 13)],
+              'monthsShort': [f'{month}월' for month in range(1, 13)],
+              'firstDayOfWeek': 1}
+CAL_TODAY, CAL_CLEAR = '오늘', '지우기'
+# 달력의 폭은 제 내용이 정하게 두지 않는다 — QDate 의 칸들은 flex row 라 자리가 있는
+# 만큼 벌어지고, 창 안에서 열리면 시트보다 넓은 달력이 된다.
+CAL_WIDTH = 292
+CAL_ROW = 34               # 하루 한 칸의 높이. 여섯 줄 자리의 예비 높이도 이것으로 잰다
+TIME_MASK = '##:##'
+TIME_HINT = '시:분'
 # The 대시보드 cards. '…일 내 마감' carries the window in its name, so it is matched by suffix.
 CARD_ICONS = {'미처리 메일': 'inbox', '긴급·높음': 'priority_high', '검토 전 초안': 'edit_note',
               WAITING: 'reply', FAILED_CARD: 'error_outline'}
@@ -518,7 +537,7 @@ body {{
   display:flex; align-items:center; gap:9px; flex:1; min-width:0;
   text-decoration:none; color:inherit; transition:opacity var(--dur-fast) var(--ease);
 }}
-.ma-side__fold {{ flex:none; transition:opacity var(--dur-fast) var(--ease); }}
+.q-btn.ma-side__fold {{ flex:none; transition:opacity var(--dur-fast) var(--ease); }}
 .ma-side__mark {{
   display:grid; place-items:center; width:28px; height:28px; border-radius:var(--r-s);
   background:var(--brand); color:#fff; flex:none;
@@ -613,6 +632,7 @@ body {{
   display:flex; align-items:center; gap:5px; flex:none; text-decoration:none;
   border-radius:var(--r-full); padding:4px 11px; font-size:var(--fs-cap); font-weight:600;
   background:var(--brand-soft); color:var(--brand);
+  transition:background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }}
 .ma-pill:hover {{ background:#dce7fb; }}
 .ma-pill .q-icon {{ font-size:var(--ic-m); }}
@@ -678,7 +698,12 @@ body {{
   content:''; height:2px; background:var(--brand); border-radius:var(--r-full);
 }}
 .ma-pagetop {{ display:flex; align-items:center; justify-content:flex-end; margin-bottom:8px; }}
-.ma-menu {{ display:grid; gap:8px; padding:12px 14px; min-width:184px; }}
+/* width:max-content 이지 더 큰 min-width 가 아니다 — 한 칸의 폭은 글꼴이 정하고,
+   이 앱은 Pretendard 가 늦게 오면 맑은 고딕으로 한 번 그려진다. 폭을 숫자로 박으면
+   그 숫자는 한 글꼴에서만 맞는다. 줄바꿈을 막는 것은 .ma-seg 쪽에 있다. */
+.ma-menu {{
+  display:grid; gap:8px; padding:12px 14px; min-width:184px; width:max-content;
+}}
 .ma-menu__label {{ font-size:var(--fs-caps); font-weight:600; color:var(--muted); }}
 /* A count row, which is the same picture the canvas drew and a real link besides: a
    0 keeps its row, its hover and its href, where a 0 bar drew nothing at all. */
@@ -687,6 +712,7 @@ body {{
   display:grid; grid-template-columns:5.4em minmax(0,1fr) 2.4em; gap:10px;
   align-items:center; padding:5px 7px; margin:0 -7px; border-radius:var(--r-s);
   text-decoration:none; color:inherit;
+  transition:background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }}
 .ma-bars__row:hover {{ background:var(--sunken); }}
 .ma-bars__name {{
@@ -705,6 +731,7 @@ body {{
   display:grid; grid-template-columns:auto auto minmax(0,1fr) auto 3.2em; gap:9px;
   align-items:center; padding:4px 7px; margin:0 -7px; border-radius:var(--r-s);
   text-decoration:none; color:inherit;
+  transition:background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }}
 .ma-leg:hover {{ background:var(--sunken); }}
 .ma-leg__dot {{ width:8px; height:8px; border-radius:50%; flex:none; }}
@@ -722,6 +749,7 @@ body {{
 }}
 .ma-seg .q-btn {{
   font-size:var(--fs-cap); min-height:24px; padding:0 9px; border-radius:var(--r-s); font-weight:600;
+  white-space:nowrap;
   transition:background-color var(--dur-base) var(--ease), color var(--dur-base) var(--ease);
 }}
 .ma-seg .q-btn__content {{
@@ -758,7 +786,11 @@ a.ma-kpi:hover {{
    mail list filtered to that address. Same lift as .ma-kpi's, because both are cards
    you click. display:block, for the reason .ma-card carries it: .nicegui-content is a
    flex column with align-items:start and would shrink-wrap this to its longest word. */
-.ma-sender {{ display:block; text-decoration:none; color:inherit; padding:14px 16px; }}
+.ma-sender {{
+  display:block; text-decoration:none; color:inherit; padding:14px 16px;
+  transition:box-shadow var(--dur-base) var(--ease), transform var(--dur-base) var(--ease),
+             border-color var(--dur-base) var(--ease);
+}}
 a.ma-sender:hover {{
   box-shadow:var(--shadow-2); transform:translateY(-1px);
   border-color:#d7d8dc;
@@ -908,14 +940,23 @@ a.ma-sender:hover {{
 }}
 /* A sortable header. q-table's own sort would only reorder the page it was handed,
    so the click goes back to sqlite and the arrow here is what that query decided. */
-.ma-table thead tr th.ma-th {{ cursor:pointer; user-select:none; white-space:nowrap; }}
+.ma-table thead tr th.ma-th {{
+  cursor:pointer; user-select:none; white-space:nowrap;
+  transition:background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}}
 .ma-table thead tr th.ma-th:hover {{ color:var(--ink); background:#eef0f3; }}
 .ma-table thead tr th.ma-th.is-live {{ color:var(--brand); }}
-.ma-th__arrow {{ font-size:var(--fs-b2); margin-left:3px; vertical-align:-2px; opacity:0; }}
+.ma-th__arrow {{
+  font-size:var(--fs-b2); margin-left:3px; vertical-align:-2px; opacity:0;
+  transition:opacity var(--dur-fast) var(--ease);
+}}
 .ma-th:hover .ma-th__arrow {{ opacity:.45; }}
 .ma-th.is-live .ma-th__arrow {{ opacity:1; }}
 .ma-table tbody td {{ font-size:var(--fs-b3); border-bottom:1px solid var(--hair); }}
-.ma-table tbody tr {{ cursor:pointer; }}
+.ma-table tbody tr {{
+  cursor:pointer;
+  transition:background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}}
 .ma-table tbody tr:hover {{ background:var(--sunken); }}
 .ma-tag {{
   display:inline-flex; align-items:center; height:22px; padding:0 8px;
@@ -992,6 +1033,7 @@ a.ma-sender:hover {{
 .ma-due {{
   display:flex; gap:8px; align-items:center; flex-wrap:nowrap;
   padding:2px 18px 2px 12px; border-bottom:1px solid var(--hair);
+  transition:background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }}
 .ma-due:last-child {{ border-bottom:none; }}
 .ma-due:hover {{ background:var(--sunken); }}
@@ -999,6 +1041,7 @@ a.ma-sender:hover {{
 .ma-due__title {{
   font-size:var(--fs-b3); color:var(--ink); font-weight:500; text-decoration:none;
   min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  transition:color var(--dur-fast) var(--ease);
 }}
 .ma-due__title:hover {{ color:var(--brand); text-decoration:underline; }}
 .ma-due__left {{ font-size:var(--fs-cap); color:var(--muted); flex:none; }}
@@ -1113,6 +1156,7 @@ a.ma-sender:hover {{
   background:rgba(255,255,255,.62); border:1px solid rgba(24,24,27,.08);
   border-radius:var(--r-full); padding:2px 9px 2px 7px; margin-top:7px;
   font-size:var(--fs-caps); color:var(--subtle); text-decoration:none; cursor:pointer;
+  transition:background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }}
 .ma-memo__link:hover {{ background:#fff; color:var(--ink); }}
 .ma-memo__link .q-icon {{ font-size:var(--ic-m); flex:none; opacity:.7; }}
@@ -1164,7 +1208,10 @@ a.ma-sender:hover {{
    The right gutter clears Quasar's overlay thumb: a sent bubble is margin-left:auto
    and sat directly under it, so the scrollbar crossed my own message. */
 .ma-chat .q-scrollarea__content {{ width:100%; padding:6px 20px 6px 14px; }}
-.ma-chat .q-scrollarea__thumb {{ width:6px; border-radius:var(--r-full); opacity:.28; }}
+.ma-chat .q-scrollarea__thumb {{
+  width:6px; border-radius:var(--r-full); opacity:.28;
+  transition:opacity var(--dur-fast) var(--ease);
+}}
 .ma-chat .q-scrollarea__thumb:hover {{ opacity:.5; }}
 .ma-chat .q-message {{ max-width:min(76%, 660px); margin-bottom:12px; }}
 .ma-chat .q-message-sent {{ margin-left:auto; }}
@@ -1191,7 +1238,7 @@ a.ma-sender:hover {{
    bubble's own width down with it. */
 .ma-said {{ display:block; width:100%; }}
 .ma-said .q-message {{ margin-bottom:2px; }}
-.ma-said__copy {{
+.q-btn.ma-said__copy {{
   color:var(--muted); opacity:.4; margin:0 0 8px 2px;
   transition:opacity var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }}
@@ -1224,6 +1271,7 @@ a.ma-sender:hover {{
 .ma-room {{
   border-radius:var(--r-m); padding:8px 10px; cursor:pointer; display:block;
   border:1px solid transparent;
+  transition:background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }}
 .ma-room:hover {{ background:var(--sunken); }}
 .ma-room.is-open {{ background:var(--brand-soft); border-color:#d8e3fb; }}
@@ -1266,12 +1314,14 @@ a.ma-sender:hover {{
 .ma-today__row {{
   display:flex; gap:9px; align-items:center; flex-wrap:nowrap;
   padding:5px 18px; border-bottom:1px solid var(--hair);
+  transition:background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }}
 .ma-today__row:last-child {{ border-bottom:none; }}
 .ma-today__row:hover {{ background:var(--sunken); }}
 .ma-today__title {{
   font-size:var(--fs-b3); color:var(--ink); font-weight:500; text-decoration:none;
   min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  transition:color var(--dur-fast) var(--ease);
 }}
 .ma-today__title:hover {{ color:var(--brand); text-decoration:underline; }}
 .ma-today__kind {{ font-size:var(--fs-cap); color:var(--muted); flex:none; }}
@@ -1307,6 +1357,8 @@ a.ma-sender:hover {{
   background:{CARD}; border:1px solid {LINE}; color:{SUBTLE}; box-shadow:none;
   text-transform:none; font-size:var(--fs-cap); font-weight:600; padding:4px 11px;
   border-radius:var(--r-s);
+  transition:background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
+             border-color var(--dur-fast) var(--ease);
 }}
 .fc .fc-button:hover {{ background:{SUNKEN}; color:{INK}; border-color:{LINE}; }}
 .fc .fc-button-primary:not(:disabled).fc-button-active,
@@ -1352,7 +1404,11 @@ a.ma-sender:hover {{
 .q-field--outlined .q-field__control:before {{ border-color:var(--line); }}
 /* button — M is the workhorse at 40px/radius-m, which is what .q-btn already was.
    TDS pairs the radius with the size, so the dense one drops to its own rung. */
-.q-btn {{ border-radius:var(--r-m); min-height:40px; font-weight:600; }}
+.q-btn {{
+  border-radius:var(--r-m); min-height:40px; font-weight:600;
+  transition:background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}}
+.q-btn .q-icon {{ font-size:var(--ic-m); }}
 /* Quasar sizes a dense button at 14px type in a 2.5em box, which stands a head taller
    than the 12.5px text it sits beside — a row of four of them read as the loudest
    thing on the page. Specificity is deliberately one class, so the segmented control
@@ -1361,7 +1417,7 @@ a.ma-sender:hover {{
   font-size:var(--fs-b3); min-height:32px; padding:0 12px; font-weight:600;
   border-radius:var(--r-btn-s);
 }}
-.q-btn--dense .q-icon {{ font-size:var(--ic-m); }}
+.q-btn--dense .q-icon {{ font-size:var(--ic-s); }}
 .q-btn--dense.q-btn--round {{
   min-height:32px; min-width:32px; padding:0; border-radius:var(--r-full);
 }}
@@ -1387,13 +1443,13 @@ a.ma-sender:hover {{
   line-height:1.45; margin-bottom:6px;
 }}
 .ma-ask__sub {{
-  display:block; font-size:var(--fs-b2); line-height:1.5; color:var(--subtle);
-  margin-bottom:20px;
+  display:block; font-size:var(--fs-b3); line-height:1.5; color:var(--subtle);
+  margin-bottom:16px;
 }}
 /* CTA 위의 보호 그라디언트. 토스가 chrome 에 허용하는 세 예외 중 하나이고, 여기서
    막는 것은 스크롤되는 마지막 칸이 버튼 밑에서 잘려 보이는 일이다. */
 .ma-ask__cta {{
-  position:relative; display:flex; gap:8px; padding:0 24px 24px; flex:none;
+  position:relative; display:flex; gap:8px; padding:0 24px 20px; flex:none;
 }}
 .ma-ask__cta:before {{
   content:''; position:absolute; left:0; right:0; bottom:100%; height:28px;
@@ -1401,8 +1457,8 @@ a.ma-sender:hover {{
   pointer-events:none;
 }}
 .ma-ask__cta .q-btn {{
-  flex:1; min-height:48px; border-radius:var(--r-l);
-  font-size:var(--fs-t2); font-weight:700;
+  flex:1; min-height:40px; border-radius:var(--r-m);
+  font-size:var(--fs-b2); font-weight:600;
 }}
 /* 취소는 ghost 가 아니라 secondary 다 — 48px 를 차지하면서 바탕이 없으면 눌리는
    것인지 여백인지가 모양으로 말해지지 않는다. TDS: fill-secondary + text-primary. */
@@ -1414,7 +1470,7 @@ a.ma-sender:hover {{
 /* 폼 안의 segmented 는 칸을 꽉 채운다. 라벨 밑에 붙는 값이라, 폭이 제각각이면
    어느 것이 한 칸인지가 읽히지 않는다. */
 .ma-ask__body .ma-seg {{ display:flex; width:100%; }}
-.ma-ask__body .ma-seg .q-btn {{ flex:1; min-height:40px; }}
+.ma-ask__body .ma-seg .q-btn {{ flex:1; min-height:36px; font-size:var(--fs-b3); }}
 @media (max-width:460px) {{
   .ma-ask__cta {{ flex-direction:column-reverse; }}
   .ma-ask__cta .q-btn, .ma-ask__cta .q-btn:last-child {{ flex:none; width:100%; }}
@@ -1429,7 +1485,7 @@ a.ma-sender:hover {{
 .ma-lab__opt {{ font-weight:400; color:var(--muted); }}
 .ma-lab__req {{ color:var(--urgent); margin-left:2px; }}
 .ma-say {{
-  display:block; margin:8px 0 0; font-size:var(--fs-b3); line-height:1.5; color:var(--muted);
+  display:block; margin:6px 0 0; font-size:var(--fs-cap); line-height:1.55; color:var(--muted);
 }}
 .ma-say b {{ font-weight:600; color:var(--subtle); }}
 
@@ -1470,10 +1526,90 @@ a.ma-sender:hover {{
 .ma-sender__box:hover .ma-sender__acts,
 .ma-sender__box:focus-within .ma-sender__acts {{ opacity:1; }}
 
-/* 날짜와 시각처럼 한 값을 둘로 나눠 받는 칸. 좁아지면 쌓인다 — 시각 칸이 120px
-   밑으로 눌리면 네이티브 date/time 위젯의 아이콘이 글자를 덮는다. */
-.ma-pair {{ display:grid; grid-template-columns:minmax(0,1fr) 132px; gap:8px; }}
+/* 날짜와 시각처럼 한 값을 둘로 나눠 받는 칸. 좁아지면 쌓인다 — 시각 칸이 그 아래로
+   눌리면 앞의 시계 아이콘이 글자를 덮는다. */
+.ma-pair {{ display:grid; grid-template-columns:minmax(0,1fr) 138px; gap:8px; }}
 @media (max-width:540px) {{ .ma-pair {{ grid-template-columns:minmax(0,1fr); }} }}
+
+/* ── 날짜를 고르는 칸과 그 달력 ──────────────────────────────────────────────
+   브라우저의 type=date 가 있던 자리다. 그것을 두지 않은 이유는 date_field() 의
+   docstring 에 있고, 여기에 있는 것은 그 대신 그려야 하는 것의 값이다: Quasar 의
+   QDate 는 Material 의 치수(달력 한 칸 44px, 파란 머리띠, 그림자)로 오므로, 이 파일의
+   사다리로 다시 재는 일이 전부 이 블록이다. minimal 로 머리띠는 이미 없다. */
+.ma-date .q-field__append, .ma-date .q-field__prepend {{ padding-left:6px; }}
+.ma-date__open {{
+  font-size:var(--ic-m); color:var(--muted); cursor:pointer;
+  transition:color var(--dur-fast) var(--ease);
+}}
+.ma-date__open:hover {{ color:var(--brand); }}
+.ma-date .q-field__focusable-action {{ font-size:var(--ic-s); color:var(--muted); opacity:1; }}
+/* 앞의 시계는 누르는 것이 아니라 이 칸이 무엇을 받는지를 말하는 표지다. 시각을 시계
+   문자판에서 고르게 하지 않는 이유는 14:00 을 적는 편이 언제나 빠르기 때문. */
+.ma-date__mark {{ font-size:var(--ic-s); color:var(--muted); }}
+.ma-cal {{
+  border-radius:var(--r-xl); box-shadow:var(--shadow-3);
+  border:1px solid var(--line); background:var(--card); overflow:hidden;
+}}
+.ma-cal .q-date {{
+  width:{CAL_WIDTH}px; min-width:0; background:transparent;
+  box-shadow:none; font-family:inherit;
+}}
+.ma-cal .q-date__view {{ padding:10px 12px 4px; min-height:0; }}
+/* 머리줄: ‹ 9월 › ‹ 2026 ›. 화살표의 크기는 Quasar 가 버튼에 인라인 스타일로 박아
+   두므로 여기서는 아이콘 쪽을 재고, 달과 해의 이름은 누르면 각각 제 목록으로 바뀌는
+   버튼이라 버튼처럼 생겨야 한다 — 다만 글자만 있는 버튼으로. */
+.ma-cal .q-date__navigation {{ height:34px; }}
+.ma-cal .q-date__arrow .q-btn {{
+  min-height:26px; min-width:26px; padding:0; border-radius:50%; color:var(--muted);
+}}
+.ma-cal .q-date__arrow .q-icon {{ font-size:var(--ic-m); }}
+.ma-cal .q-date__arrow .q-btn:hover {{ background:var(--sunken); color:var(--ink); }}
+.ma-cal .q-date__navigation .q-btn--rectangle {{
+  min-height:26px; padding:0 8px; border-radius:var(--r-s);
+  font-size:var(--fs-b3); font-weight:700; color:var(--ink);
+}}
+.ma-cal .q-date__navigation .q-btn--rectangle:hover {{ background:var(--sunken); }}
+/* 달 목록에서 3월을 고르고 돌아오면 Quasar 가 해 쪽 라벨에 제 focus 바탕을 남긴다 —
+   누른 것은 달인데 회색이 앉은 것은 해라서, 상태가 아닌 것이 상태처럼 읽힌다. 이
+   파일의 규칙이 :focus 가 아니라 :focus-visible 인 이유가 그것이고, 여기서는 마우스
+   로 누른 경우만 걷어낸다. 키보드로 온 것은 위의 링이 그대로 그린다. */
+.ma-cal .q-btn:focus:not(:focus-visible) .q-focus-helper {{ opacity:0; }}
+.ma-cal .q-date__calendar-weekdays > div {{
+  font-size:var(--fs-caps); font-weight:600; color:var(--muted); height:26px;
+}}
+.ma-cal .q-date__calendar-item {{ height:{CAL_ROW}px; padding:1px; }}
+/* 여섯 줄 자리는 Quasar 가 비워 두는 것이고, 비워 두는 것이 맞다 — 3월처럼 여섯
+   줄이 필요한 달로 넘어갈 때 창이 자라면 QMenu 는 이미 자리를 잡은 뒤라 다시 잡지
+   않고, 화면 아래로 삐져나간다. 고칠 것은 그 자리의 크기였다: Quasar 의 예비 높이는
+   제 44px 짜리 한 줄로 잰 것이라, {CAL_ROW}px 로 줄인 이 격자에서는 쓰이지 않는
+   한 줄 반이 발밑에 남았다. */
+.ma-cal .q-date__calendar-days-container {{ min-height:{CAL_ROW * 6}px; }}
+/* 하루는 원이다 — 사다리 밖의 유일한 예외가 원이고, 고른 날은 제 폭이 곧 반경이다. */
+.ma-cal .q-date__calendar-item .q-btn {{
+  min-height:30px; min-width:30px; width:30px; height:30px; padding:0;
+  border-radius:50%; font-size:var(--fs-b3); font-weight:500; color:var(--ink);
+}}
+.ma-cal .q-date__calendar-item .q-btn:hover {{ background:var(--sunken); }}
+/* 지난달·다음달의 날은 버튼이 아니라 글자다. 흐린 것은 누를 수 없어서가 아니라
+   이 달이 아니어서다. */
+.ma-cal .q-date__calendar-item--fill > div {{
+  font-size:var(--fs-b3); color:var(--muted); opacity:.45;
+}}
+/* 오늘은 테두리고, 고른 날은 채운 원이다. Quasar 의 오늘은 inset box-shadow 인데
+   이 파일에는 그 상태가 없다 — 눌린 것은 --press 이고 안쪽 그림자는 쓰지 않는다. */
+.ma-cal .q-date__today {{
+  box-shadow:none; border:1px solid var(--brand); color:var(--brand); font-weight:700;
+}}
+.ma-cal .q-date__calendar-item .q-btn.bg-primary {{
+  background:var(--brand) !important; color:#fff !important; font-weight:700;
+}}
+/* 발밑의 두 마디. 격자를 눌러서는 닿지 않는 값이 둘이고 그 둘뿐이다 — 오늘(달을
+   넘기지 않고 한 번에)과 빈 값(마감 없음). */
+.ma-cal__feet {{
+  display:flex; align-items:center; gap:2px; padding:4px 10px 8px;
+  border-top:1px solid var(--hair); margin-top:4px;
+}}
+.ma-cal__feet .q-btn {{ font-size:var(--fs-cap); color:var(--subtle); }}
 
 /* 고른 값. TDS 의 chip brand 변형(blue-50 바탕 + blue-500 글자)이고, 붙인 메일이
    바로 그것이다. 이름이 .ma-chip 이 아닌 것은 그 이름을 헤더 띠의 상태 칩이 이미
@@ -3138,6 +3274,9 @@ SHEET_ADD, SHEET_CANCEL = '추가하기', '취소'
 # 메뉴는 고르는 것이 아니라 다시 읽는 것이다.
 PICK_SHOWN = 6
 PICK_TIP = '제목이나 보낸 사람으로 찾기'
+# 글자 하나가 아니라 손이 멈춘 것이 검색이다. Quasar 의 debounce 는 모델 갱신 자체를
+# 늦추므로, 이 밀리초 동안은 서버가 이 칸의 존재조차 모른다.
+PICK_WAIT = 350
 
 
 def sheet(title, subtitle='', *, add=SHEET_ADD, on_add=None):
@@ -3174,6 +3313,69 @@ def say(text):
     """칸 밑의 한 줄. 무엇을 적어야 하는지가 아니라, 적은 것이 어떻게 되는지를 말한다."""
     from nicegui import ui
     return ui.label(text).classes('ma-say')
+
+
+def date_field(value='', *, placeholder=DATE_HINT, on_change=None):
+    """날짜 한 칸 — 적어 넣어도 되고, 달력에서 골라도 된다. 값은 늘 'YYYY-MM-DD'.
+
+    브라우저의 type=date 를 쓰지 않는 이유는 모양이 아니라 말이다. WebView2 가 그리는
+    그것은 mm/dd/yyyy 로 묻고 달력은 영어로 열리는데, 이 앱이 날짜를 적는 자리는
+    전부 2026-09-25 다 — 한 폼 안에서 한 값을 두 가지로 쓰면 읽는 사람이 어느 쪽이
+    달인지 세어야 한다. 그리고 그 위젯은 THEME 이 닿지 않는 유일한 표면이라, 창 안에서
+    저 혼자 다른 앱의 부품처럼 보인다.
+
+    고르는 것과 적는 것 중 하나를 고르지 않는다. 달력은 아이콘이 열고(no-parent-event),
+    칸 자체는 늘 받아쓴다 — 2026-09-25 를 아는 사람이 달력을 세 번 눌러 찾는 것은
+    도와주는 것이 아니다.
+
+    nicegui 3.3 의 ui.date_input 이 겉모양은 이것과 같지만 이것으로 대신할 수 없다:
+    마스크가 없어 받아쓸 수 없고, locale 을 넘길 자리가 없어 달력이 영어로 열리며,
+    발밑의 오늘·지우기를 둘 자리도 없다. 그 셋이 여기 있는 이유의 전부다.
+    """
+    from nicegui import ui
+    box = ui.input(value=value or '', placeholder=placeholder, on_change=on_change) \
+        .props(f'dense outlined clearable clear-icon=close mask="{DATE_MASK}"') \
+        .classes('w-full ma-date')
+    with box.add_slot('append'):
+        opener = ui.icon('event').classes('ma-date__open')
+        with ui.menu().props('no-parent-event transition-show=jump-down '
+                             'transition-hide=jump-up '
+                             'anchor="bottom right" self="top right"') \
+                .classes('ma-cal') as calendar:
+            picker = ui.date().props('minimal flat').bind_value(box)
+            picker.props(f':locale={json.dumps(CAL_LOCALE)}')
+            # 날짜를 고르는 것은 한 번의 동작이다 — 고르고 나서 창을 또 닫게 하면
+            # 두 번이 된다. 적어 넣을 때도 바인딩을 타고 여기로 오지만, 그때 이
+            # 창은 이미 닫혀 있다.
+            picker.on_value_change(lambda: calendar.close())
+            # 격자가 닿지 못하는 값은 둘뿐이다 — 오늘(달을 넘기지 않고 한 번에)과
+            # 빈 값(마감 없음). 물러나는 길은 따로 두지 않는다: 바깥을 누르거나
+            # Esc 를 누르면 닫히고, 그것이 이 창에 대한 모든 사람의 기대다.
+            with ui.element('div').classes('ma-cal__feet'):
+                ui.button(CAL_TODAY,
+                          on_click=lambda: box.set_value(local_text(now(), '%Y-%m-%d'))) \
+                    .props('flat dense no-caps')
+                ui.space()
+                ui.button(CAL_CLEAR, on_click=lambda: box.set_value('')) \
+                    .props('flat dense no-caps')
+        opener.on('click', calendar.open)
+    return box
+
+
+def time_field(value='', *, placeholder=TIME_HINT):
+    """시각 한 칸. 달력이 없는 것은 시계 문자판이 14:00 을 적는 것보다 느리기 때문이다.
+
+    마스크가 하는 일은 type=time 이 하던 일과 같다 — 다만 --:-- --(오전/오후)로 묻지
+    않는다. 이 앱의 시각은 어디서나 24시간이고, 옆 칸의 날짜와 같은 모양으로 서 있어야
+    한 값의 두 조각으로 읽힌다.
+    """
+    from nicegui import ui
+    box = ui.input(value=value or '', placeholder=placeholder) \
+        .props(f'dense outlined clearable clear-icon=close mask="{TIME_MASK}"') \
+        .classes('ma-date')
+    with box.add_slot('prepend'):
+        ui.icon('schedule').classes('ma-date__mark')
+    return box
 
 
 def pick_rows(rows, query, shown=PICK_SHOWN):
@@ -3215,8 +3417,31 @@ def mail_picker(state, rows, *, on_change=None):
             on_change()
 
     def look(text):
+        """적힌 말이 바뀌었을 때 다시 그리는 것은 찾은 줄뿐이다 — 찾는 칸은 그대로
+        두어야 캐럿이 남는다."""
         state['query'] = text
-        panel.refresh()
+        hits.refresh()
+
+    # 찾은 줄만 따로 다시 그린다. 이것이 한 덩어리였을 때 panel.refresh() 가 찾는 칸
+    # 자체를 매 글자마다 새로 만들었고, 새로 만들어진 칸에는 캐럿이 없다 — 한 글자
+    # 적을 때마다 포커스가 빠지는 칸이었다. 안쪽 refreshable 은 지워진 컨테이너를
+    # nicegui 가 prune() 으로 걷어 가므로, panel 이 다시 그려져도 겹치지 않는다.
+    @ui.refreshable
+    def hits():
+        if not state.get('query'):
+            return
+        found = pick_rows(rows, state.get('query', ''))
+        with ui.element('div').classes('ma-pick'):
+            if not found:
+                empty('그 말이 든 메일이 없어요.')
+                return
+            for row in found:
+                with ui.element('div').classes('ma-pick__row ma-in') \
+                        .on('click', lambda r=row: hold(r)):
+                    ui.label(row['subject'] or '(제목 없음)').classes('ma-pick__subject')
+                    ui.label(f"{display_name(row['sender']) or row['sender'] or ''} · "
+                             f"{local_text(row['received'], '%Y-%m-%d')}") \
+                        .classes('ma-meta__item')
 
     @ui.refreshable
     def panel():
@@ -3233,21 +3458,9 @@ def mail_picker(state, rows, *, on_change=None):
             return
         ui.input(placeholder=PICK_TIP, value=state.get('query', ''),
                  on_change=lambda event: look(event.value)) \
-            .props('dense outlined clearable').classes('w-full')
-        found = pick_rows(rows, state.get('query', ''))
-        if not state.get('query'):
-            return
-        with ui.element('div').classes('ma-pick'):
-            if not found:
-                empty('그 말이 든 메일이 없어요.')
-                return
-            for row in found:
-                with ui.element('div').classes('ma-pick__row ma-in') \
-                        .on('click', lambda r=row: hold(r)):
-                    ui.label(row['subject'] or '(제목 없음)').classes('ma-pick__subject')
-                    ui.label(f"{display_name(row['sender']) or row['sender'] or ''} · "
-                             f"{local_text(row['received'], '%Y-%m-%d')}") \
-                        .classes('ma-meta__item')
+            .props(f'dense outlined clearable clear-icon=close '
+                   f'debounce={PICK_WAIT}').classes('w-full')
+        hits()
 
     panel()
     return panel
@@ -3939,13 +4152,13 @@ def manual_panel(directory, account, token, on_change):
 
             lab('마감', opt='언제까지인가')
             with ui.element('div').classes('ma-pair'):
-                due = ui.input().props('dense outlined type=date')
-                due_at = ui.input().props('dense outlined type=time')
+                due = date_field()
+                due_at = time_field()
 
             lab('시작', opt='언제 있는 일인가')
             with ui.element('div').classes('ma-pair'):
-                began = ui.input().props('dense outlined type=date')
-                began_at = ui.input().props('dense outlined type=time')
+                began = date_field()
+                began_at = time_field()
             say('둘 중 하나만 있어도 돼요. 마감이 있으면 마감으로, 시작만 있으면 '
                 '시작으로 달력에 올라가요.')
 
@@ -6454,7 +6667,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     .props('dense unelevated no-caps toggle-color=primary').classes('ma-seg')
 
                 lab('마감', opt='선택')
-                due = ui.input().props('dense outlined type=date').classes('w-full')
+                due = date_field()
 
                 lab('메일 붙이기', opt='선택')
                 mail_picker(state, mails)
@@ -7432,8 +7645,7 @@ def build(directory, config, token, hub=None, services=None, config_path=None,
                     .props('dense outlined').classes('w-full')
 
                 lab('날짜')
-                day = ui.input(value=local_text(now(), '%Y-%m-%d')) \
-                    .props('dense outlined type=date').classes('w-full')
+                day = date_field(local_text(now(), '%Y-%m-%d'))
 
                 lab('메일 붙이기', opt='선택')
                 mail_picker(state, mails)
